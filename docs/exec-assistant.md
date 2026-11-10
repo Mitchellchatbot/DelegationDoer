@@ -5,7 +5,7 @@ up, switch it off, rotate its secrets, watch it and take it apart again. It cove
 
 Writing rules for this file (the runbook test, `src/lib/exec/__tests__/runbook.test.ts`, checks some of them): plain
 English; no content examples (no names, subjects or message text); every SQL statement is read-only unless its section
-says otherwise; never a select-star; never a column that holds sealed secrets (the `*_enc` columns) or a factor secret.
+says otherwise; never a select-star; never a column that holds sealed secrets (the `*_enc` columns).
 
 ---
 
@@ -13,8 +13,8 @@ says otherwise; never a select-star; never a column that holds sealed secrets (t
 
 The assistant's non-negotiables. Every change is judged against them.
 
-- **Owner only.** It is Mitchell's (mitchell@scaledai.org) and nobody else's, enforced on the server. Since P9 a
-  session must be his password **plus** the 6-digit code of his pinned authenticator (`EXEC_OWNER_MFA_FACTOR_IDS`, §2).
+- **Owner only.** It is Mitchell's (mitchell@scaledai.org) and nobody else's, enforced on the server. The session must
+  be a strong sign-in: a password sign-in, with no one-time sign-in link anywhere in its record (the step-up, §4 P9).
   Everyone else, and every sign-in link session on his account, gets a 404 on the assistant's pages and APIs.
 - **Mail is pinned to his account** (`exec_principals.mail_account_ids`).
 - **Email is never sent automatically.** Only his confirmed click on the exact saved draft sends it.
@@ -25,7 +25,7 @@ The assistant's non-negotiables. Every change is judged against them.
 - **Restricted senders follow decision R** (policy `hidden`): the page and DD chat show counts only.
 - **No finance** in the brief or on any Slack surface.
 - **Never log content, names or credentials.** Logs, ops alerts, audit rows, job payloads and results carry ids,
-  enums, counts and key ids only (a factor id at most by its first 8 characters).
+  enums, counts and key ids only.
 - **Every exec table:** row level security on, no policies, service_role only (§16 checks it).
 
 Never:
@@ -37,8 +37,7 @@ Never:
 - roll the clone below CL0 while EA tokens exist;
 - put an exec secret in a `NEXT_PUBLIC_` variable;
 - run `node scripts/exec-purge-all.mjs --apply` while Slack is connected;
-- give the second Railway service (energetic-surprise) `EXEC_ENABLED` or any exec variable (§2, the two-service rule);
-- read or copy a factor secret, a QR code or a code from `auth.mfa_factors` (the queries here never select them).
+- give the second Railway service (energetic-surprise) `EXEC_ENABLED` or any exec variable (§2, the two-service rule).
 
 ---
 
@@ -48,7 +47,7 @@ Never:
 
 - **Pages** under `src/app/(main)/executive`: Overview, Attention, Brief, Chat, Email (thread, `drafts/new`,
   `drafts/[id]`), Projects (and `[id]`), Settings, Slack, Team. Each page's first step is `requireExecPrincipalForPage`
-  (owner, enabled principal, strong sign-in, the factor pin).
+  (owner, enabled principal, strong sign-in).
 - **27 API routes** under `/api/exec`: attention (list, item, feedback), briefs (latest, regenerate, settings), chat
   (SSE), conversations, drafts (create, item, save, send, review, regenerate, resolve, outlook-opened), email assess,
   settings and voice-reset, slack (channel, channel links, digests, disconnect, reading/stop, watch-mode) and task
@@ -60,18 +59,15 @@ Never:
 - **Legacy hooks:** `daily-briefing-runner.ts` (the brief ownership gate), DD's `/api/slack/interactions` (legacy
   check-in buttons answer "expired" once the assistant's brief supersedes them), the Ask AI drawer's routing
   (`ask_ai_uses_exec`), `/api/brain/inbox/draft` (legacy, owner-only).
-- **DD login and Settings (P9):** `/login` adds a code step only for an account that has a verified authenticator;
-  DD Settings shows "Two-step sign-in" on Mitchell's account only (lead decision LD-1). Neither names the assistant.
 
 ### 1.2 Code
 
-`src/lib/exec`: `access.ts` and `owner-mfa.ts` (the gate and the factor pin), `principal.ts`, `audit.ts` (insert before
+`src/lib/exec`: `access.ts` (the gate), `principal.ts`, `audit.ts` (insert before
 acting, fail closed), `crypto.ts`, `llm/*` (Opus 5.5 for chat, drafts, the brief and check-ins; Haiku 5.5 for triage,
 digests, DD text and voice), `jobs.ts`, `scheduler.ts`, `runtime.ts`, `sources/*`, `triage/*`, `producers/*`,
 `attention*`, `agent/*`, `drafts*`, `send.ts` (the only reader of the send credential), `voice.ts`, `slack-*`,
-`brief-*`, `handlers/*` (one per job kind), `ops.ts`, `dd-bot.ts`. The UI is `src/components/exec/**`; the login code
-step and the Settings section are `src/components/TwoStepSection.tsx`. The in-process loops and the shutdown drain are
-`src/lib/cron-bootstrap.ts`, started by `src/instrumentation.ts`.
+`brief-*`, `handlers/*` (one per job kind), `ops.ts`, `dd-bot.ts`. The UI is `src/components/exec/**`. The in-process
+loops and the shutdown drain are `src/lib/cron-bootstrap.ts`, started by `src/instrumentation.ts`.
 
 ### 1.3 Migrations, applied by hand in this order
 
@@ -119,7 +115,6 @@ re-run of an earlier file can't revert them), then the whole-surface grid (§16)
   `docs/exec-slack-manifest.json`; every URL on https://operations.scaledai.org.
 - The DD bot (`SLACK_BOT_TOKEN`): ops alerts, the watchdog's mini-brief, identity checks.
 - Anthropic (the models).
-- Supabase Auth (GoTrue) for the authenticator factors.
 - energetic-surprise, the second Railway service: no domain; it must not run the assistant (§2).
 
 ### 1.6 Retention
@@ -154,7 +149,6 @@ All on Railway "Delegation Doer" unless noted.
 | `EXEC_ENABLED` | Only `true` turns the assistant on. Off: pages and APIs 404, loops report "disabled", exec-tick skips, the legacy brief and legacy Ask AI resume, purges stop. Slack: since P9 (lead decision L2) deletion-type events (a delete, a thread parent's tombstone, channel deleted or left, app uninstalled, tokens revoked) are still applied; everything else is dropped with a 200. |
 | `EXEC_TOKEN_KEY` | 32 random bytes in base64 (`openssl rand -base64 32`). Seals the Slack tokens; derives the OAuth-state and check-in button MAC keys. |
 | `EXEC_TOKEN_KEY_PREVIOUS` | Set only during a rotation (§10). |
-| `EXEC_OWNER_MFA_FACTOR_IDS` | P9. Comma-separated GoTrue factor ids (UUIDs) of Mitchell's authenticator(s). Unset or blank: the assistant's pages and APIs stay closed, for him too (owner decision Q2); the morning brief and the Slack DM keep working. A malformed entry closes them too and raises `exec-owner-mfa-misconfigured`. A verified factor on his account that is not listed closes them and raises `exec-owner-unpinned-factor:<UTC date>`. A session whose code was verified before the earliest pinned factor was created is refused too (reason `factor_predates_pin`): the token can't name the factor it used, so the pin is bound to it in time. |
 | `EXEC_OPS_SLACK_CHANNEL` | The ops channel id (the DD bot must be a member). Unset: alerts go to the server log only. |
 | `EXEC_WORKER_INTERNAL_CRON`, `EXEC_SCHEDULER_INTERNAL_CRON` | `false` opts a process out of the exec loops. With the worker off, the mail bus hook isn't installed, so email arrives only through reconcile (within 5 min). |
 | `EXEC_SLACK_CLIENT_ID`, `EXEC_SLACK_CLIENT_SECRET`, `EXEC_SLACK_SIGNING_SECRET`, `EXEC_SLACK_TEAM_ID` (T...), `EXEC_SLACK_APP_ID` (A...) | All five, or Slack is "not configured". |
@@ -254,60 +248,31 @@ Code first is safe in every phase. Each phase's steps in order, with its accepta
   as Mitchell, a double click posts once, the brief carries its metadata, a forced timeout is recovered, the mini-brief
   arrives when the bot is disconnected. Retire daily-briefing.yml after a week.
 - **P9 (this release):**
-  1. Merge and deploy. Until step 6, the assistant's DD pages and APIs answer 404 for everyone, Mitchell included
-     (owner decision Q2); his brief and his Slack DM keep working. Until step 6, each visit he makes to an assistant
-     page (a bookmark, a link in the brief DM) also writes a refused row and raises `exec-step-up-refused:<UTC date>`
-     (its detail ends "(pin_unset)"); this is expected.
+  1. Merge and deploy.
   2. Apply `20261111200000_exec_brief_dm_refs.sql` after P8's; its grid must be all ok. Re-run P8's grid. Run the
      whole-surface grid (§16).
   3. Check energetic-surprise has no `EXEC_ENABLED` and no exec variable (L1).
-  4. Before Mitchell enrols, his account must have no factor. Read-only, in the Supabase SQL editor:
-
-     ```sql
-     select f.id, f.friendly_name, f.factor_type, f.status, f.created_at
-       from auth.mfa_factors f
-      where f.user_id = (select u.id from auth.users u where lower(u.email) = 'mitchell@scaledai.org')
-      order by f.created_at;
-     ```
-
-     It must return no rows. This query selects only the id, the name, the type, the status and the date: never the
-     factor's secret. A row he didn't create: delete it (Supabase dashboard, Authentication, Users, his user, MFA; or the
-     admin API), then, in the same step and before he enrols or the pin is set or changed, end every session on his
-     account, and note both in the ops log. Deleting the factor alone is not enough: a session that verified that factor
-     keeps aal2 (at least until its token expires), and the pin can only refuse it by time (`factor_predates_pin`). In the
-     Supabase SQL editor (refresh tokens and amr claims go with their sessions):
-
-     ```sql
-     -- The one deliberate write in this runbook: ends every session on his account (P9 fixer security-1).
-     delete from auth.sessions
-      where user_id = (select u.id from auth.users u where lower(u.email) = 'mitchell@scaledai.org');
-     ```
-
-     Then Mitchell sets a new password (`/login`, "Forgot password?"), since whoever enrolled that factor may know it.
-  5. **Mitchell, in person:** first check Supabase Dashboard, Authentication, Multi-Factor: TOTP enrolment and
-     verification enabled (the default; when off, setup fails with "Couldn't start the setup", §12). He signs in with his
-     password (a session opened by a sign-in link or a reset link isn't offered the setup), then DD, Settings, "Two-step
-     sign-in", "Set up an authenticator": scan the QR code with his authenticator app (or type the key), enter a code.
-     Every code he verifies, this one and each later code sign-in, signs out every other session on his account that is
-     not at his code's level, the team's sign-in link sessions included (GoTrue does this; §13 confirms it on a
-     non-production project). After each of his code sign-ins the team needs a fresh sign-in link. Then he signs out and
-     signs in again with his password plus a code. The section is on his account only (lead decision LD-1); other users
-     never see it.
-  6. Re-run the query in step 4: exactly one verified row, created a minute ago. Set `EXEC_OWNER_MFA_FACTOR_IDS` to
-     its full id (logs and alerts only ever show its first 8 characters) and redeploy.
-  7. Check: `/executive` opens for him after a password plus code sign-in; a fresh sign-in link session on his account
-     gets a 404 there and an `exec-step-up-refused:<date>` alert; Settings, recent access shows the refused row. If no
-     alert appears (one per key per 15 min per process, and step 1's visits use the same daily key), the refused row in
-     Settings, recent access is the proof.
-  8. Optional, in a quiet hour (L5): `NEXT_MANUAL_SIG_HANDLE=true` and `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=120` on
+  4. Check: `/executive` opens for him after a password sign-in; a fresh sign-in link session on his account gets a 404
+     there and an `exec-step-up-refused:<date>` alert; Settings, recent access shows the refused row. If no alert
+     appears (one per key per 15 min per process), the refused row in Settings, recent access is the proof.
+  5. Optional, in a quiet hour (L5): `NEXT_MANUAL_SIG_HANDLE=true` and `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=120` on
      "Delegation Doer"; then a deploy during a Slack question lets the answer finish.
-  9. If he loses his phone: delete the factor (dashboard), end every session on his account (step 4's statement), unset
-     the pin (the assistant's pages close), repeat 5-6.
 
-  The login code step (`/login`) appears only for an account with a verified authenticator. With more than one
-  verified authenticator it preselects the OLDEST and offers the others by name and added date (lead decision LD-2),
-  so a factor someone added later never silently becomes the one his code is checked against. "Skip for now" signs in
-  without the code: DD works, the assistant doesn't.
+  **The authenticator was removed on 2026-11-10.** As first merged, P9 also asked for the 6-digit code of his
+  authenticator and pinned his factors in `EXEC_OWNER_MFA_FACTOR_IDS`. Now the step-up is the password sign-in alone
+  (§0), whatever the session's aal: nothing reads his factors any more, `/login` has no code step, DD Settings has no
+  "Two-step sign-in" section, the alerts `exec-owner-unpinned-factor:` and `exec-owner-mfa-misconfigured` are gone, and
+  his sign-ins no longer sign the team's link sessions out. The gap this re-opens is in §14. To do once, after the
+  deploy:
+
+  - If `EXEC_OWNER_MFA_FACTOR_IDS` was set on Railway, delete it (it's ignored now).
+  - Only if Mitchell already added an authenticator to his account: remove that factor in Supabase (Authentication,
+    Users, his user; or the admin API `auth.admin.mfa.deleteFactor`), so nothing is left half set up. With a factor on
+    the account, Supabase can ask for a code in flows DD no longer has a screen for (for example changing his password).
+  - Re-run step 4.
+
+  A rollback to a deployment from before this change brings the code requirement back, and the assistant's pages and
+  APIs then 404 for him too (his brief and his Slack DM keep working).
 
 ---
 
@@ -330,8 +295,9 @@ Code first is safe in every phase. Each phase's steps in order, with its accepta
   - Any other non-empty value: Next registered no handler, so DD's exits at once (no wait).
 - Rollback: flip a switch (§6), or redeploy the previous Railway deployment, or revert the PR. Before rolling back
   below P8 with supersede on, expect the legacy brief to resume. **Rolling back below P9 re-opens the step-up bypass**
-  (a sign-in link session could enrol its own authenticator or set a new password and use the assistant): don't, unless
-  the assistant is switched off (§6 B).
+  (a sign-in link session could enrol its own authenticator and use the assistant): don't, unless the assistant is
+  switched off (§6 B). A rollback past the 2026-11-10 step-up change also closes the assistant's pages and APIs to him
+  (§4 P9).
 - Clone: CL0 or CL1 is safe; below CL0 never, unless `JWT_SECRET` is rotated and every token re-minted.
 
 ---
@@ -451,8 +417,6 @@ Event-driven kinds (enqueued by a route, a Slack event, a button or another job)
   rotating the clone's `JWT_SECRET` (re-mint all).
 - **`CRON_SECRET`:** Railway and GitHub together, then a workflow_dispatch of exec-tick.
 - **Anthropic key:** rotate in the console; keep a console spend limit and alert.
-- **His authenticator:** a new phone means remove the factor and enrol again (§4 P9 steps 4-6, then update
-  `EXEC_OWNER_MFA_FACTOR_IDS`).
 
 ---
 
@@ -463,8 +427,8 @@ Event-driven kinds (enqueued by a route, a Slack event, a button or another job)
   reading" rows; Morning brief (owner and reason, status and reason, channel, mode, fallback, check-ins; "Not built yet
   today, late" 45 min past the due time); the check-in token; AI spend today by feature and model refusals in 24 h;
   since P9 "Slack tokens on the previous key".
-- **Settings, recent access:** every sign-in and, since P9, every refused step-up ("Refused: not your password and
-  code"). New-network alerts come from successful sign-ins only.
+- **Settings, recent access:** every sign-in and, since P9, every refused step-up ("Refused: not a password sign-in").
+  New-network alerts come from successful sign-ins only.
 - **Ops alert keys** (the ops channel; rate-limited per key, one per 15 min):
   - jobs: `job-dead:<kind>`, `auth:<kind>`, `job-reaped:<kind>`;
   - cost and clone: `exec-cost-cap:<principal>`, `exec-usage-write`, `clone-ea-readiness:<reason>`,
@@ -473,12 +437,11 @@ Event-driven kinds (enqueued by a route, a Slack event, a button or another job)
     `exec-slack-read-revoke-failed`, `exec-slack-v2-missing`, `exec-chat-binding`;
   - brief: `brief-failed:`, `brief-delivery-unknown:`, `brief-fallback:`, `brief-fallback-failed:`, `brief-late:`,
     `brief-not-owned:`, `checkin-token-mismatch:`, `exec-access-new-network:`;
-  - P9: `exec-step-up-refused:<UTC date>` (a session on his account that isn't his password plus his code was refused;
-    the detail ends with the reason: `sign_in`, `pin_unset`, `pin_invalid`, `not_aal2`, `no_verified_factor`,
-    `unpinned_factor` or `factor_predates_pin`),
-    `exec-owner-unpinned-factor:<UTC date>` (a verified factor on his account isn't pinned), `exec-owner-mfa-misconfigured`
-    (the pin variable is malformed), `exec-brief-v2-missing` (the P9 migration isn't applied yet),
-    `brief-compose-timeout:<local date>` (the AI summary timed out and the deterministic brief was used).
+  - P9: `exec-step-up-refused:<UTC date>` (title "A session on the owner's account that wasn't a password sign-in was
+    refused"; the detail is that session's sign-in methods and aal, for example `otp aal=aal1`: `otp`, `magiclink`,
+    `recovery`, `invite`, `email/signup` and `email_change` are one-time links and codes), `exec-brief-v2-missing` (the
+    P9 migration isn't applied yet), `brief-compose-timeout:<local date>` (the AI summary timed out and the
+    deterministic brief was used).
 - **`/api/cron/status`:** the exec-worker and exec-scheduler heartbeats (after a SIGTERM: "shutting down (SIGTERM)"); the
   legacy brief's skip reasons.
 - **The brief's cost and latency** (lead decision L3; read-only): run it daily for two weeks after the brief is on. If
@@ -503,25 +466,24 @@ Event-driven kinds (enqueued by a route, a Slack event, a button or another job)
 ## 12. Troubleshooting by symptom
 
 - **Mitchell gets a 404 on /executive (P9):**
-  1. Was the session a password plus code sign-in? A sign-in link, a password reset or "Skip for now" is refused:
-     sign out, sign in with both.
-  2. Is `EXEC_OWNER_MFA_FACTOR_IDS` set, to his verified factor's full id (§4 P9 step 4's query)? Unset is closed by
-     design (Q2).
-  3. Did `exec-owner-unpinned-factor:` fire? A second verified factor exists on his account: find out who enrolled it
-     (the query's `created_at`). Not his: remove it and, in the same step, end every session on his account and have
-     him set a new password (§4 P9 step 4). His: add its id to the pin.
-  4. Did `exec-owner-mfa-misconfigured` fire? An entry in the pin isn't a UUID.
-  5. Does the refusal's detail end "(factor_predates_pin)"? That session's code was verified before his pinned factor
-     existed (a session from before a re-pin, or one that used a factor since deleted): sign out, sign in with password
-     plus code. If it isn't his session, treat it like step 3's foreign factor.
-  6. A 503 instead of a 404: the factor list couldn't be read (Supabase Auth unreachable); it clears by itself.
-  7. Is `EXEC_ENABLED=true`, and is his principal enabled?
-- **Setting up the authenticator fails** ("Couldn't start the setup", or every code "didn't work"): Supabase Auth's TOTP
-  enrolment or verification is off (GoTrue answers `mfa_totp_enroll_not_enabled` / `mfa_totp_verify_not_enabled`).
-  Dashboard, Authentication, Multi-Factor: enable TOTP, then retry. "Sign in with your password to set up an
-  authenticator" instead of the button: the session came from a sign-in or reset link; sign in with the password.
-- **A teammate's sign-in link session on his account was signed out:** each of his code sign-ins signs out every other
-  session on his account below his code's level (§4 P9 step 5). Mint a fresh link (agreed arrangement, Q3).
+  1. Is he signed in with his password, not through a sign-in link or a password reset link? Those sessions are
+     refused: sign out, then sign back in with his password.
+  2. Is `EXEC_ENABLED=true`, and is his principal enabled?
+  3. Is there a refused row in Settings, recent access ("Refused: not a password sign-in", visible once the assistant
+     opens for him) or an `exec-step-up-refused:` alert (§11)? Its detail names the refused session's sign-in methods.
+- **His password stops working:** a sign-in link session on his account may have set a new one from DD Settings and
+  signed in with it, which the assistant admits (§14). In this order, and note both steps in the ops log:
+  1. Mitchell sets a new password (`/login`, "Forgot password?"), so the changed one stops working.
+  2. Right after, end every session on his account, in the Supabase SQL editor (refresh tokens and amr claims go with
+     their sessions; the team then needs a fresh sign-in link, agreed arrangement Q3):
+
+     ```sql
+     -- The one deliberate write in this runbook: ends every session on his account (P9 fixer security-1).
+     delete from auth.sessions
+      where user_id = (select u.id from auth.users u where lower(u.email) = 'mitchell@scaledai.org');
+     ```
+
+  3. He signs in with the new password.
 - **The brief didn't arrive:** `brief_enabled` and supersede (page-only otherwise); the System card's owner reason
   (exec_disabled, not_installed, brief_off, legacy_delivered, not_superseding, no_installation) and status reason
   (page_only: after_cutoff, after_fallback, delivery_failed, rate_limited, ownership_lapsed, screen_unavailable;
@@ -538,14 +500,13 @@ Event-driven kinds (enqueued by a route, a Slack event, a button or another job)
   drafts and email on and the pin; review blockers; generation errors; draft checks overdue. Drafts flapping between ok
   and token_missing, or draft jobs that never run: a second service runs the exec loops without `MISSIVE_EA_TOKEN` (L1;
   since P9 it leaves the draft kinds queued instead of failing them).
-- **Chat says off:** chat on and installed; `EXEC_ENABLED`; a strong sign-in with his code (link sessions get the legacy
-  Ask AI); the budget (it pauses until local midnight); the Slack tools need reading on, the email tools email and the
-  pin.
+- **Chat says off:** chat on and installed; `EXEC_ENABLED`; a password sign-in (link sessions get the legacy Ask AI);
+  the budget (it pauses until local midnight); the Slack tools need reading on, the email tools email and the pin.
 - **Email not triaged:** the pin; CL1; `EXEC_WORKER_INTERNAL_CRON`; reconcile catches up within 5 min.
 - **Spend at the cap:** the System card's AI spend by feature; the cap resets at his local midnight; the Slack budget is
   separate.
 - **Jobs pile up after a deploy:** the old deployment drained (no new claims) and the new one claims them; a one-attempt
-  job killed mid-run ends dead after its 120 s lease (`job-reaped:`); set the drain (§4 P9 step 8).
+  job killed mid-run ends dead after its 120 s lease (`job-reaped:`); set the drain (§4 P9 step 5).
 
 ---
 
@@ -568,20 +529,13 @@ P7a: the lead-channel deny check (§4 P7a) and the hidden-delete check.
 
 P9:
 
-- A fresh sign-in link session on his account gets a 404 on `/executive`, an `exec-step-up-refused:` alert and a refused
-  row (§4 P9 step 7). The "enrols its own authenticator" and "sets a new password" cases are proven by the automated
-  tests (`page-access`, `access-session`, `drafts-send-route`). Never try them on his account: a password change locks
-  him out of his password sign-in, and an extra factor closes the assistant for him until it is deleted in the
-  dashboard. Run them live only against a non-production Supabase project.
-- Password plus code opens the assistant; "Skip for now" doesn't.
-- On a non-production Supabase project with a test user (never his account), confirm three GoTrue rules this repo can't
-  see: (1) once the user has a verified factor, an aal1 session (a password sign-in without the code, or a sign-in
-  link) can't enrol another factor (GoTrue answers `insufficient_aal`); (2) what an admin factor delete (dashboard or
-  admin API) does to a session that reached aal2 with that factor: whether it drops to aal1, and when (its current token
-  keeps aal2 until it expires either way); (3) every successful code verification, not only the first, signs out the
-  user's other sessions below aal2 (a sign-in link session among them). Record the answers in the ops log; if (1) does
-  not hold, a session on his account at aal1 could enrol a factor of its own after setup (the pin refuses it while that
-  factor exists, §14).
+- His password sign-in opens `/executive`; `/login` shows no code step.
+- A fresh sign-in link session on his account gets a 404 on `/executive`, one refused row and an `exec-step-up-refused:`
+  alert (§4 P9 step 4). The "enrols its own authenticator" case (still refused, P9 F1) is proven by the automated tests
+  (`page-access`, `access-session`, `drafts-send-route`); the "sets a new password" case is a known gap (§14).
+  Never try them on his account: a password change locks him out of his password sign-in, and a factor left on his
+  account can make Supabase ask for a code where DD has no screen for one (§4 P9). Run them live only against a
+  non-production Supabase project.
 - The two-worker claim and fence suites passed on real PostgreSQL 15 and 17 (scratch harness, §14).
 - The injection and exfiltration set passed.
 - The 390 px tap-target and contrast checks passed.
@@ -604,15 +558,11 @@ P9:
 - The live model evals (chat, the hostile corpus, the brief's effort) have not been run: they need an owner-approved key
   and spend.
 - The SIGTERM drain waits for the assistant's job runs only, not for open web requests (§5), and ships off (L5).
-- Whether GoTrue refuses to enrol another factor from an aal1 session once a verified factor exists, and what an admin
-  factor delete does to a session that used that factor, are server rules this repo can't see (§13 checks both on a
-  non-production project). What the pin does: it refuses every session while a verified factor that isn't pinned
-  exists (and alerts), and a session whose code was verified before his earliest pinned factor was created
-  (`factor_predates_pin`). What it can't see: a session that, after he enrolled, verified a factor of its own and then
-  removed it keeps an aal2 token whose code is newer than his factor until that token expires (about an hour), or
-  longer if GoTrue leaves the session at aal2; that needs GoTrue to let an aal1 session enrol, rule (1) above. So
-  whenever a factor he didn't create is found or removed, every session on his account is ended in the same step (§4
-  P9 step 4).
+- A sign-in link session on his account can set a new password from DD Settings and then sign in with it; the assistant
+  admits that password sign-in (P9's authenticator closed this until its removal on 2026-11-10, §4 P9). The visible
+  sign: his old password stops working (§12, "His password stops working"). A link session that enrols an
+  authenticator of its own is still refused: a one-time link anywhere in the session's record refuses it, whatever its
+  aal (P9 F1).
 - Brief lines citing a Slack channel later reclassified stay on the page until content expiry (they are withheld on
   render and in the DM); DD text lines already in a brief or chat stay until they expire; Slack's own copies of bot DMs
   after Disconnect stay in Slack.
@@ -626,7 +576,7 @@ P9:
    Then `--apply`: it refuses while Slack is active and, since P9, while a mini-brief DM is undeleted unless
    `--delete-fallback-dms` (which needs `SLACK_BOT_TOKEN`) is given. `--include-audit` only if the audit log should go
    too.
-3. Unset `EXEC_ENABLED` and `EXEC_OWNER_MFA_FACTOR_IDS`.
+3. Unset `EXEC_ENABLED`.
 4. Clone: revoke the EA tokens, unset `EA_SEND_ENABLED`.
 5. Delete the Slack app.
 6. The opt-outs are deleted too (keep the member ids privately, §8).

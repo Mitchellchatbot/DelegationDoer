@@ -23,7 +23,7 @@ import * as callbackRoute from "@/app/api/integrations/exec-slack/callback/route
 import * as startRoute from "@/app/api/integrations/exec-slack/start/route";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getSupabaseServer } from "@/lib/supabase-server";
-import { OWNER_AUTH_ID, fakeFactorAdmin, pinFactors, strongToken } from "./step-up-fixtures";
+import { OWNER_AUTH_ID, strongToken } from "./step-up-fixtures";
 
 const ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const PAGES_DIR = path.join(ROOT, "src", "app", "(main)", "executive");
@@ -135,10 +135,8 @@ describe("p9-gates 3: at run time, a non-owner or the flag off gets the gate's 4
       getSession: vi.fn(async () => ({ data: { session: { access_token: strongToken("sess-1", OWNER_AUTH_ID), user: { id: OWNER_AUTH_ID } } }, error: null }))
     };
     vi.mocked(getSupabaseServer).mockReturnValue({ auth } as unknown as ReturnType<typeof getSupabaseServer>);
-    const factors = fakeFactorAdmin();
     const touched: string[] = [];
     vi.mocked(getSupabaseAdmin).mockReturnValue({
-      auth: factors.auth,
       from(table: string) {
         touched.push(table);
         if (table === "users") {
@@ -158,7 +156,6 @@ describe("p9-gates 3: at run time, a non-owner or the flag off gets the gate's 4
 
   beforeEach(() => {
     vi.stubEnv("EXEC_ENABLED", "true");
-    pinFactors();
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
   });

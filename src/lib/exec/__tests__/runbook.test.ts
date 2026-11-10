@@ -11,9 +11,11 @@ import { BUILT_IN_JOB_KINDS, ensureExecRuntime } from "@/lib/exec/runtime";
 import { listSystemScheduledWork } from "@/lib/exec/scheduler";
 
 // P9 contract §4 (Area D): docs/exec-assistant.md, the operations runbook. This pins that it exists with its 17 sections,
-// names every environment variable exec code reads (and the P9 ones the shutdown drain and the factor pin read), names
-// every registered job kind, holds no select-star and no SQL that reads content, sealed secrets or a factor secret, and
-// that its §16 lockdown grid counts the exec tables, sequences and functions the migrations really create.
+// names every environment variable exec code reads (and the P9 ones the shutdown drain reads), names every registered
+// job kind, holds no select-star and no SQL that reads content, sealed secrets or a factor secret, and that its §16
+// lockdown grid counts the exec tables, sequences and functions the migrations really create. The authenticator P9 added
+// (its code, the factor pin EXEC_OWNER_MFA_FACTOR_IDS) was removed on 2026-11-10: RB12 pins that the runbook names it
+// only in §4's removal note.
 
 const SRC = fileURLToPath(new URL("../../../", import.meta.url));
 const ROOT = path.dirname(path.resolve(SRC));
@@ -61,6 +63,10 @@ const sqlBlocks = (): string[] => [...DOC.matchAll(/```sql\n([\s\S]*?)\n\s*```/g
 /** P9 fixer security-1: the first line of the runbook's one deliberate write (RB10 pins the rest of it). */
 const DELIBERATE_WRITE = "-- The one deliberate write in this runbook: ends every session on his account";
 const isDeliberateWrite = (sql: string): boolean => sql.trimStart().startsWith(DELIBERATE_WRITE);
+
+/** 2026-11-10: the start of §4's note on the authenticator's removal (RB12), and the pin variable it retired. */
+const AUTHENTICATOR_REMOVED = "**The authenticator was removed on 2026-11-10.**";
+const FACTOR_PIN_ENV = "EXEC_OWNER_MFA_FACTOR_IDS";
 
 /** A section's text: from "## <n>." to the next "## ". */
 function section(n: number): string {
@@ -112,7 +118,7 @@ describe("docs/exec-assistant.md (P9 contract §4)", () => {
       expect(text).toContain(`disableEnv: "${env}"`);
       expect(DOC).toContain(`\`${env}\``);
     }
-    for (const env of ["NEXT_MANUAL_SIG_HANDLE", "RAILWAY_DEPLOYMENT_DRAINING_SECONDS", "EXEC_OWNER_MFA_FACTOR_IDS"]) expect(DOC).toContain(`\`${env}\``);
+    for (const env of ["NEXT_MANUAL_SIG_HANDLE", "RAILWAY_DEPLOYMENT_DRAINING_SECONDS"]) expect(DOC).toContain(`\`${env}\``);
     expect(DOC).toContain("`VERCEL=1`");
   });
 
@@ -147,50 +153,50 @@ describe("docs/exec-assistant.md (P9 contract §4)", () => {
     }
   });
 
-  it("RB10 (P9 fixer security-1) the one deliberate write: ends every session on his account, in §4 P9 step 4, and nothing more", () => {
+  it("RB10 (P9 fixer security-1) the one deliberate write: ends every session on his account, in §12 (his password stops working), and nothing more", () => {
     const writes = sqlBlocks().filter(isDeliberateWrite);
     expect(writes).toHaveLength(1);
     const body = writes[0].split("\n").filter((l) => !l.trim().startsWith("--")).join(" ").replace(/\s+/g, " ").trim();
     expect(body).toBe("delete from auth.sessions where user_id = (select u.id from auth.users u where lower(u.email) = 'mitchell@scaledai.org');");
-    // In §4's P9 step 4 (with the foreign-factor rule), and referred to by §12's foreign factor and §4's lost phone.
-    const setup = section(4);
-    expect(setup).toContain(DELIBERATE_WRITE);
-    expect(setup).toMatch(/A row he didn't create: delete it[\s\S]*end every session on his\s+account/);
-    expect(setup).toMatch(/Mitchell sets a new password/);
-    expect(setup).toMatch(/If he loses his phone:[^\n]*end every session on his account/);
-    expect(section(12)).toMatch(/Not his: remove it and, in the same step, end every session on his account/);
+    // Since the authenticator's removal (2026-11-10; it was §4 P9's foreign-factor step) it is §12's answer to "his
+    // password stops working": his new password first, so the changed one can't open a fresh session, then every session
+    // on his account ends. §14's password gap points there.
+    const fix = section(12);
+    expect(fix).toContain(DELIBERATE_WRITE);
+    expect(fix.replace(/\s+/g, " ")).toMatch(/His password stops working:.*?1\. Mitchell sets a new password.*?2\. Right after, end every session on his account/);
+    expect(section(14).replace(/\s+/g, " ")).toContain("his old password stops working (§12");
   });
 
-  it("RB11 (P9 fixer ui-1, ui-9, security-4) the setup is safe and accurate: no live tampering with his account, the real label, the setup-window alerts", () => {
+  it("RB11 (P9 fixer ui-1, ui-9) the setup is safe and accurate: no live tampering with his account, the real label and alert title, the alert rate limit", () => {
     const acceptance = section(13);
     // ui-1: never tell the team to set his password or plant a factor on his account to test the gate.
     expect(acceptance).not.toMatch(/even after it enrols its own authenticator or sets a new\s+password/);
     expect(acceptance).toMatch(/Never try them on his account/);
     expect(acceptance).toMatch(/non-production Supabase project/);
-    // security-1 (3): the GoTrue rules the repo can't see are confirmed off production, and §14 no longer claims "either way".
-    expect(acceptance).toMatch(/can't\s+enrol another factor/);
-    expect(acceptance).toMatch(/admin factor delete/);
-    expect(section(14)).not.toMatch(/either way/);
-    expect(section(14)).toContain("factor_predates_pin");
-    // ui-9 (a): the label the Settings page really renders.
+    // Since the authenticator's removal (2026-11-10) only the F1 case is a proven refusal; the password case is §14's gap,
+    // which §14 states (and no longer claims "either way"), with a link session's own authenticator still refused (F1).
+    expect(acceptance.replace(/\s+/g, " ")).toContain('the "sets a new password" case is a known gap (§14)');
+    const gaps = section(14).replace(/\s+/g, " ");
+    expect(gaps).not.toMatch(/either way/);
+    expect(gaps).toContain("can set a new password from DD Settings and then sign in with it");
+    expect(gaps).toContain("A link session that enrols an authenticator of its own is still refused");
+    // ui-9 (a): the label the Settings page really renders, and the refusal alert's real title.
     const view = readFileSync(path.join(SRC, "components/exec/settings/SettingsPageView.tsx"), "utf8");
     const label = /stepUpRefused: "([^"]+)"/.exec(view)?.[1] ?? "";
-    expect(label).toBe("Refused: not your password and code");
-    expect(section(11).replace(/\s+/g, " ")).toContain(`("${label}")`);
-    // ui-9 (b): the pin_unset refusals of the setup window and the per-key rate limit; (c) the TOTP prerequisite.
-    const setup = section(4).replace(/\s+/g, " ");
-    expect(setup).toContain("(pin_unset)");
-    expect(setup).toContain("one per key per 15 min per process");
-    expect(setup).toContain("TOTP enrolment and verification enabled");
-    expect(section(12).replace(/\s+/g, " ")).toContain("mfa_totp_enroll_not_enabled");
-    // security-4: every code sign-in, not only the first, signs the team's link sessions out.
-    expect(setup).toContain("Every code he verifies, this one and each later code sign-in, signs out every other session");
-    expect(setup).toContain("After each of his code sign-ins the team needs a fresh sign-in link.");
+    expect(label).toBe("Refused: not a password sign-in");
+    const monitoring = section(11).replace(/\s+/g, " ");
+    expect(monitoring).toContain(`("${label}")`);
+    const access = readFileSync(path.join(SRC, "lib/exec/access.ts"), "utf8");
+    const title = /STEP_UP_REFUSED_OPS = Object\.freeze\(\{[\s\S]*?title: "([^"]+)"/.exec(access)?.[1] ?? "";
+    expect(title).toBe("A session on the owner's account that wasn't a password sign-in was refused");
+    expect(monitoring).toContain(`(title "${title}"`);
+    // ui-9 (b): the refusal alert's per-key rate limit.
+    expect(section(4).replace(/\s+/g, " ")).toContain("one per key per 15 min per process");
   });
 
-  it("RB06 (LD-5) every query on auth.mfa_factors selects only the id, name, type, status and date", () => {
+  it("RB06 (LD-5) any query on auth.mfa_factors selects only the id, name, type, status and date", () => {
+    // Since the authenticator's removal (2026-11-10) the runbook needs no such query; one added later stays bound by LD-5.
     const factorQueries = sqlBlocks().filter((s) => s.includes("auth.mfa_factors"));
-    expect(factorQueries.length).toBeGreaterThanOrEqual(1);
     for (const q of factorQueries) {
       const list = /select\s+([\s\S]*?)\s+from\s+auth\.mfa_factors/i.exec(q)?.[1] ?? "";
       expect(list.split(",").map((c) => c.trim().replace(/^[a-z]+\./, ""))).toEqual(["id", "friendly_name", "factor_type", "status", "created_at"]);
@@ -229,17 +235,37 @@ describe("docs/exec-assistant.md (P9 contract §4)", () => {
     expect(files).toContain("20261111200000_exec_brief_dm_refs.sql");
   });
 
-  it("RB09 covers P9: the factor pin and its in-person setup (LD-1, LD-2), the two-service rule (L1), the drain (L5) and the new alerts", () => {
-    for (const s of ["mitchell@scaledai.org", "Two-step sign-in", "in person", "LD-1", "LD-2", "OLDEST", "signs out every other session",
-      "energetic-surprise", "\"Delegation Doer\"", "two-service rule", "L1", "L5", "Mitchell gets a 404 on /executive", "Slack tokens on the previous key",
-      "slack.token_resealed", "--delete-fallback-dms", "20261111200000_exec_brief_dm_refs", "39 exec tables, 6 exec sequences, 78 exec functions"]) {
+  it("RB09 covers P9: the step-up, the two-service rule (L1), the drain (L5) and the new alerts", () => {
+    for (const s of ["mitchell@scaledai.org", "energetic-surprise", "\"Delegation Doer\"", "two-service rule", "L1", "L5",
+      "Mitchell gets a 404 on /executive", "Slack tokens on the previous key", "slack.token_resealed", "--delete-fallback-dms",
+      "20261111200000_exec_brief_dm_refs", "39 exec tables, 6 exec sequences, 78 exec functions"]) {
       expect(DOC, s).toContain(s);
     }
     // Each P9 alert key the doc names exists in the code that raises it.
     const code = sourceFiles(path.join(SRC, "lib/exec")).map((f) => readFileSync(f, "utf8")).join("\n");
-    for (const key of ["exec-step-up-refused:", "exec-owner-unpinned-factor:", "exec-owner-mfa-misconfigured", "exec-brief-v2-missing", "brief-compose-timeout:"]) {
+    for (const key of ["exec-step-up-refused:", "exec-brief-v2-missing", "brief-compose-timeout:"]) {
       expect(DOC, key).toContain(`\`${key}`);
       expect(code, key).toContain(key);
     }
+  });
+
+  it("RB12 (2026-11-10) the authenticator is gone: its pin variable and alerts are named only in §4's removal note, which says to delete the variable, and no code reads or raises them", () => {
+    const setup = section(4);
+    const at = setup.indexOf(AUTHENTICATOR_REMOVED);
+    expect(at).toBeGreaterThan(0);
+    const note = setup.slice(at); // the note runs to the end of §4
+    const count = (text: string, name: string) => text.split(name).length - 1;
+    for (const name of [FACTOR_PIN_ENV, "exec-owner-unpinned-factor:", "exec-owner-mfa-misconfigured"]) {
+      expect(count(note, name), name).toBeGreaterThanOrEqual(1);
+      expect(count(DOC, name), name).toBe(count(note, name));
+    }
+    // The one instruction about the variable is to delete it: no env-table row, setup step or decommission step sets it.
+    expect(note.replace(/\s+/g, " ")).toContain(`If \`${FACTOR_PIN_ENV}\` was set on Railway, delete it (it's ignored now).`);
+    // RB02 alone can't tell: the note names the variable. So no source file under src reads it any more...
+    const readers = sourceFiles(SRC).filter((f) => readFileSync(f, "utf8").includes(FACTOR_PIN_ENV) && envReads(f).names.includes(FACTOR_PIN_ENV));
+    expect(readers.map(rel)).toEqual([]);
+    // ...and nothing under src/lib/exec raises the alerts the note calls gone.
+    const code = sourceFiles(path.join(SRC, "lib/exec")).map((f) => readFileSync(f, "utf8")).join("\n");
+    for (const key of ["exec-owner-unpinned-factor:", "exec-owner-mfa-misconfigured"]) expect(code, key).not.toContain(key);
   });
 });

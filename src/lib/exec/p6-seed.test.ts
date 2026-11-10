@@ -124,7 +124,11 @@ describe("P6 seed: slack-copy.ts (§3.14)", () => {
 // case of the App Home's brief line). P7a's value before it: 9535d534ec69e337c33974fab29235e2cdd3338caf5ccac9a6cd54e51585b435.
 // P9 fixer ui-3 (lead copy, contract appendix "P9 fixer amendments" F.2): settingsPasswordNote and connectResult.session_unbound
 // say "password and code" (the step-up since P9 F1/F2). P8's value before it: 2f43473a257d6f13b2092cf4d734e54fe976c3120ba8bec8d9eec8c09c7be7d7.
-const SLACK_COPY_SHA256 = "40a453252e8bdf1c3fca5262442ef23e0ab7b843095488cc7e751aad991bd09b";
+// 2026-11-10 (the authenticator code removed; the step-up is a password sign-in, P9 F1): settingsPasswordNote became "You
+// need to be signed in with your password." and connectResult.session_unbound went back to P8's text ("Your session couldn't
+// be checked. Sign in again with your password, then connect."). P9's value before them:
+// 40a453252e8bdf1c3fca5262442ef23e0ab7b843095488cc7e751aad991bd09b.
+const SLACK_COPY_SHA256 = "cd3c6793532086da4bc495d59d9d015b635303a4875426bb49501c43be4b27cd";
 
 interface RoutingRow {
   name: string;

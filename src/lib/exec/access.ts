@@ -12,7 +12,6 @@ import { loadPrincipalForUser, loadSettings } from "@/lib/exec/principal";
 import type { ExecPrincipal, ExecSurface } from "@/lib/exec/types";
 import { chatEmailOn } from "@/lib/exec/chat/email-on";
 import { notifyOps } from "@/lib/exec/ops";
-import { ownerFactorCheck, ownerFactorVerdict, type OwnerFactorReason } from "@/lib/exec/owner-mfa";
 
 // The gate in front of every Executive AI Assistant page and API route.
 //
@@ -37,17 +36,13 @@ import { ownerFactorCheck, ownerFactorVerdict, type OwnerFactorReason } from "@/
 // account (users/[id]/magic-link; the team signs in as him by agreement), and
 // the session it opens passes every identity check above. A surface that asks
 // for the step-up (requireStrongSignIn; the page gate always asks) admits only
-// a session that is all three (P9 F1, F2):
-//   - a password sign-in with no one-time link anywhere in its record
-//     (signInIsStrong reads GoTrue's amr; a second factor can only add to a
-//     password sign-in, never replace it);
-//   - at aal2: his authenticator code was verified on it;
-//   - on an account whose verified factors are all pinned in
-//     EXEC_OWNER_MFA_FACTOR_IDS (owner-mfa.ts asks GoTrue's admin API), with
-//     the session's code verified no earlier than his pinned factor was
-//     created (P9 fixer security-1: the token can't name its factor).
-// A link session can set a new password from DD's Settings and sign in with
-// it, so the password alone proves nothing; the code on his phone does.
+// a password sign-in with no one-time link anywhere in its record
+// (signInIsStrong reads GoTrue's amr; a second factor can only add to a
+// password sign-in, never replace it, P9 F1).
+// P9 also required his authenticator code, pinned by factor id; that
+// requirement was removed on 2026-11-10. What it leaves open: a link session
+// can set a new password from DD's Settings and sign in with it (his old
+// password then stops working). docs/exec-assistant.md lists it under known gaps.
 // Every refusal leaves one access-log row (route + " step_up_refused") and a
 // daily-keyed ops alert, without waiting on either.
 
@@ -59,15 +54,11 @@ export type ExecAccessResult = { ok: true; principal: ExecPrincipal } | { ok: fa
 
 export interface ExecGateOptions {
   /**
-   * The step-up (P9 F1, F2): admit only a password sign-in with no one-time
-   * link (signInIsStrong), at aal2, whose account's verified factors are all
-   * pinned in EXEC_OWNER_MFA_FACTOR_IDS and whose code came after the earliest
-   * of them was created (owner-mfa.ts). Anything else gets the
-   * same 404, plus a refusal row and an ops alert; a 503 when the session or
-   * the factor list can't be read for an outage. Until the pin is set, every
-   * session is refused (owner decision Q2). requireExecPrincipalForPage always
-   * sets it. It is opt-in only because requireExecPrincipal predates it and
-   * P2a's tests pin its behaviour without it.
+   * The step-up (P9 F1): admit only a password sign-in with no one-time link
+   * (signInIsStrong). Anything else gets the same 404, plus a refusal row and
+   * an ops alert; a 503 when the session can't be read for an outage.
+   * requireExecPrincipalForPage always sets it. It is opt-in only because
+   * requireExecPrincipal predates it and P2a's tests pin its behaviour without it.
    */
   requireStrongSignIn?: boolean;
 }
@@ -75,10 +66,10 @@ export interface ExecGateOptions {
 /** P9 (F2 step 3): what a refused step-up's access-log row appends to the gate's route. */
 export const STEP_UP_REFUSED_SUFFIX = " step_up_refused";
 
-/** P9 (F2 step 3, L4): the refusal's ops alert. Daily-keyed (UTC); the detail carries sign-in methods, aal and an enum. */
+/** P9 (F2 step 3, L4): the refusal's ops alert. Daily-keyed (UTC); the detail carries the sign-in methods and aal. */
 export const STEP_UP_REFUSED_OPS = Object.freeze({
   key: (utcDate: string) => `exec-step-up-refused:${utcDate}`,
-  title: "A session on the owner's account that isn't his password plus his code was refused"
+  title: "A session on the owner's account that wasn't a password sign-in was refused"
 });
 
 export interface AccessLogEntry {
@@ -225,12 +216,11 @@ export async function requireExecSession(req: Request, route: string, opts: Exec
   // later means changing this line and nothing downstream.
   if (!isOwner({ email: userRow.email ?? "" })) return notFound();
 
-  // 5. Step-up, when asked for: how this session was signed in, then his
-  // second factor (P9 F1, F2). Only the owner's account gets this far, so only
-  // a session on it ever sees these answers: 404 for anything but his password
-  // plus his code (or a session that can't be read), 503 when the session or
-  // the factor list can't be read for an outage. Each refusal is recorded
-  // without holding the 404 (recordStepUpRefusal).
+  // 5. Step-up, when asked for: how this session was signed in (P9 F1). Only
+  // the owner's account gets this far, so only a session on it ever sees this
+  // answer: 404 for anything but a password sign-in (or a session that can't
+  // be read), 503 when the session can't be read for an outage. Each refusal
+  // is recorded without holding the 404 (recordStepUpRefusal).
   let checkedToken: string | null = null;
   if (opts.requireStrongSignIn) {
     const session = await readAccessToken(supabase, route);
@@ -239,17 +229,7 @@ export async function requireExecSession(req: Request, route: string, opts: Exec
       // The amr methods only ("otp"): computed first, so the log line never names the session's token.
       const methods = signInMethods(session.token, authUserId);
       console.warn(`[exec-access] ${route}: step-up refused a session on the owner's account (sign-in: ${methods})`);
-      recordStepUpRefusal(req, route, userRow.id, authUserId, session.token, "sign_in");
-      return notFound();
-    }
-    const factor = await ownerFactorCheck(authUserId, session.token);
-    if (factor.verdict === "outage") {
-      console.error(`[exec-access] ${route}: the owner's second factors could not be read`);
-      return authUnavailable();
-    }
-    if (factor.verdict !== "ok") {
-      console.warn(`[exec-access] ${route}: step-up refused a session on the owner's account (second factor: ${factor.reason})`);
-      recordStepUpRefusal(req, route, userRow.id, authUserId, session.token, factor.reason);
+      recordStepUpRefusal(req, route, userRow.id, authUserId, session.token);
       return notFound();
     }
     checkedToken = session.token;
@@ -288,28 +268,18 @@ export async function requireExecSession(req: Request, route: string, opts: Exec
   return { ok: true, principal, authUserId, sessionId };
 }
 
-/** What failed, for a refusal's alert: the sign-in record, or owner-mfa's enum. */
-type StepUpRefusalReason = "sign_in" | OwnerFactorReason;
-
 /**
  * P9 (F2 step 3, L4): a refused step-up leaves one exec_access_log row (the gate's route + STEP_UP_REFUSED_SUFFIX,
  * surface web, the same session, IP and user agent every access row carries; principal_id from the enabled principal,
- * null when it can't be read) and a daily-keyed ops alert (sign-in methods, aal and the reason as an enum; never the
- * token). Fire-and-forget: the 404 never waits on either, and nothing here throws.
+ * null when it can't be read) and a daily-keyed ops alert (sign-in methods and aal; never the token). Fire-and-forget:
+ * the 404 never waits on either, and nothing here throws.
  */
-function recordStepUpRefusal(
-  req: Request,
-  route: string,
-  ddUserId: string,
-  authUserId: string,
-  token: string,
-  reason: StepUpRefusalReason
-): void {
+function recordStepUpRefusal(req: Request, route: string, ddUserId: string, authUserId: string, token: string): void {
   try {
     const sessionId = sessionIdFromAccessToken(token, authUserId);
     const ip = clientIp(req);
     const userAgent = req.headers.get("user-agent");
-    const detail = `${signInMethods(token, authUserId)} aal=${tokenAal(token, authUserId)} (${reason})`;
+    const detail = `${signInMethods(token, authUserId)} aal=${tokenAal(token, authUserId)}`;
     void (async () => {
       let principalId: string | null = null;
       try {
@@ -322,7 +292,7 @@ function recordStepUpRefusal(
       // other .title handed to an alert as content.
       await notifyOps({
         key: STEP_UP_REFUSED_OPS.key(new Date().toISOString().slice(0, 10)),
-        title: "A session on the owner's account that isn't his password plus his code was refused",
+        title: "A session on the owner's account that wasn't a password sign-in was refused",
         detail
       });
     })().catch((err: unknown) => console.warn(`[exec-access] ${route}: the step-up refusal could not be recorded (${errorName(err)})`));
@@ -361,9 +331,8 @@ const PAGE_FORWARDED_HEADERS = ["user-agent", "x-forwarded-for", "x-real-ip"] as
  *   const principal = await requireExecPrincipalForPage("GET /executive");
  *
  * Same checks as requireExecPrincipal, with the step-up on: a session on the
- * owner's account opened by a one-time sign-in link gets the 404 too, and so
- * does a password sign-in without his pinned authenticator (P9 F2), so he
- * opens these pages with his password plus his code. A 401 or 404 renders Next's
+ * owner's account opened by a one-time sign-in link gets the 404 too, so he
+ * opens these pages from a password sign-in. A 401 or 404 renders Next's
  * not-found page, the one a missing route gets (a signed-out browser was
  * already sent to /login by the middleware, so a 401 here is a session
  * GoTrue refused). It doesn't hide that the route exists from signed-in
@@ -406,9 +375,8 @@ const EXEC_NAV_ITEM: ExecNavItem = Object.freeze({ href: "/executive", label: "E
 
 /**
  * The session's access token and its user id, from the cookie session, when the token is a strong sign-in for that
- * user (signInIsStrong with the sub bound) and the owner's second factor checks out (ownerFactorVerdict "ok"); else
- * null. P9 (F1, F2, AM-P9-12): the same two checks the page gate makes, so a link session, a password-only session or
- * an unpinned factor gets no nav row and no routing. Visibility only; the callers swallow every error.
+ * user (signInIsStrong with the sub bound); else null. P9 (F1, AM-P9-12): the same check the page gate makes, so a
+ * link session gets no nav row and no routing. Visibility only; the callers swallow every error.
  */
 async function strongOwnerSession(): Promise<{ token: string; userId: string } | null> {
   const { data, error } = await getSupabaseServer().auth.getSession();
@@ -416,14 +384,13 @@ async function strongOwnerSession(): Promise<{ token: string; userId: string } |
   const token = data.session?.access_token;
   const userId = data.session?.user?.id;
   if (typeof token !== "string" || typeof userId !== "string" || userId === "") return null;
-  if (!signInIsStrong(token, userId)) return null;
-  return (await ownerFactorVerdict(userId, token)) === "ok" ? { token, userId } : null;
+  return signInIsStrong(token, userId) ? { token, userId } : null;
 }
 
 /**
  * The Sidebar row for the exec pages, or null when this request shouldn't see
  * it: the flag is off, the user isn't the owner, or the session isn't one the
- * page gate admits (a password sign-in at aal2 with his pinned factor). The
+ * page gate admits (a password sign-in with no one-time link). The
  * Sidebar is a client component, so the row's label and link reach a browser
  * only in this value, sent with the page the server drew it on. Visibility
  * only: the page gate is the control. Never throws; a session it can't read
@@ -442,8 +409,8 @@ export async function execNavItemFor(user: Parameters<typeof isOwner>[0]): Promi
 /**
  * True when the AI drawer should answer through the assistant for this
  * request (P5b contract §3.19.10, B10): EXEC_ENABLED, the owner, a strong
- * session (the page gate's step-up: signInIsStrong, aal2 and his pinned
- * factor, P9 F1/F2), an enabled principal, and chatSchemaReady ∧
+ * session (the page gate's step-up: signInIsStrong, P9 F1), an enabled
+ * principal, and chatSchemaReady ∧
  * chatEnabled ∧ askAiUsesExec. Never throws (false on any error); never hands
  * out a principal. Visibility only: /api/exec/chat gates for real. The
  * (main) layout passes the answer to the drawer as one boolean, so link
@@ -513,9 +480,8 @@ const ONE_TIME_SIGN_IN_METHODS: ReadonlySet<string> = new Set(["otp", "magiclink
  * ([{ method, timestamp }], and a refresh keeps the list). A second factor
  * (aal2) can only add to a password sign-in, never replace it: a link session
  * that enrols and verifies its own authenticator reaches aal2 with amr
- * [totp, otp], and is still a link session (P9 F1). The aal2 requirement and
- * the factor pin are owner-mfa.ts's half of the step-up. Anything else is
- * false, a token that doesn't say included.
+ * [totp, otp], and is still a link session (P9 F1). Anything else is false, a
+ * token that doesn't say included.
  *
  * Reads the payload WITHOUT verifying the signature, so call it only on a
  * token whose session GoTrue already confirmed; with `expectedSub`, a token

@@ -10,11 +10,9 @@ vi.mock("@/lib/supabase-server", () => ({ getSupabaseServer: vi.fn() }));
 vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
 vi.mock("@/lib/exec/principal", () => ({ loadPrincipalForUser: vi.fn(), loadSettings: vi.fn() }));
 
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getSupabaseServer } from "@/lib/supabase-server";
 import { execAskAiRoutingFor } from "@/lib/exec/access";
-import { OWNER_AUTH_ID, PINNED_FACTOR_ID, STRANGER_FACTOR_ID, fakeFactorAdmin, pinFactors, unpinFactors, verifiedFactor } from "../__tests__/step-up-fixtures";
+import { OWNER_AUTH_ID } from "../__tests__/step-up-fixtures";
 import { loadPrincipalForUser, loadSettings } from "@/lib/exec/principal";
 import type { ExecPrincipal, ExecSettings } from "@/lib/exec/types";
 import { settings as settingsFixture } from "../__tests__/p5a-ui-fixtures";
@@ -26,9 +24,9 @@ const PRINCIPAL = Object.freeze({ id: "ep_owner", userId: "u_owner", email: OWNE
 const b64url = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
 const jwt = (payload: unknown) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url(payload)}.c2ln`;
 const token = (methods: string[], aal = "aal1") => jwt({ sub: OWNER_AUTH_ID, session_id: "s", aal, amr: methods.map((method) => ({ method, timestamp: 1_793_000_000 })) });
-/** P9 (F1, F2): his password plus his pinned code is the strong session now; a password alone (aal1) is not. */
-const STRONG = token(["password", "totp"], "aal2");
+/** P9 (F1): a password sign-in is the strong session, at aal1 or aal2; a link is not, even with its own factor. */
 const PASSWORD = token(["password"]);
+const PASSWORD_WITH_MFA = token(["password", "totp"], "aal2");
 const LINK = token(["otp"]);
 const LINK_WITH_MFA = token(["otp", "totp"], "aal2");
 
@@ -38,22 +36,14 @@ function session(opts: { token?: string | null; error?: boolean; throws?: boolea
   const getSession = vi.fn(async () => {
     if (opts.throws) throw new Error("cookies unavailable");
     if (opts.error) return { data: { session: null }, error: { name: "AuthApiError", message: "x" } };
-    return { data: { session: opts.token === null ? null : { access_token: opts.token ?? STRONG, user: { id: OWNER_AUTH_ID } } }, error: null };
+    return { data: { session: opts.token === null ? null : { access_token: opts.token ?? PASSWORD, user: { id: OWNER_AUTH_ID } } }, error: null };
   });
   vi.mocked(getSupabaseServer).mockReturnValue({ auth: { getSession } } as unknown as ReturnType<typeof getSupabaseServer>);
   return getSession;
 }
 
-function factors(list = [verifiedFactor(PINNED_FACTOR_ID)]) {
-  const admin = fakeFactorAdmin({ factors: list });
-  vi.mocked(getSupabaseAdmin).mockReturnValue({ auth: admin.auth } as unknown as SupabaseClient);
-  return admin.listFactors;
-}
-
 beforeEach(() => {
   vi.stubEnv("EXEC_ENABLED", "true");
-  pinFactors(PINNED_FACTOR_ID);
-  factors();
   session();
   vi.mocked(loadPrincipalForUser).mockResolvedValue(PRINCIPAL);
   vi.mocked(loadSettings).mockResolvedValue(ON);
@@ -63,7 +53,7 @@ afterEach(() => {
 });
 
 describe("execAskAiRoutingFor (test 88)", () => {
-  it("all on: EXEC_ENABLED, the owner, his password plus his pinned code (P9: was a password session), an enabled principal, chat installed and on, Ask AI on → true", async () => {
+  it("all on: EXEC_ENABLED, the owner, a password session, an enabled principal, chat installed and on, Ask AI on → true", async () => {
     expect(await execAskAiRoutingFor(OWNER)).toBe(true);
     expect(loadPrincipalForUser).toHaveBeenCalledWith("u_owner");
     expect(loadSettings).toHaveBeenCalledWith("ep_owner");
@@ -76,20 +66,12 @@ describe("execAskAiRoutingFor (test 88)", () => {
     expect(loadPrincipalForUser).not.toHaveBeenCalled();
   });
 
-  it("P9 F2: a password sign-in without the code (aal1), the pin unset (Q2) or an unpinned factor → false; a factor read that fails → false", async () => {
+  // Flip of P9 F2 (his pinned authenticator code, removed 2026-11-10): a password sign-in alone is strong again.
+  it("a password sign-in → true without a second factor (aal1) or with one (aal2)", async () => {
     session({ token: PASSWORD });
-    expect(await execAskAiRoutingFor(OWNER)).toBe(false);
-    session();
-    factors([verifiedFactor(PINNED_FACTOR_ID), verifiedFactor(STRANGER_FACTOR_ID)]);
-    expect(await execAskAiRoutingFor(OWNER)).toBe(false);
-    factors();
-    unpinFactors();
-    expect(await execAskAiRoutingFor(OWNER)).toBe(false);
-    pinFactors(PINNED_FACTOR_ID);
-    const broken = fakeFactorAdmin({ error: { name: "AuthRetryableFetchError", message: "fetch failed", status: 0 } });
-    vi.mocked(getSupabaseAdmin).mockReturnValue({ auth: broken.auth } as unknown as SupabaseClient);
-    expect(await execAskAiRoutingFor(OWNER)).toBe(false);
-    expect(loadPrincipalForUser).not.toHaveBeenCalled();
+    expect(await execAskAiRoutingFor(OWNER)).toBe(true);
+    session({ token: PASSWORD_WITH_MFA });
+    expect(await execAskAiRoutingFor(OWNER)).toBe(true);
   });
 
   it("the flag off → false, with nothing read", async () => {

@@ -22,7 +22,7 @@ vi.mock("@/lib/exec/handlers/access-alert", async () => {
 
 import { STEP_UP_REFUSED_SUFFIX, clientIp, requireExecPrincipal } from "@/lib/exec/access";
 import { loadPrincipalForUser } from "@/lib/exec/principal";
-import { fakeFactorAdmin, passwordOnlyToken, pinFactors, settle as settleAll, strongToken } from "@/lib/exec/__tests__/step-up-fixtures";
+import { linkWithOwnFactorToken, settle as settleAll, strongToken } from "@/lib/exec/__tests__/step-up-fixtures";
 import type { ExecPrincipal } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getSupabaseServer } from "@/lib/supabase-server";
@@ -31,7 +31,7 @@ const OWNER_AUTH_ID = "11111111-1111-4111-8111-111111111111";
 const ROUTE = "GET /api/exec/overview";
 const b64url = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
 const jwt = (payload: unknown) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url(payload)}.c2ln`;
-// P9 (F2, AM-P9-15): a strong session is his password plus his pinned code (aal2); the pin is set in beforeEach.
+// P9 (AM-P9-15): the strong session every real-gate test builds, from the shared fixtures: his password sign-in (aal1).
 const STRONG = strongToken("sess-strong", OWNER_AUTH_ID);
 const LINK = jwt({ sub: OWNER_AUTH_ID, session_id: "sess-link", aal: "aal1", amr: [{ method: "otp", timestamp: 1793977000 }] });
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
@@ -52,7 +52,6 @@ function fakeServer(token: string) {
 function fakeAdmin() {
   const logRows: Record<string, unknown>[] = [];
   const client = {
-    auth: fakeFactorAdmin().auth,
     from(table: string) {
       if (table === "users") {
         const b = { select: () => b, eq: () => b, maybeSingle: async () => ({ data: { id: "u_1", email: "mitchell@scaledai.org" }, error: null }) };
@@ -78,7 +77,6 @@ let warnSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   vi.mocked(loadPrincipalForUser).mockResolvedValue(PRINCIPAL);
   vi.stubEnv("EXEC_ENABLED", "true");
-  pinFactors();
   hookState.note.mockReset();
   hookState.fail = false;
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -124,8 +122,10 @@ describe("the strong-web-access hook (NA04)", () => {
     expect(hookState.note).not.toHaveBeenCalled();
   });
 
-  it("P9 F2: a password-only session (aal1) under the step-up never reaches it; its refusal row is not a sighting", async () => {
-    fakeServer(passwordOnlyToken("sess-pw", OWNER_AUTH_ID));
+  // P9 F2 sent a password-only session (aal1) here; with his authenticator code no longer required (2026-11-10) that is
+  // the strong session, which the NA04 test below sends to the hook.
+  it("P9 F1: a link session with its own factor (aal2) never reaches it; its refusal row is not a sighting", async () => {
+    fakeServer(linkWithOwnFactorToken("sess-own", OWNER_AUTH_ID));
     const admin = fakeAdmin();
     expect((await requireExecPrincipal(request(), ROUTE, { requireStrongSignIn: true })).ok).toBe(false);
     await settleAll();

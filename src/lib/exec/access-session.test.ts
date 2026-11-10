@@ -13,19 +13,7 @@ import { SENTINELS, findSentinel } from "@/lib/exec/__tests__/slack-assert";
 import { createFakeSlackDb } from "@/lib/exec/__tests__/fake-slack-db";
 import { createFakeJobsRead, type ReadRow } from "@/lib/exec/__tests__/fake-jobs-read";
 import { jobRow } from "@/lib/exec/__tests__/fake-exec-db";
-import {
-  PINNED_FACTOR_ID,
-  SIGNED_IN_AT,
-  STRANGER_FACTOR_ID,
-  fakeFactorAdmin,
-  linkWithOwnFactorToken,
-  passwordOnlyToken,
-  pinFactors,
-  settle,
-  strongToken,
-  verifiedFactor,
-  type FactorAdminOptions
-} from "@/lib/exec/__tests__/step-up-fixtures";
+import { SIGNED_IN_AT, linkWithOwnFactorToken, settle, strongToken } from "@/lib/exec/__tests__/step-up-fixtures";
 import {
   STEP_UP_REFUSED_OPS,
   STEP_UP_REFUSED_SUFFIX,
@@ -48,8 +36,9 @@ import { getSupabaseServer } from "@/lib/supabase-server";
 // columns (AC01, AC03-AC05). AC02 is access.test.ts itself, run unchanged:
 // requireExecPrincipal now delegates to requireExecSession.
 //
-// P9 (F1, F2, AM-P9-13): the step-up through requireExecSession. A strong session is now his password plus his pinned
-// authenticator code (aal2); STRONG below is that session, with EXEC_OWNER_MFA_FACTOR_IDS set in beforeEach.
+// P9 (F1, AM-P9-13): the step-up through requireExecSession. A strong session is a password sign-in with no one-time
+// link in its record, whatever its aal (signInIsStrong); STRONG below is that session, at aal1. P9's F2 fix (aal2 with
+// his authenticator code, pinned in EXEC_OWNER_MFA_FACTOR_IDS) was removed on 2026-11-10.
 
 const OWNER_AUTH_ID = "11111111-1111-4111-8111-111111111111";
 const ROUTE = "GET /api/integrations/exec-slack/start";
@@ -72,11 +61,9 @@ function fakeServer(token: string | null, opts: { user?: { id: string } | null }
   return auth;
 }
 
-function fakeAdmin(factors: FactorAdminOptions = {}) {
+function fakeAdmin() {
   const logRows: Record<string, unknown>[] = [];
-  const factorAdmin = fakeFactorAdmin(factors);
   const client = {
-    auth: factorAdmin.auth,
     from(table: string) {
       if (table === "users") {
         const b = { select: () => b, eq: () => b, maybeSingle: async () => ({ data: { id: "u_1", email: "mitchell@scaledai.org" }, error: null }) };
@@ -87,7 +74,7 @@ function fakeAdmin(factors: FactorAdminOptions = {}) {
     }
   };
   vi.mocked(getSupabaseAdmin).mockReturnValue(client as unknown as SupabaseClient);
-  return { logRows, listFactors: factorAdmin.listFactors };
+  return { logRows };
 }
 
 const request = () =>
@@ -102,7 +89,6 @@ beforeEach(() => {
   vi.mocked(loadPrincipalForUser).mockResolvedValue(PRINCIPAL);
   vi.mocked(notifyOps).mockResolvedValue(false);
   vi.stubEnv("EXEC_ENABLED", "true");
-  pinFactors(PINNED_FACTOR_ID);
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -167,68 +153,44 @@ describe("requireExecSession (C3)", () => {
   });
 });
 
-// P9 F1, F2 through requireExecSession (the Slack OAuth routes' gate).
-describe("requireExecSession: the P9 step-up (F1, F2)", () => {
+// P9 F1 through requireExecSession (the Slack OAuth routes' gate): a password sign-in is admitted at any aal; a session
+// with a one-time link in its record is refused, even one that verified a code of its own.
+describe("requireExecSession: the P9 step-up (F1)", () => {
   const strong = { requireStrongSignIn: true } as const;
   const refusalRows = (rows: Record<string, unknown>[]) => rows.filter((r) => String(r.route).endsWith(STEP_UP_REFUSED_SUFFIX));
 
-  it("F1: a link session that enrolled its own second factor (aal2, amr [totp, otp]) → 404, one refusal row, no factor read", async () => {
+  it("F1: a link session that enrolled its own second factor (aal2, amr [totp, otp]) → 404, one refusal row", async () => {
     fakeServer(linkWithOwnFactorToken("sess-own-factor", OWNER_AUTH_ID));
-    const { logRows, listFactors } = fakeAdmin();
+    const { logRows } = fakeAdmin();
     expect(await denial(await requireExecSession(request(), ROUTE, strong))).toEqual({ status: 404, body: { error: "not found" } });
-    expect(listFactors).not.toHaveBeenCalled();
     await settle();
     expect(logRows).toEqual([
       { principal_id: "ep_1", auth_user_id: OWNER_AUTH_ID, session_id: "sess-own-factor", ip: "203.0.113.7", user_agent: "UA/1", route: `${ROUTE}${STEP_UP_REFUSED_SUFFIX}`, surface: "web" }
     ]);
     expect(vi.mocked(notifyOps).mock.calls.map(([a]) => a)).toEqual([
-      { key: STEP_UP_REFUSED_OPS.key(new Date().toISOString().slice(0, 10)), title: STEP_UP_REFUSED_OPS.title, detail: "totp, otp aal=aal2 (sign_in)" }
+      { key: STEP_UP_REFUSED_OPS.key(new Date().toISOString().slice(0, 10)), title: STEP_UP_REFUSED_OPS.title, detail: "totp, otp aal=aal2" }
     ]);
   });
 
-  it("F2: pin set, an aal1 password sign-in → 404 and exactly one step_up_refused row", async () => {
-    fakeServer(passwordOnlyToken("sess-pw", OWNER_AUTH_ID));
-    const { logRows, listFactors } = fakeAdmin();
-    expect((await denial(await requireExecSession(request(), ROUTE, strong))).status).toBe(404);
-    expect(listFactors).not.toHaveBeenCalled();
+  // P9's F2 fix refused this session (no authenticator code); since that was removed, a password sign-in is enough.
+  it("a password sign-in without a code (aal1, amr [password]) → admitted with its session id; no refusal row, no alert", async () => {
+    fakeServer(jwt({ sub: OWNER_AUTH_ID, session_id: "sess-pw", aal: "aal1", amr: [{ method: "password", timestamp: SIGNED_IN_AT }] }));
+    const { logRows } = fakeAdmin();
+    expect(await requireExecSession(request(), ROUTE, strong)).toEqual({ ok: true, principal: PRINCIPAL, authUserId: OWNER_AUTH_ID, sessionId: "sess-pw" });
     await settle();
-    expect(refusalRows(logRows)).toHaveLength(1);
-    expect(logRows).toHaveLength(1);
-    expect(logRows[0]).toMatchObject({ session_id: "sess-pw", principal_id: "ep_1" });
-  });
-
-  it("F2: aal2 [totp, password] with the pinned factor → admitted with its session id; no refusal", async () => {
-    fakeServer(jwt({ sub: OWNER_AUTH_ID, session_id: "sess-tp", aal: "aal2", amr: [{ method: "totp", timestamp: SIGNED_IN_AT }, { method: "password", timestamp: SIGNED_IN_AT }] }));
-    const { logRows, listFactors } = fakeAdmin();
-    expect(await requireExecSession(request(), ROUTE, strong)).toEqual({ ok: true, principal: PRINCIPAL, authUserId: OWNER_AUTH_ID, sessionId: "sess-tp" });
-    expect(listFactors).toHaveBeenCalledWith({ userId: OWNER_AUTH_ID });
-    await settle();
-    expect(refusalRows(logRows)).toEqual([]);
+    expect(logRows).toEqual([
+      { principal_id: "ep_1", auth_user_id: OWNER_AUTH_ID, session_id: "sess-pw", ip: "203.0.113.7", user_agent: "UA/1", route: ROUTE, surface: "web" }
+    ]);
     expect(notifyOps).not.toHaveBeenCalled();
   });
 
-  it("F2: the factor list can't be read → 503 (never a 404, never ok), no refusal row", async () => {
-    fakeServer(STRONG);
-    const { logRows } = fakeAdmin({ error: { name: "AuthRetryableFetchError", message: "fetch failed", status: 0 } });
-    expect(await denial(await requireExecSession(request(), ROUTE, strong))).toEqual({ status: 503, body: { error: "auth unavailable" } });
-    fakeServer(STRONG);
-    fakeAdmin({ throws: new Error("@supabase/auth-js: Expected parameter to be UUID but is not") });
-    expect((await denial(await requireExecSession(request(), ROUTE, strong))).status).toBe(503);
+  it("aal2 [totp, password] (a password sign-in plus a code) → admitted with its session id; no refusal", async () => {
+    fakeServer(jwt({ sub: OWNER_AUTH_ID, session_id: "sess-tp", aal: "aal2", amr: [{ method: "totp", timestamp: SIGNED_IN_AT }, { method: "password", timestamp: SIGNED_IN_AT }] }));
+    const { logRows } = fakeAdmin();
+    expect(await requireExecSession(request(), ROUTE, strong)).toEqual({ ok: true, principal: PRINCIPAL, authUserId: OWNER_AUTH_ID, sessionId: "sess-tp" });
     await settle();
-    expect(logRows).toEqual([]);
-  });
-
-  it("F2: an unpinned verified factor beside his → 404 with the refusal row; without the step-up nothing changes", async () => {
-    fakeServer(STRONG);
-    const { logRows } = fakeAdmin({ factors: [verifiedFactor(PINNED_FACTOR_ID), verifiedFactor(STRANGER_FACTOR_ID)] });
-    expect((await denial(await requireExecSession(request(), ROUTE, strong))).status).toBe(404);
-    await settle();
-    expect(refusalRows(logRows)).toHaveLength(1);
-    // A gate call without requireStrongSignIn never reads the factors (P2a's routes are unchanged).
-    fakeServer(passwordOnlyToken());
-    const plain = fakeAdmin();
-    expect((await requireExecSession(request(), ROUTE)).ok).toBe(true);
-    expect(plain.listFactors).not.toHaveBeenCalled();
+    expect(refusalRows(logRows)).toEqual([]);
+    expect(notifyOps).not.toHaveBeenCalled();
   });
 });
 

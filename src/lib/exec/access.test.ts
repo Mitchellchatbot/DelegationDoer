@@ -13,6 +13,7 @@ import {
   execAskAiRoutingStateFor,
   execNavItemFor,
   isExecEnabled,
+  isStepUpOn,
   logAccess,
   requireExecPrincipal,
   sessionIdFromAccessToken,
@@ -152,6 +153,20 @@ describe("isExecEnabled", () => {
     }
     vi.stubEnv("EXEC_ENABLED", undefined);
     expect(isExecEnabled()).toBe(false);
+  });
+});
+
+// 2026-11-10: the step-up (P9 F1) is off unless switched on.
+describe("isStepUpOn", () => {
+  it("is off while EXEC_REQUIRE_PASSWORD_SIGNIN is unset (the default), and on only for the exact string 'true'", () => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", undefined);
+    expect(isStepUpOn()).toBe(false);
+    for (const v of ["TRUE", "1", "yes", "true ", "", "false"]) {
+      vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", v);
+      expect(isStepUpOn()).toBe(false);
+    }
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
+    expect(isStepUpOn()).toBe(true);
   });
 });
 
@@ -363,32 +378,44 @@ describe("requireExecPrincipal", () => {
   });
 });
 
-// P9 F1: the Sidebar row and the Ask AI routing make the page gate's check (AM-P9-12): a link session that enrolled and
-// verified its own authenticator (aal2, amr [totp, otp]) gets neither.
-describe("P9 F1: execNavItemFor and execAskAiRoutingStateFor refuse a link session with its own second factor", () => {
+// P9 F1: with the step-up switched on (EXEC_REQUIRE_PASSWORD_SIGNIN=true), the Sidebar row and the Ask AI routing make
+// the page gate's check (AM-P9-12): a link session that enrolled and verified its own authenticator (aal2, amr [totp,
+// otp]) gets neither. Off (the default since 2026-11-10), the same session gets both, and neither helper reads it.
+describe("P9 F1: execNavItemFor and execAskAiRoutingStateFor on a link session with its own second factor", () => {
   const OWNER = { id: "u_1", email: "mitchell@scaledai.org" };
   const ON = { chatSchemaReady: true, chatEnabled: true, askAiUsesExec: true } as unknown as ExecSettings;
 
   function cookieSession(token: string) {
     const getSession = vi.fn(async () => ({ data: { session: { access_token: token, user: { id: OWNER_AUTH_ID } } }, error: null }));
     vi.mocked(getSupabaseServer).mockReturnValue({ auth: { getSession } } as unknown as ReturnType<typeof getSupabaseServer>);
+    return getSession;
   }
 
   beforeEach(() => {
     vi.mocked(loadSettings).mockResolvedValue(ON);
   });
 
-  it("aal2 amr [totp, otp] → no nav row and { routed: false }, before any principal read", async () => {
+  it("step-up on: aal2 amr [totp, otp] → no nav row and { routed: false }, before any principal read", async () => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
     cookieSession(linkWithOwnFactorToken("sess-own", OWNER_AUTH_ID));
     await expect(execNavItemFor(OWNER)).resolves.toBeNull();
     await expect(execAskAiRoutingStateFor(OWNER)).resolves.toEqual({ routed: false, emailOn: false });
     expect(loadPrincipalForUser).not.toHaveBeenCalled();
   });
 
-  it("his password sign-in (aal1) → the row and routed (the same helpers, the control case)", async () => {
+  it("step-up on: his password sign-in (aal1) → the row and routed (the same helpers, the control case)", async () => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
     cookieSession(strongToken("sess-strong", OWNER_AUTH_ID));
     await expect(execNavItemFor(OWNER)).resolves.toEqual({ href: "/executive", label: "Executive AI" });
     await expect(execAskAiRoutingStateFor(OWNER)).resolves.toMatchObject({ routed: true });
+  });
+
+  it("step-up off (the default): the same link session → the row and routed, without reading the session", async () => {
+    const getSession = cookieSession(linkWithOwnFactorToken("sess-own", OWNER_AUTH_ID));
+    await expect(execNavItemFor(OWNER)).resolves.toEqual({ href: "/executive", label: "Executive AI" });
+    await expect(execAskAiRoutingStateFor(OWNER)).resolves.toMatchObject({ routed: true });
+    expect(getSession).not.toHaveBeenCalled();
+    expect(loadPrincipalForUser).toHaveBeenCalledWith("u_1");
   });
 });
 

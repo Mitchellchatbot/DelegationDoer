@@ -4,7 +4,8 @@
 //
 // A strong session = a password sign-in with no one-time link anywhere in its record (signInIsStrong), whatever its
 // aal. P9 also required his authenticator code, pinned in EXEC_OWNER_MFA_FACTOR_IDS; that was removed on 2026-11-10,
-// so nothing here fakes factors any more. Everything here is a fake: no GoTrue call is made.
+// so nothing here fakes factors any more. Since the same day the step-up runs only while EXEC_REQUIRE_PASSWORD_SIGNIN is
+// "true" (isStepUpOn); off, every session on his account is admitted. Everything here is a fake: no GoTrue call is made.
 
 export const OWNER_AUTH_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -36,7 +37,7 @@ export function stepUpToken(opts: StepUpTokenOptions = {}): string {
 
 /** His password sign-in (aal1, amr [password]): what the step-up admits. */
 export const strongToken = (sessionId = "sess-1", sub = OWNER_AUTH_ID) => stepUpToken({ sub, sessionId, aal: "aal1", methods: ["password"] });
-/** F1: a leader-minted link session that enrolled and verified its own authenticator (aal2, amr [totp, otp]): refused. */
+/** F1: a leader-minted link session that enrolled and verified its own authenticator (aal2, amr [totp, otp]): refused while the step-up is on. */
 export const linkWithOwnFactorToken = (sessionId = "sess-2", sub = OWNER_AUTH_ID) => stepUpToken({ sub, sessionId, aal: "aal2", methods: ["totp", "otp"] });
 
 /** Lets fire-and-forget work (the refusal record, the new-network hook) and its dynamic imports settle. */

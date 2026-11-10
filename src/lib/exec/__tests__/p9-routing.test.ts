@@ -50,8 +50,10 @@ import { linkWithOwnFactorToken, OWNER_AUTH_ID, stepUpToken, strongToken } from 
 // (silence); a channel message → never a reply; a retried event_id → one reply; an interaction from another user →
 // not_owner; with Slack reading (P7a's v2): a watched channel's message → the reading ingest only (no reply, no chat job),
 // a deny-class (FB lead) channel's message → dropped with nothing stored. Ask AI: routed only when every one of
-// (EXEC_ENABLED, the owner, a strong sign-in = a password sign-in at any aal, chat_enabled, ask_ai_uses_exec) holds;
-// any link session keeps DD's legacy Ask AI, even one that verified a code of its own.
+// (EXEC_ENABLED, the owner, a session the step-up admits, chat_enabled, ask_ai_uses_exec) holds. The step-up is off
+// unless EXEC_REQUIRE_PASSWORD_SIGNIN=true (the default since 2026-11-10): off, it admits every session on his account,
+// the team's sign-in link sessions included; on, only a strong sign-in (a password sign-in at any aal), so any link
+// session keeps DD's legacy Ask AI, even one that verified a code of its own.
 
 // ---------------------------------------------------------------------------
 // The Ask AI routing matrix
@@ -68,7 +70,8 @@ type SessionKind = "strong" | "strong_with_code" | "link" | "link_with_own_facto
 const SESSIONS: readonly SessionKind[] = ["strong", "strong_with_code", "link", "link_with_own_factor"];
 const STRONG_SESSIONS: ReadonlySet<SessionKind> = new Set<SessionKind>(["strong", "strong_with_code"]);
 
-function useSession(kind: SessionKind): void {
+/** The cookie session as `kind`; returns its getSession, which only the step-up switched on reads. */
+function useSession(kind: SessionKind) {
   const token =
     kind === "strong" ? strongToken()
     : kind === "strong_with_code" ? stepUpToken({ aal: "aal2", methods: ["totp", "password"] })
@@ -76,6 +79,7 @@ function useSession(kind: SessionKind): void {
     : linkWithOwnFactorToken();
   const getSession = vi.fn(async () => ({ data: { session: { access_token: token, user: { id: OWNER_AUTH_ID } } }, error: null }));
   vi.mocked(getSupabaseServer).mockReturnValue({ auth: { getSession } } as unknown as ReturnType<typeof getSupabaseServer>);
+  return getSession;
 }
 
 describe("§2.3 the Ask AI routing matrix", () => {
@@ -86,20 +90,23 @@ describe("§2.3 the Ask AI routing matrix", () => {
     vi.unstubAllEnvs();
   });
 
-  const cases: { flag: boolean; owner: boolean; session: SessionKind; chat: boolean; askAi: boolean }[] = [];
-  for (const flag of [true, false]) for (const owner of [true, false]) for (const session of SESSIONS) for (const chat of [true, false]) for (const askAi of [true, false]) {
-    cases.push({ flag, owner, session, chat, askAi });
+  const cases: { flag: boolean; owner: boolean; stepUp: boolean; session: SessionKind; chat: boolean; askAi: boolean }[] = [];
+  for (const flag of [true, false]) for (const owner of [true, false]) for (const stepUp of [true, false]) for (const session of SESSIONS) {
+    for (const chat of [true, false]) for (const askAi of [true, false]) cases.push({ flag, owner, stepUp, session, chat, askAi });
   }
 
-  it(`routed only when every condition holds (${cases.length} combinations); every link session keeps legacy Ask AI`, async () => {
+  it(`routed only when every condition holds (${cases.length} combinations); with the step-up on, every link session keeps legacy Ask AI`, async () => {
     for (const c of cases) {
       vi.stubEnv("EXEC_ENABLED", c.flag ? "true" : "false");
-      useSession(c.session);
+      vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", c.stepUp ? "true" : "false");
+      const getSession = useSession(c.session);
       vi.mocked(loadSettings).mockResolvedValue({ ...ON, chatEnabled: c.chat, askAiUsesExec: c.askAi });
       const state = await execAskAiRoutingStateFor(c.owner ? OWNER : LEADER);
-      const expected = c.flag && c.owner && STRONG_SESSIONS.has(c.session) && c.chat && c.askAi;
+      // Off, the step-up admits every session on his account without reading it; on, only a strong one.
+      const expected = c.flag && c.owner && (!c.stepUp || STRONG_SESSIONS.has(c.session)) && c.chat && c.askAi;
       expect(state.routed, JSON.stringify(c)).toBe(expected);
       if (!state.routed) expect(state.emailOn, JSON.stringify(c)).toBe(false);
+      if (!c.stepUp) expect(getSession, JSON.stringify(c)).not.toHaveBeenCalled();
     }
   });
 });

@@ -13,9 +13,12 @@ says otherwise; never a select-star; never a column that holds sealed secrets (t
 
 The assistant's non-negotiables. Every change is judged against them.
 
-- **Owner only.** It is Mitchell's (mitchell@scaledai.org) and nobody else's, enforced on the server. The session must
-  be a strong sign-in: a password sign-in, with no one-time sign-in link anywhere in its record (the step-up, §4 P9).
-  Everyone else, and every sign-in link session on his account, gets a 404 on the assistant's pages and APIs.
+- **Owner only.** It is Mitchell's (mitchell@scaledai.org) and nobody else's, enforced on the server: only a session on
+  his account gets in. By default that includes the team's sign-in link sessions (the agreed arrangement: any DD
+  leader or admin can mint a one-time sign-in link for his account). `EXEC_REQUIRE_PASSWORD_SIGNIN=true` (§2) narrows
+  it to his password sign-ins: a password sign-in with no one-time sign-in link anywhere in its record (the step-up,
+  §4 P9). Everyone else gets a 404 on the assistant's pages and APIs, and so, with the switch on, does every other
+  session on his account.
 - **Mail is pinned to his account** (`exec_principals.mail_account_ids`).
 - **Email is never sent automatically.** Only his confirmed click on the exact saved draft sends it.
 - **Nothing is posted as Mitchell** except a check-in he clicks himself.
@@ -47,14 +50,15 @@ Never:
 
 - **Pages** under `src/app/(main)/executive`: Overview, Attention, Brief, Chat, Email (thread, `drafts/new`,
   `drafts/[id]`), Projects (and `[id]`), Settings, Slack, Team. Each page's first step is `requireExecPrincipalForPage`
-  (owner, enabled principal, strong sign-in).
+  (owner, enabled principal and, with `EXEC_REQUIRE_PASSWORD_SIGNIN=true`, a password sign-in).
 - **27 API routes** under `/api/exec`: attention (list, item, feedback), briefs (latest, regenerate, settings), chat
   (SSE), conversations, drafts (create, item, save, send, review, regenerate, resolve, outlook-opened), email assess,
   settings and voice-reset, slack (channel, channel links, digests, disconnect, reading/stop, watch-mode) and task
   proposals (confirm, dismiss). Every one gates first, the same way.
-- **Slack:** `/api/integrations/exec-slack/start` and `/callback` need his strong session on the canonical host
-  (`operations.scaledai.org`); `/events` and `/interactions` are public but Slack-signature checked (v0 HMAC over the raw
-  body, 300 s window, constant-time compare).
+- **Slack:** `/api/integrations/exec-slack/start` and `/callback` need a session on his account (a password sign-in
+  while `EXEC_REQUIRE_PASSWORD_SIGNIN=true`) on the canonical host (`operations.scaledai.org`); `/events` and
+  `/interactions` are public but Slack-signature checked (v0 HMAC over the raw body, 300 s window, constant-time
+  compare).
 - **`/api/cron/exec-tick`:** `CRON_SECRET` in the Authorization header only.
 - **Legacy hooks:** `daily-briefing-runner.ts` (the brief ownership gate), DD's `/api/slack/interactions` (legacy
   check-in buttons answer "expired" once the assistant's brief supersedes them), the Ask AI drawer's routing
@@ -147,6 +151,7 @@ All on Railway "Delegation Doer" unless noted.
 | Variable | Meaning |
 |---|---|
 | `EXEC_ENABLED` | Only `true` turns the assistant on. Off: pages and APIs 404, loops report "disabled", exec-tick skips, the legacy brief and legacy Ask AI resume, purges stop. Slack: since P9 (lead decision L2) deletion-type events (a delete, a thread parent's tombstone, channel deleted or left, app uninstalled, tokens revoked) are still applied; everything else is dropped with a 200. |
+| `EXEC_REQUIRE_PASSWORD_SIGNIN` | Since 2026-11-10. Unset (the default), the step-up is off: every session on Mitchell's account opens the assistant's pages and APIs, the team's sign-in link sessions included, and nothing is refused for how a session was signed in (no refused rows, no `exec-step-up-refused:` alerts). Only `true` turns it on (§0): password sign-ins only; any other session on his account gets the 404, a refused row in Settings, recent access and the `exec-step-up-refused:<UTC date>` alert (§11). Redeploy after changing it. |
 | `EXEC_TOKEN_KEY` | 32 random bytes in base64 (`openssl rand -base64 32`). Seals the Slack tokens; derives the OAuth-state and check-in button MAC keys. |
 | `EXEC_TOKEN_KEY_PREVIOUS` | Set only during a rotation (§10). |
 | `EXEC_OPS_SLACK_CHANNEL` | The ops channel id (the DD bot must be a member). Unset: alerts go to the server log only. |
@@ -181,7 +186,7 @@ but not harmless: every other kind would still be claimed there.
 
 `exec_settings` column = its default, and where it is set.
 
-- Morning brief (Settings, Morning brief; his strong session; at most 30 changes per 10 min):
+- Morning brief (Settings, Morning brief; his session, §0; at most 30 changes per 10 min):
   - `brief_enabled` = false; `brief_local_time` = 08:00;
   - `brief_timezone` = null, falling back to his work timezone, then America/New_York (it also moves the cost-cap day);
   - `supersede_legacy_brief` = false ("Send the brief to Slack instead of the 8am DD brief");
@@ -252,18 +257,22 @@ Code first is safe in every phase. Each phase's steps in order, with its accepta
   2. Apply `20261111200000_exec_brief_dm_refs.sql` after P8's; its grid must be all ok. Re-run P8's grid. Run the
      whole-surface grid (§16).
   3. Check energetic-surprise has no `EXEC_ENABLED` and no exec variable (L1).
-  4. Check: `/executive` opens for him after a password sign-in; a fresh sign-in link session on his account gets a 404
-     there and an `exec-step-up-refused:<date>` alert; Settings, recent access shows the refused row. If no alert
-     appears (one per key per 15 min per process), the refused row in Settings, recent access is the proof.
+  4. Check: `/executive` opens for his account after a password sign-in, and in a fresh sign-in link session on his
+     account. Optional, with `EXEC_REQUIRE_PASSWORD_SIGNIN=true` (and a redeploy, §2): a fresh sign-in link session on
+     his account gets a 404 there and an `exec-step-up-refused:<date>` alert; Settings, recent access shows the refused
+     row. If no alert appears (one per key per 15 min per process), the refused row in Settings, recent access is the
+     proof. Afterwards unset it and redeploy again, unless the team wants password sign-ins only.
   5. Optional, in a quiet hour (L5): `NEXT_MANUAL_SIG_HANDLE=true` and `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=120` on
      "Delegation Doer"; then a deploy during a Slack question lets the answer finish.
 
   **The authenticator was removed on 2026-11-10.** As first merged, P9 also asked for the 6-digit code of his
-  authenticator and pinned his factors in `EXEC_OWNER_MFA_FACTOR_IDS`. Now the step-up is the password sign-in alone
-  (§0), whatever the session's aal: nothing reads his factors any more, `/login` has no code step, DD Settings has no
-  "Two-step sign-in" section, the alerts `exec-owner-unpinned-factor:` and `exec-owner-mfa-misconfigured` are gone, and
-  his sign-ins no longer sign the team's link sessions out. The gap this re-opens is in §14. To do once, after the
-  deploy:
+  authenticator and pinned his factors in `EXEC_OWNER_MFA_FACTOR_IDS`. Now the step-up, whenever it runs, is the
+  password sign-in alone (§0), whatever the session's aal: nothing reads his factors any more, `/login` has no code
+  step, DD Settings has no "Two-step sign-in" section, the alerts `exec-owner-unpinned-factor:` and
+  `exec-owner-mfa-misconfigured` are gone, and his sign-ins no longer sign the team's link sessions out. The gap this
+  re-opens is in §14. On the same day the team chose to let its sign-in link sessions open the assistant too (the
+  link-session change): the step-up is off unless `EXEC_REQUIRE_PASSWORD_SIGNIN=true` (§2), and what that leaves open
+  is in §14 as well. To do once, after the deploy:
 
   - If `EXEC_OWNER_MFA_FACTOR_IDS` was set on Railway, delete it (it's ignored now).
   - Only if Mitchell already added an authenticator to his account: remove that factor in Supabase (Authentication,
@@ -271,8 +280,10 @@ Code first is safe in every phase. Each phase's steps in order, with its accepta
     the account, Supabase can ask for a code in flows DD no longer has a screen for (for example changing his password).
   - Re-run step 4.
 
-  A rollback to a deployment from before this change brings the code requirement back, and the assistant's pages and
-  APIs then 404 for him too (his brief and his Slack DM keep working).
+  A rollback to a deployment from before the link-session change turns the step-up back on whatever
+  `EXEC_REQUIRE_PASSWORD_SIGNIN` says (that code doesn't read it): sign-in link sessions on his account get the 404
+  again. A rollback to one from before the authenticator's removal also brings the code requirement back, and the
+  assistant's pages and APIs then 404 for him too (his brief and his Slack DM keep working).
 
 ---
 
@@ -295,9 +306,10 @@ Code first is safe in every phase. Each phase's steps in order, with its accepta
   - Any other non-empty value: Next registered no handler, so DD's exits at once (no wait).
 - Rollback: flip a switch (§6), or redeploy the previous Railway deployment, or revert the PR. Before rolling back
   below P8 with supersede on, expect the legacy brief to resume. **Rolling back below P9 re-opens the step-up bypass**
-  (a sign-in link session could enrol its own authenticator and use the assistant): don't, unless the assistant is
-  switched off (§6 B). A rollback past the 2026-11-10 step-up change also closes the assistant's pages and APIs to him
-  (§4 P9).
+  (a sign-in link session could enrol its own authenticator and use the assistant, even where
+  `EXEC_REQUIRE_PASSWORD_SIGNIN=true` was set): don't, unless the assistant is switched off (§6 B). A rollback below the
+  2026-11-10 link-session change makes sign-in link sessions on his account get the 404 again (that code always runs
+  the step-up); one past the 2026-11-10 authenticator removal also closes the assistant's pages and APIs to him (§4 P9).
 - Clone: CL0 or CL1 is safe; below CL0 never, unless `JWT_SECRET` is rotated and every token re-minted.
 
 ---
@@ -428,7 +440,13 @@ Event-driven kinds (enqueued by a route, a Slack event, a button or another job)
   today, late" 45 min past the due time); the check-in token; AI spend today by feature and model refusals in 24 h;
   since P9 "Slack tokens on the previous key".
 - **Settings, recent access:** every sign-in and, since P9, every refused step-up ("Refused: not a password sign-in").
-  New-network alerts come from successful sign-ins only.
+  Refused rows appear only while `EXEC_REQUIRE_PASSWORD_SIGNIN=true` (§2). With it off, the team's sign-in link
+  sessions are admitted and show as ordinary rows (a row doesn't say how its session was signed in).
+- **New-network alerts** (`exec-access-new-network:`: an ops alert, plus an exec-bot DM to him when Slack is connected)
+  come from admitted password sign-ins only: a password sign-in on any assistant page or API from a network or browser
+  family not seen in 30 days raises one, whether or not the switch is on (none while those 30 days hold fewer than 20
+  web access rows: the check is still learning). Sign-in link sessions never raise it, but while the switch is off
+  their rows count as seen: a password sign-in from a network and browser family the team has used raises none (§14).
 - **Ops alert keys** (the ops channel; rate-limited per key, one per 15 min):
   - jobs: `job-dead:<kind>`, `auth:<kind>`, `job-reaped:<kind>`;
   - cost and clone: `exec-cost-cap:<principal>`, `exec-usage-write`, `clone-ea-readiness:<reason>`,
@@ -438,10 +456,10 @@ Event-driven kinds (enqueued by a route, a Slack event, a button or another job)
   - brief: `brief-failed:`, `brief-delivery-unknown:`, `brief-fallback:`, `brief-fallback-failed:`, `brief-late:`,
     `brief-not-owned:`, `checkin-token-mismatch:`, `exec-access-new-network:`;
   - P9: `exec-step-up-refused:<UTC date>` (title "A session on the owner's account that wasn't a password sign-in was
-    refused"; the detail is that session's sign-in methods and aal, for example `otp aal=aal1`: `otp`, `magiclink`,
-    `recovery`, `invite`, `email/signup` and `email_change` are one-time links and codes), `exec-brief-v2-missing` (the
-    P9 migration isn't applied yet), `brief-compose-timeout:<local date>` (the AI summary timed out and the
-    deterministic brief was used).
+    refused"; raised only while `EXEC_REQUIRE_PASSWORD_SIGNIN=true`; the detail is that session's sign-in methods and
+    aal, for example `otp aal=aal1`: `otp`, `magiclink`, `recovery`, `invite`, `email/signup` and `email_change` are
+    one-time links and codes), `exec-brief-v2-missing` (the P9 migration isn't applied yet),
+    `brief-compose-timeout:<local date>` (the AI summary timed out and the deterministic brief was used).
 - **`/api/cron/status`:** the exec-worker and exec-scheduler heartbeats (after a SIGTERM: "shutting down (SIGTERM)"); the
   legacy brief's skip reasons.
 - **The brief's cost and latency** (lead decision L3; read-only): run it daily for two weeks after the brief is on. If
@@ -466,13 +484,17 @@ Event-driven kinds (enqueued by a route, a Slack event, a button or another job)
 ## 12. Troubleshooting by symptom
 
 - **Mitchell gets a 404 on /executive (P9):**
-  1. Is he signed in with his password, not through a sign-in link or a password reset link? Those sessions are
-     refused: sign out, then sign back in with his password.
-  2. Is `EXEC_ENABLED=true`, and is his principal enabled?
-  3. Is there a refused row in Settings, recent access ("Refused: not a password sign-in", visible once the assistant
-     opens for him) or an `exec-step-up-refused:` alert (§11)? Its detail names the refused session's sign-in methods.
-- **His password stops working:** a sign-in link session on his account may have set a new one from DD Settings and
-  signed in with it, which the assistant admits (§14). In this order, and note both steps in the ops log:
+  1. Is `EXEC_ENABLED=true`, and is his principal enabled?
+  2. Only with `EXEC_REQUIRE_PASSWORD_SIGNIN=true`: is he signed in with his password, not through a sign-in link or a
+     password reset link? Those sessions are refused: sign out, then sign back in with his password. With the switch
+     off (the default) every session on his account gets in, however it was signed in.
+  3. Only with the switch on: is there a refused row in Settings, recent access ("Refused: not a password sign-in",
+     visible once the assistant opens for him) or an `exec-step-up-refused:` alert (§11)? Its detail names the refused
+     session's sign-in methods.
+- **His password stops working:** with `EXEC_REQUIRE_PASSWORD_SIGNIN=true`, a sign-in link session on his account may
+  have set a new one from DD Settings and signed in with it, which the assistant admits (§14). With the switch off, a
+  link session doesn't need his password to open the assistant; the steps below still give him back his own sign-in.
+  In this order, and note both steps in the ops log:
   1. Mitchell sets a new password (`/login`, "Forgot password?"), so the changed one stops working.
   2. Right after, end every session on his account, in the Supabase SQL editor (refresh tokens and amr claims go with
      their sessions; the team then needs a fresh sign-in link, agreed arrangement Q3):
@@ -500,8 +522,9 @@ Event-driven kinds (enqueued by a route, a Slack event, a button or another job)
   drafts and email on and the pin; review blockers; generation errors; draft checks overdue. Drafts flapping between ok
   and token_missing, or draft jobs that never run: a second service runs the exec loops without `MISSIVE_EA_TOKEN` (L1;
   since P9 it leaves the draft kinds queued instead of failing them).
-- **Chat says off:** chat on and installed; `EXEC_ENABLED`; a password sign-in (link sessions get the legacy Ask AI);
-  the budget (it pauses until local midnight); the Slack tools need reading on, the email tools email and the pin.
+- **Chat says off:** chat on and installed; `EXEC_ENABLED`; with `EXEC_REQUIRE_PASSWORD_SIGNIN=true`, a password
+  sign-in (link sessions then get the legacy Ask AI); the budget (it pauses until local midnight); the Slack tools need
+  reading on, the email tools email and the pin.
 - **Email not triaged:** the pin; CL1; `EXEC_WORKER_INTERNAL_CRON`; reconcile catches up within 5 min.
 - **Spend at the cap:** the System card's AI spend by feature; the cap resets at his local midnight; the Slack budget is
   separate.
@@ -530,12 +553,14 @@ P7a: the lead-channel deny check (§4 P7a) and the hidden-delete check.
 P9:
 
 - His password sign-in opens `/executive`; `/login` shows no code step.
-- A fresh sign-in link session on his account gets a 404 on `/executive`, one refused row and an `exec-step-up-refused:`
-  alert (§4 P9 step 4). The "enrols its own authenticator" case (still refused, P9 F1) is proven by the automated tests
-  (`page-access`, `access-session`, `drafts-send-route`); the "sets a new password" case is a known gap (§14).
-  Never try them on his account: a password change locks him out of his password sign-in, and a factor left on his
-  account can make Supabase ask for a code where DD has no screen for one (§4 P9). Run them live only against a
-  non-production Supabase project.
+- With `EXEC_REQUIRE_PASSWORD_SIGNIN` unset (the default), a fresh sign-in link session on his account opens
+  `/executive` too, with no refused row and no `exec-step-up-refused:` alert (§4 P9 step 4).
+- Optional, with `EXEC_REQUIRE_PASSWORD_SIGNIN=true`: a fresh sign-in link session on his account gets a 404 on
+  `/executive`, one refused row and an `exec-step-up-refused:` alert (§4 P9 step 4). The "enrols its own authenticator"
+  case (refused while the switch is on, P9 F1) is proven by the automated tests (`page-access`, `access-session`,
+  `drafts-send-route`); the "sets a new password" case is a known gap (§14). Never try them on his account: a password
+  change locks him out of his password sign-in, and a factor left on his account can make Supabase ask for a code where
+  DD has no screen for one (§4 P9). Run them live only against a non-production Supabase project.
 - The two-worker claim and fence suites passed on real PostgreSQL 15 and 17 (scratch harness, §14).
 - The injection and exfiltration set passed.
 - The 390 px tap-target and contrast checks passed.
@@ -558,11 +583,25 @@ P9:
 - The live model evals (chat, the hostile corpus, the brief's effort) have not been run: they need an owner-approved key
   and spend.
 - The SIGTERM drain waits for the assistant's job runs only, not for open web requests (§5), and ships off (L5).
-- A sign-in link session on his account can set a new password from DD Settings and then sign in with it; the assistant
-  admits that password sign-in (P9's authenticator closed this until its removal on 2026-11-10, §4 P9). The visible
-  sign: his old password stops working (§12, "His password stops working"). A link session that enrols an
-  authenticator of its own is still refused: a one-time link anywhere in the session's record refuses it, whatever its
-  aal (P9 F1).
+- With `EXEC_REQUIRE_PASSWORD_SIGNIN` off (the default since 2026-11-10, the team's choice), anyone who can sign in as
+  Mitchell can open the assistant: with his password, or with a sign-in link, which any DD leader or admin can mint for
+  his account. That session sees what the assistant's pages and APIs show (his email triage, Slack summaries, drafts
+  and chat) and can use their buttons, the Send button on an email draft included (check-ins are sent only from his
+  Slack DM). Its visits show as ordinary rows in Settings, recent access, and nothing is refused or alerted: a sign-in
+  link session raises neither `exec-step-up-refused:` nor `exec-access-new-network:` (§11). Setting the switch to
+  `true` (§2) goes back to password sign-ins only.
+- While the switch is off, the team's sign-in link sessions write ordinary web access rows, and the new-network check
+  (`exec-access-new-network:`, §11) counts as seen every web access row on his account from the 30 days before a
+  password sign-in, leaving out only the refused rows and the 10 minutes just before it. So the team's networks and
+  browser families count as seen: a password sign-in whose network and browser family each appear in those rows (not
+  necessarily in the same row) raises no alert, even when only the team's rows hold them. A password sign-in from a
+  network or a browser family that appears in none of them still raises it. The access log doesn't record how a
+  session was signed in, so its rows can't show afterwards which visits were the team's.
+- With the switch on, a sign-in link session on his account can set a new password from DD Settings and then sign in
+  with it; the assistant admits that password sign-in (P9's authenticator closed this until its removal on 2026-11-10,
+  §4 P9). The visible sign: his old password stops working (§12, "His password stops working"). A link session that
+  enrols an authenticator of its own is still refused: a one-time link anywhere in the session's record refuses it,
+  whatever its aal (P9 F1).
 - Brief lines citing a Slack channel later reclassified stay on the page until content expiry (they are withheld on
   render and in the DM); DD text lines already in a brief or chat stay until they expire; Slack's own copies of bot DMs
   after Disconnect stay in Slack.

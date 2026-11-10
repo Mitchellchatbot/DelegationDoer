@@ -38,7 +38,9 @@ import { getSupabaseServer } from "@/lib/supabase-server";
 //
 // P9 (F1, AM-P9-13): the step-up through requireExecSession. A strong session is a password sign-in with no one-time
 // link in its record, whatever its aal (signInIsStrong); STRONG below is that session, at aal1. P9's F2 fix (aal2 with
-// his authenticator code, pinned in EXEC_OWNER_MFA_FACTOR_IDS) was removed on 2026-11-10.
+// his authenticator code, pinned in EXEC_OWNER_MFA_FACTOR_IDS) was removed on 2026-11-10. Since then the step-up runs
+// only with EXEC_REQUIRE_PASSWORD_SIGNIN=true (isStepUpOn), which the cases that pin it stub; off (the default), a
+// surface that asks for it admits every session on his account, the team's sign-in link sessions included.
 
 const OWNER_AUTH_ID = "11111111-1111-4111-8111-111111111111";
 const ROUTE = "GET /api/integrations/exec-slack/start";
@@ -126,7 +128,8 @@ describe("requireExecSession (C3)", () => {
     expect(await requireExecSession(request(), ROUTE)).toMatchObject({ ok: true, sessionId: null });
   });
 
-  it("AC01: the gates deny exactly as requireExecPrincipal's: flag off 404, link sign-in under the step-up 404, no user 401, no principal 404", async () => {
+  it("AC01 (step-up on): the gates deny exactly as requireExecPrincipal's: flag off 404, link sign-in under the step-up 404, no user 401, no principal 404", async () => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
     fakeAdmin();
     vi.stubEnv("EXEC_ENABLED", "false");
     fakeServer(STRONG);
@@ -141,6 +144,21 @@ describe("requireExecSession (C3)", () => {
     expect(await denial(await requireExecSession(request(), ROUTE))).toEqual({ status: 404, body: { error: "not found" } });
   });
 
+  // The step-up switched off admits a link session on his account; it relaxes none of the identity checks before it.
+  it("AC01 (step-up off, the default): a link session on a surface that asks for it still gets flag off 404, no user 401, no principal 404", async () => {
+    const asks = { requireStrongSignIn: true } as const;
+    fakeAdmin();
+    vi.stubEnv("EXEC_ENABLED", "false");
+    fakeServer(LINK);
+    expect(await denial(await requireExecSession(request(), ROUTE, asks))).toEqual({ status: 404, body: { error: "not found" } });
+    vi.stubEnv("EXEC_ENABLED", "true");
+    fakeServer(LINK, { user: null });
+    expect(await denial(await requireExecSession(request(), ROUTE, asks))).toEqual({ status: 401, body: { error: "unauthorized" } });
+    fakeServer(LINK);
+    vi.mocked(loadPrincipalForUser).mockResolvedValue(null);
+    expect(await denial(await requireExecSession(request(), ROUTE, asks))).toEqual({ status: 404, body: { error: "not found" } });
+  });
+
   it("AC02: requireExecPrincipal delegates and keeps its result shape exactly ({ ok, principal }: no session fields leak into it)", async () => {
     fakeServer(STRONG);
     fakeAdmin();
@@ -153,11 +171,15 @@ describe("requireExecSession (C3)", () => {
   });
 });
 
-// P9 F1 through requireExecSession (the Slack OAuth routes' gate): a password sign-in is admitted at any aal; a session
-// with a one-time link in its record is refused, even one that verified a code of its own.
-describe("requireExecSession: the P9 step-up (F1)", () => {
+// P9 F1 through requireExecSession (the Slack OAuth routes' gate), with the step-up switched on: a password sign-in is
+// admitted at any aal; a session with a one-time link in its record is refused, even one that verified a code of its own.
+describe("requireExecSession: the P9 step-up (F1), switched on", () => {
   const strong = { requireStrongSignIn: true } as const;
   const refusalRows = (rows: Record<string, unknown>[]) => rows.filter((r) => String(r.route).endsWith(STEP_UP_REFUSED_SUFFIX));
+
+  beforeEach(() => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
+  });
 
   it("F1: a link session that enrolled its own second factor (aal2, amr [totp, otp]) → 404, one refusal row", async () => {
     fakeServer(linkWithOwnFactorToken("sess-own-factor", OWNER_AUTH_ID));
@@ -190,6 +212,24 @@ describe("requireExecSession: the P9 step-up (F1)", () => {
     expect(await requireExecSession(request(), ROUTE, strong)).toEqual({ ok: true, principal: PRINCIPAL, authUserId: OWNER_AUTH_ID, sessionId: "sess-tp" });
     await settle();
     expect(refusalRows(logRows)).toEqual([]);
+    expect(notifyOps).not.toHaveBeenCalled();
+  });
+});
+
+// The step-up switched off (the default since 2026-11-10): the team's sign-in link sessions, own factor or not, are
+// admitted on a surface that asks for it as an ordinary access. The session id comes from the session's own token.
+describe("requireExecSession: the step-up switched off (the default)", () => {
+  it.each([
+    ["a sign-in link session (aal1, amr [otp])", LINK, "sess-link-1"],
+    ["a link session with its own second factor (aal2, amr [totp, otp])", linkWithOwnFactorToken("sess-own-factor", OWNER_AUTH_ID), "sess-own-factor"]
+  ])("%s → admitted with its own session id; one ordinary access row, no refusal row, no alert", async (_n, token, sessionId) => {
+    fakeServer(token);
+    const { logRows } = fakeAdmin();
+    expect(await requireExecSession(request(), ROUTE, { requireStrongSignIn: true })).toEqual({ ok: true, principal: PRINCIPAL, authUserId: OWNER_AUTH_ID, sessionId });
+    await settle();
+    expect(logRows).toEqual([
+      { principal_id: "ep_1", auth_user_id: OWNER_AUTH_ID, session_id: sessionId, ip: "203.0.113.7", user_agent: "UA/1", route: ROUTE, surface: "web" }
+    ]);
     expect(notifyOps).not.toHaveBeenCalled();
   });
 });

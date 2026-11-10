@@ -31,7 +31,7 @@ vi.mock("@/lib/exec/email-view", async (orig) => ({ ...(await orig<typeof import
 vi.mock("@/lib/exec/slack-intel-store", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/slack-intel-store")>()), slackIntelState: vi.fn() }));
 vi.mock("@/lib/exec/slack-digests", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/slack-digests")>()), slackCatchUpCounts: vi.fn() }));
 
-import { OverviewTileRow, slackTileShown } from "@/components/exec/overview/OverviewTileRow";
+import { OverviewTileRow, slackCountValue, slackTileShown } from "@/components/exec/overview/OverviewTileRow";
 import { OverviewView } from "@/components/exec/overview/OverviewView";
 import { loadEmailGate } from "@/lib/exec/email-view";
 import { getOverview, type ExecOverview, type OverviewSections, type OverviewTiles } from "@/lib/exec/overview";
@@ -147,11 +147,23 @@ describe("OV01–OV05: the tile", () => {
     expect(textOf(row(ok({ state: "ok" as const, counts: { unanswered: 7, decisionsPending: 2, notAssessed: 1 } })))).toContain(SLACK_INTEL_COPY.overviewTileLabel);
   });
 
-  it("OV02: the value is the unanswered count, Derived, with its sub line", () => {
+  // P9 F28 (flip): "unanswered" counts the model's needs-a-response readings, so the tile is AI-assessed, like email's.
+  it("OV02: the value is the unanswered count, AI-assessed (P9 F28: was Derived), with its sub line", () => {
     const markup = row(ok({ state: "ok" as const, counts: { unanswered: 7, decisionsPending: 2, notAssessed: 1 } }));
     const tile = markup.slice(markup.indexOf(">", markup.indexOf('href="/executive/slack"')) + 1);
-    expect(textOf(tile)).toMatch(/^Slack Derived 7 Unanswered in Slack/);
+    expect(textOf(tile)).toMatch(/^Slack AI-assessed 7 Unanswered in Slack/);
+    expect(textOf(tile)).not.toContain("Derived");
     expect(tileCount(markup)).toBe(7);
+  });
+
+  it("P9 F30: a count read from a full page of rows (truncated) shows as a floor, '200+'; otherwise exact", () => {
+    const full = row(ok({ state: "ok" as const, counts: { unanswered: 200, decisionsPending: 3, notAssessed: 0, truncated: true } as never }));
+    const tile = full.slice(full.indexOf(">", full.indexOf('href="/executive/slack"')) + 1);
+    expect(textOf(tile)).toMatch(/^Slack AI-assessed 200[+] Unanswered in Slack/);
+    expect(slackCountValue(200, { truncated: true })).toBe("200+");
+    expect(slackCountValue(7, { truncated: false })).toBe(7);
+    expect(slackCountValue(7, { unanswered: 7 })).toBe(7);
+    expect(slackCountValue(7, null)).toBe(7);
   });
 
   it("OV03: the grid is xl:grid-cols-7 only with the tile; P2b's six keep xl:grid-cols-6", () => {

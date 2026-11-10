@@ -30,7 +30,7 @@ vi.mock("@/lib/exec/slack-reading", async (orig) => ({
 import { useIsTopWindow } from "@/components/exec/drafts/frame-guard";
 import { EXEC_TABS, ExecTabs } from "@/components/exec/ExecTabs";
 import { BuildDigestButton, buildMessage, buildOutcome, requestDigestBuild } from "@/components/exec/slack/BuildDigestButton";
-import { CatchUpList } from "@/components/exec/slack/CatchUpList";
+import { CatchUpList, catchUpShownText } from "@/components/exec/slack/CatchUpList";
 import { DigestCard, digestCountsText, digestStatusText } from "@/components/exec/slack/DigestCard";
 import { DigestDayNav, slackDayHref } from "@/components/exec/slack/DigestDayNav";
 import { SlackPageView } from "@/components/exec/slack/SlackPageView";
@@ -293,6 +293,51 @@ describe("UI01: each state renders its exact copy and no catch-up or digest sect
     expect(textOf(out)).toContain(SLACK_INTEL_COPY.pickerLink);
     expect(textOf(out)).toContain(SLACK_INTEL_COPY.catchUpTitle);
     expect(textOf(out)).toContain(SLACK_INTEL_COPY.digestsTitle);
+  });
+});
+
+// P9 F28, F30: the counts strip labels the model's readings as AI-assessed, and says when a count is a floor; the
+// catch-up list says how many there are past the 50 it shows.
+describe("P9 F28 / F30: the counts and the catch-up total", () => {
+  const strip = (counts: Record<string, unknown>) => {
+    const out = html(createElement(SlackPageView, { view: slackPageView({ counts: { ok: true, data: counts as never } }) }));
+    return out.slice(out.indexOf("data-slack-counts"), out.indexOf("data-catchup"));
+  };
+
+  it("F28: Unanswered and Decisions pending are AI-assessed; Not assessed stays Derived", () => {
+    const text = textOf(strip({ unanswered: 7, decisionsPending: 2, notAssessed: 1 }));
+    expect(text).toMatch(/Unanswered AI-assessed 7/);
+    expect(text).toMatch(/Decisions pending AI-assessed 2/);
+    expect(text).toMatch(/Not assessed Derived 1/);
+    expect(text.match(/AI-assessed/g)).toHaveLength(2);
+  });
+
+  it("F30: a count from a full page of rows reads 'N+'; below the limit it is exact", () => {
+    const text = textOf(strip({ unanswered: 200, decisionsPending: 12, notAssessed: 0, truncated: true }));
+    expect(text).toMatch(/Unanswered AI-assessed 200\+/);
+    expect(text).toMatch(/Decisions pending AI-assessed 12\+/);
+    expect(textOf(strip({ unanswered: 3, decisionsPending: 0, notAssessed: 0 }))).not.toContain("+");
+  });
+
+  it("F30: slackCatchUpCounts (the real one) marks a full page of rows truncated; below the limit the key is absent", async () => {
+    const { slackCatchUpCounts: realCounts } = await vi.importActual<typeof import("@/lib/exec/slack-digests")>("@/lib/exec/slack-digests");
+    vi.mocked(readOpenSlackItems).mockResolvedValue({ items: Array.from({ length: 200 }, () => slackItem({ channelId: "C0ACMESEO" })), mutedHidden: 0 });
+    const full = await realCounts(principal, "ok", { now: NOW });
+    expect(full).toMatchObject({ unanswered: 200, truncated: true });
+    vi.mocked(readOpenSlackItems).mockResolvedValue({ items: Array.from({ length: 199 }, () => slackItem({ channelId: "C0ACMESEO" })), mutedHidden: 0 });
+    const below = await realCounts(principal, "ok", { now: NOW });
+    expect(below).toMatchObject({ unanswered: 199 });
+    expect(below).not.toHaveProperty("truncated");
+  });
+
+  it("F30: catch-up shows 'Showing the newest 50 of 73' when it holds back rows; nothing when it shows them all", () => {
+    const rows = Array.from({ length: 50 }, (_, i) => catchUpRow({ itemId: `esi_${String(i).padStart(32, "0")}` }));
+    const cut = html(createElement(CatchUpList, { section: { ok: true, data: { rows, total: 73, hiddenMuted: 0 } }, tz: TZ, now: NOW_ISO }));
+    expect(textOf(cut)).toContain("Showing the newest 50 of 73");
+    expect(cut).toContain("data-catchup-shown");
+    const all = html(createElement(CatchUpList, { section: { ok: true, data: { rows: rows.slice(0, 3), total: 3, hiddenMuted: 0 } }, tz: TZ, now: NOW_ISO }));
+    expect(all).not.toContain("data-catchup-shown");
+    expect(catchUpShownText(50, 1234)).toBe("Showing the newest 50 of 1,234");
   });
 });
 

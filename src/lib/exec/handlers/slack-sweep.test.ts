@@ -17,7 +17,7 @@ import { REDACTED_TEXT } from "@/lib/exec/chat/copy";
 import { getDraftView } from "@/lib/exec/drafts";
 import {
   slackDmPurgeJobHandler,
-  slackDmPurgeScheduledWork,
+  slackDmPurgeSystemWork,
   slackSweepJobHandler,
   slackSweepScheduledWork,
   slackTsOf,
@@ -31,7 +31,7 @@ import { renderNote } from "@/lib/exec/slack-ui";
 
 import { done as chatDone, proposal, sources as chatSources } from "../__tests__/chat-ui-fixtures";
 import { restrictedView } from "../__tests__/drafts-ui-fixtures";
-import type { FakeSlackHandler } from "../__tests__/fake-slack-api";
+import { SLACK_RECORDED, type FakeSlackHandler } from "../__tests__/fake-slack-api";
 import { assertSlackParts, findSentinel, ROUTING_INSTALLATION as RI } from "../__tests__/slack-assert";
 import {
   CONV,
@@ -45,6 +45,7 @@ import {
   TURN,
   buttonsOf,
   callsOf,
+  installationRow,
   jobCtx,
   partsOfCall,
   replyEventRow,
@@ -476,12 +477,12 @@ describe("exec.slack-dm-purge (DP01-DP05)", () => {
     expect(deleted(slack.calls).slice(79)).toEqual([old(500)]);
   });
 
-  it("the handlers and schedules: bulk, 60 s / 120 s; every 5 minutes (1 attempt) and daily at 04:10 (2 attempts), both gated on an active installation", async () => {
+  it("the handlers and schedules: bulk, 60 s / 120 s; the sweep every 5 minutes (1 attempt, gated on an active installation); P9 F16: the DM purge is system work, daily at 04:10 UTC (2 attempts)", async () => {
     expect(slackSweepJobHandler).toMatchObject({ kind: "exec.slack-sweep", lane: "bulk", timeoutMs: 60_000 });
     expect(slackDmPurgeJobHandler).toMatchObject({ kind: "exec.slack-dm-purge", lane: "bulk", timeoutMs: 120_000 });
     expect(slackSweepScheduledWork).toMatchObject({ kind: "exec.slack-sweep", lane: "bulk", cadence: { kind: "interval", minutes: 5 }, maxAttempts: 1 });
-    expect(slackDmPurgeScheduledWork).toMatchObject({ kind: "exec.slack-dm-purge", lane: "bulk", cadence: { kind: "daily" }, maxAttempts: 2 });
-    expect(slackDmPurgeScheduledWork.cadence.kind === "daily" && slackDmPurgeScheduledWork.cadence.at(SETTINGS)).toBe("04:10");
+    expect(slackDmPurgeSystemWork).toEqual({ kind: "exec.slack-dm-purge", lane: "bulk", cadence: { kind: "daily", atUtc: "04:10" }, maxAttempts: 2 });
+    expect(Object.isFrozen(slackDmPurgeSystemWork)).toBe(true);
     h = useSlackDb();
     expect(await slackWorkDue(PRINCIPAL)).toBe(true);
     expect(await slackSweepScheduledWork.when?.(PRINCIPAL, SETTINGS, new Date())).toBe(true);
@@ -507,5 +508,74 @@ describe("exec.slack-dm-purge: a dead token on a history read (C17 v2)", () => {
     await expect(purge()).rejects.toMatchObject({ name: "SlackApiError", code: "token_revoked" });
     expect(h.db.tables.exec_slack_installations[0].last_error_code).toBe("token_revoked");
     expect(h.db.tables.exec_jobs.filter((j) => j.kind === "exec.slack-uninstall")).toHaveLength(1);
+  });
+});
+
+describe("exec.slack-dm-purge as SYSTEM work (P9 F16)", () => {
+  const INST_2 = `esi_${"2".padStart(32, "0")}`;
+  const INST_3 = `esi_${"3".padStart(32, "0")}`;
+  const systemPurge = () => slackDmPurgeJobHandler.run(jobCtx("exec.slack-dm-purge", {}, { principal: null }));
+  /** A ledger row of installation inst posted daysAgo days ago. */
+  const ledgerPost = (inst: string, pid: string, channel: string, ts: string, daysAgo: number) =>
+    ledgerRow({ installation_id: inst, principal_id: pid, channel_id: channel, ts, kind: "note", thread_ts: null, posted_at: iso(NOW_MS - daysAgo * DAY) });
+  const deleted = (calls: ReturnType<typeof useSlack>["calls"]) => callsOf(calls, "chat.delete").map((c) => [String(c.body.channel), String(c.body.ts)]);
+
+  function twoPrincipals() {
+    // ep_1 enabled, retention 90; ep_off disabled by hand (exec_principals.enabled = false), retention 30, its installation still active;
+    // a third installation revoked (never touched).
+    h = useSlackDb({
+      tables: {
+        exec_slack_installations: [
+          installationRow(),
+          installationRow({ id: INST_2, principal_id: "ep_off", slack_dm_channel_id: "D0OFFDM", team_id: "T0OTHER", user_id: "U0OFF" }),
+          installationRow({ id: INST_3, principal_id: "ep_gone", slack_dm_channel_id: "D0GONE", team_id: "T0GONE", user_id: "U0GONE",
+            revoked_at: iso(NOW_MS - DAY), revoke_reason: "disconnected" })
+        ],
+        exec_slack_posts: [
+          ledgerPost(INST, "ep_1", RI.dmChannelId, "1700000001.000100", 100), ledgerPost(INST, "ep_1", RI.dmChannelId, "1700000002.000100", 40),
+          ledgerPost(INST_2, "ep_off", "D0OFFDM", "1700000003.000100", 40), ledgerPost(INST_2, "ep_off", "D0OFFDM", "1700000004.000100", 10),
+          ledgerPost(INST_3, "ep_gone", "D0GONE", "1700000005.000100", 400)
+        ]
+      }
+    });
+    vi.mocked(loadSettings).mockImplementation(async (pid: string) => ({ ...SETTINGS, principalId: pid, retentionDaysChat: pid === "ep_off" ? 30 : 90 }));
+  }
+
+  it("DP-P9-1 a disabled principal's active installation: its bot DMs older than ITS retention are deleted by the system pass; the enabled one's too, with its own; a revoked one is never touched", async () => {
+    twoPrincipals();
+    const slack = useSlack({ "conversations.history": () => ({ ok: true, messages: [], has_more: false }) });
+    const r = await systemPurge();
+    expect(r).toEqual({ installations: 2, deleted: 2, ledger: 2, scanned: 0, stoppedEarly: 0, tokenUnavailable: 0, failed: 0 });
+    expect(deleted(slack.calls).sort()).toEqual([[RI.dmChannelId, "1700000001.000100"], ["D0OFFDM", "1700000003.000100"]].sort());
+    // Each one's own retention: ep_1's 40-day-old post stays (90), ep_off's 10-day-old one too (30); the revoked installation's row stays.
+    expect(h.db.tables.exec_slack_posts.map((p) => p.ts).sort()).toEqual(["1700000002.000100", "1700000004.000100", "1700000005.000100"]);
+    expect(vi.mocked(loadSettings).mock.calls.map((c) => c[0]).sort()).toEqual(["ep_1", "ep_off"]);
+    expect(spies[2].mock.calls.map((c: unknown[]) => String(c[0])).at(-1)).toBe("[exec-slack] system dm purge installations=2 deleted=2 ledger=2 scanned=0");
+  });
+
+  it("DP-P9-2 one installation failing (a dead token) doesn't stop the other; the first failure is rethrown after; a token our key can't open is counted and recorded", async () => {
+    twoPrincipals();
+    useSlack({
+      "chat.delete": (body) => (body.channel === RI.dmChannelId ? SLACK_RECORDED.error("token_revoked") : { ok: true, channel: body.channel, ts: body.ts }),
+      "conversations.history": () => ({ ok: true, messages: [], has_more: false })
+    });
+    await expect(systemPurge()).rejects.toMatchObject({ name: "SlackApiError", code: "token_revoked" });
+    expect(h.db.tables.exec_slack_posts.map((p) => p.ts)).not.toContain("1700000003.000100");
+    // ep_off's blob sealed for another principal (copied row): our key can't open it → counted, recorded on the row, no throw.
+    twoPrincipals();
+    const ep1 = h.db.tables.exec_slack_installations.find((x) => x.id === INST)!;
+    Object.assign(h.db.tables.exec_slack_installations.find((x) => x.id === INST_2)!, { bot_token_enc: ep1.bot_token_enc });
+    useSlack({ "conversations.history": () => ({ ok: true, messages: [], has_more: false }) });
+    expect(await systemPurge()).toMatchObject({ installations: 1, tokenUnavailable: 1, failed: 0 });
+    expect(h.db.tables.exec_slack_installations.find((x) => x.id === INST_2)!.last_error_code).toBe("token_unavailable");
+  });
+
+  it("DP-P9-3 a per-principal row queued before P9 still runs once, for its principal only (the old path)", async () => {
+    twoPrincipals();
+    const slack = useSlack({ "conversations.history": () => ({ ok: true, messages: [], has_more: false }) });
+    expect(await purge()).toEqual({ deleted: 1, ledger: 1, scanned: 0, stoppedEarly: false });
+    expect(deleted(slack.calls)).toEqual([[RI.dmChannelId, "1700000001.000100"]]);
+    h = useSlackDb({ missing: ["exec_slack_installations"] });
+    expect(await systemPurge()).toEqual({ skipped: "not_installed" });
   });
 });

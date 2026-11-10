@@ -183,16 +183,43 @@ describe("GET …/start?purpose=read", () => {
     expect(rateLimit).toHaveBeenCalledWith(P, "slack_connect", 10, 600_000);
   });
 
+  // P9 F6 (flip): the gate runs first, so only the owner's strong session ever learns that the purpose is bad.
   it.each(["?purpose=bogus", "?purpose=read&purpose=read", "?purpose=", "?purpose=READ", "?purpose=install"])(
-    "OR02 %s → state_invalid, before anything is read or written",
+    "OR02 %s → state_invalid after the gate (P9 F6), before anything else is read or written",
     async (q) => {
       expect(resultOf(await startRoute.GET(startReq(q)))).toEqual({ slack: "state_invalid" });
-      expect(requireExecSession).not.toHaveBeenCalled();
+      expect(requireExecSession).toHaveBeenCalledTimes(1);
       expect(db.calls).toEqual([]);
       expect(auditStart).not.toHaveBeenCalled();
       vi.mocked(requireExecSession).mockClear();
     }
   );
+
+  it.each(["?purpose=bogus", "?purpose=read", "", "?purpose=read&purpose=read"])(
+    "P9 F6: a non-owner (the gate's 404) with %s gets that 404, never a redirect naming the settings page",
+    async (q) => {
+      vi.mocked(requireExecSession).mockResolvedValueOnce({ ok: false, response: new Response(JSON.stringify({ error: "not found" }), { status: 404 }) as never });
+      const res = await startRoute.GET(startReq(q));
+      expect(res.status).toBe(404);
+      expect(res.headers.get("location")).toBeNull();
+      expect(await res.text()).not.toContain("settings");
+      expect(db.calls).toEqual([]);
+    }
+  );
+
+  it("P9 F6: EXEC_ENABLED off → the real gate's 404 for any query string, with nothing read", async () => {
+    const real = await vi.importActual<typeof import("@/lib/exec/access")>("@/lib/exec/access");
+    vi.mocked(requireExecSession).mockImplementation(real.requireExecSession);
+    vi.stubEnv("EXEC_ENABLED", "false");
+    for (const q of ["?purpose=bogus", "?purpose=read", "", "?purpose="]) {
+      const res = await startRoute.GET(startReq(q));
+      expect(res.status, q).toBe(404);
+      expect(res.headers.get("location")).toBeNull();
+      expect(await res.json()).toEqual({ error: "not found" });
+    }
+    expect(db.calls).toEqual([]);
+    expect(auditStart).not.toHaveBeenCalled();
+  });
 
   it("OR03 no P7a schema (the reading columns missing) → not_installed, no state", async () => {
     useDb({ tables: { exec_slack_installations: [readingInstallation()] }, missing: ["exec_slack_installations.reading_state"] });

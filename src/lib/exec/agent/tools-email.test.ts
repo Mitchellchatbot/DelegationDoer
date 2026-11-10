@@ -31,7 +31,8 @@ import { ddPageRef, execEmailThreadRef } from "@/lib/exec/refs";
 import { getOverview } from "@/lib/exec/overview";
 import { listClientMeetings, listOpenTasks } from "@/lib/exec/sources/dd";
 import { listMeetingBriefRisks } from "@/lib/exec/sources/dd-text";
-import { loadHisBodies, readPrincipalThread, searchPrincipalThreads } from "@/lib/exec/sources/mail";
+import { CloneHttpError, loadHisBodies, readPrincipalThread, searchPrincipalThreads } from "@/lib/exec/sources/mail";
+import { MissiveHttpError } from "@/lib/missive-client";
 import { getSyncState } from "@/lib/exec/sync-state";
 import type { RefEntry } from "@/lib/exec/agent/types";
 import type { AccountsState } from "@/lib/exec/sync-state";
@@ -387,6 +388,91 @@ describe("a restricted thread never reaches the model (test 38)", () => {
     const r = await runTool(makeCtx({ refSeq: 1, prior: [entry] }), "get_source", { ref: "r1" });
     expect(r.json.note).toBe("No longer available.");
     expect(r.all).not.toContain(SECRET_BODY);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 F7 (data-scope-2): the chat tools leave out a mailbox he no longer has pinned, as every page does (P3 ui-3)
+// ---------------------------------------------------------------------------
+
+describe("P9 F7: rows of a mailbox he no longer has pinned reach no chat tool (P3 ui-3)", () => {
+  const A = "acc_old_pin";
+  const B = "acc_new_pin";
+  const pinnedB = () => mintPrincipal([B]);
+  const OLD_SUBJECT = "OLD-MAILBOX-SUBJECT-SENTINEL";
+  const OLD_SUMMARY = "OLD-MAILBOX-SUMMARY-SENTINEL";
+  const OLD_COMMITMENT = "OLD-MAILBOX-COMMITMENT-SENTINEL";
+  const expectNoOld = (r: ToolRun) => {
+    for (const s of [OLD_SUBJECT, OLD_SUMMARY, OLD_COMMITMENT, "th_old"]) expect(r.all).not.toContain(s);
+  };
+
+  beforeEach(() => {
+    vi.mocked(listBucketRows).mockResolvedValue([
+      bucketRow({ threadId: "th_new", accountId: B, clientId: "c_zen", subject: "Contract on B" }),
+      bucketRow({ threadId: "th_old", accountId: A, clientId: "c_zen", subject: OLD_SUBJECT, summary: OLD_SUMMARY }),
+      // A restricted row on A: neither shown nor counted (the count is of his pinned mailboxes only).
+      bucketRow({ threadId: "th_old_spy", accountId: A, clientId: "c_zen", subject: SECRET_SUBJECT, counterpartEmail: SECRET_SENDER }, SPY)
+    ]);
+  });
+
+  it("search_email, bucket reply and any: only B's row; A's restricted row isn't counted", async () => {
+    for (const bucket of ["reply", "any"]) {
+      const ctx = makeCtx({ principal: pinnedB() });
+      const r = await runTool(ctx, "search_email", { ...searchInput, bucket });
+      expect((r.json.items as { items: { thread_id: string }[] }).items.map((i) => i.thread_id), bucket).toEqual(["th_new"]);
+      expect(r.json.restricted_hidden, bucket).toBe(0);
+      expectNoOld(r);
+      expect(ctx.consulted.values()).toEqual(["th_new"]);
+    }
+  });
+
+  it("client_overview: only B's thread, and A's rows in no count", async () => {
+    const r = await runTool(makeCtx({ principal: pinnedB() }), "client_overview", { client: "c_zen" });
+    const email = r.json.email as { threads: { items: { thread_id: string }[]; total: number }; restricted_hidden: number };
+    expect(email.threads.items.map((t) => t.thread_id)).toEqual(["th_new"]);
+    expect(email.threads.total).toBe(1);
+    expect(email.restricted_hidden).toBe(0);
+    expectNoOld(r);
+  });
+
+  it("get_overview's email buckets count B's row only", async () => {
+    const r = await runTool(makeCtx({ principal: pinnedB() }), "get_overview", { since: "today" });
+    expect((r.json.now as { email_buckets: Record<string, number> }).email_buckets).toMatchObject({ reply: 1, restricted_hidden: 0 });
+    expectNoOld(r);
+  });
+
+  it("list_commitments and get_source(commitment): a commitment of A's thread is neither shown nor counted", async () => {
+    vi.mocked(listCommitments).mockResolvedValue([
+      commitment({ id: "cm_new", threadId: "th_new", accountId: B }),
+      commitment({ id: "cm_old", threadId: "th_old", accountId: A, text: OLD_COMMITMENT })
+    ]);
+    vi.mocked(listThreadScreenRows).mockImplementation(async (_p, ids) =>
+      new Map(ids.map((id) => [id, { threadId: id, accountId: id === "th_old" ? A : B, state: "triaged" as const, ...screenFor(["c@acme.io"]) }]))
+    );
+    const r = await runTool(makeCtx({ principal: pinnedB() }), "list_commitments", { direction: "any", status: "any" });
+    expect((r.json.items as { items: unknown[]; total: number }).total).toBe(1);
+    expect(r.json.restricted_hidden).toBe(0);
+    expectNoOld(r);
+    const entry: RefEntry = { ref: "r1", target: { type: "commitment", id: "cm_old", threadId: "th_old" }, source: execEmailThreadRef("th_old") };
+    const src = await runTool(makeCtx({ principal: pinnedB(), refSeq: 1, prior: [entry] }), "get_source", { ref: "r1" });
+    expect(src.json.note).toBe("No longer available.");
+    expectNoOld(src);
+  });
+
+  it("get_email_thread: a stored row on A is unavailable, before any live read; with the clone failing (503) its stored triage never stands in", async () => {
+    vi.mocked(getEmailThread).mockResolvedValue(storedThread({ threadId: "th_old", accountId: A, subject: OLD_SUBJECT, summary: OLD_SUMMARY }));
+    vi.mocked(readPrincipalThread).mockRejectedValue(new CloneHttpError("thread read", new MissiveHttpError("clone answered 503", { status: 503, path: "/x", jsonBody: false })));
+    const ctx = makeCtx({ principal: pinnedB() });
+    const r = await runTool(ctx, "get_email_thread", { thread_id: "th_old" });
+    expect(r.json).toEqual({ available: false, note: "That thread isn't available.", notes: [] });
+    expect(vi.mocked(readPrincipalThread)).not.toHaveBeenCalled();
+    expect(ctx.consulted.values()).toEqual([]);
+    expectNoOld(r);
+    // The same row on his pinned mailbox, with the clone failing (503): the stored triage is shown (P3's fallback, unchanged).
+    vi.mocked(getEmailThread).mockResolvedValue(storedThread({ threadId: "th_new", accountId: B }));
+    const ok = await runTool(makeCtx({ principal: pinnedB() }), "get_email_thread", { thread_id: "th_new" });
+    expect(ok.json.available).toBe(true);
+    expect(ok.json.notes).toContain("The live read failed; only the stored triage is shown.");
   });
 });
 

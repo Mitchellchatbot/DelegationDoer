@@ -41,7 +41,10 @@ vi.mock("@/lib/exec/client-update", () => ({ prepareClientUpdate: vi.fn() }));
 import { INTEL_SENTINELS as S, assertNoSlackLeak, captureConsole, findIntelText } from "@/lib/exec/__tests__/slack-intel-assert";
 import { targetFromSourceRef, threadOfTarget } from "@/lib/exec/agent/refs";
 import { SlackConsultedBudget } from "@/lib/exec/agent/serialize";
-import { auditArgs, type ToolContext } from "@/lib/exec/agent/tools";
+import { auditArgs, SLACK_ATTENTION_WITHHELD, type ToolContext } from "@/lib/exec/agent/tools";
+import type { RefEntry } from "@/lib/exec/agent/types";
+import { getScreenedAttentionItem, listScreenedAttention } from "@/lib/exec/attention-read";
+import type { AttentionFeedItem } from "@/lib/exec/attention-types";
 import { CHAT_TOOLS } from "@/lib/exec/agent/tool-defs";
 import { auditEvent } from "@/lib/exec/audit";
 import { prepareClientUpdate, type ClientUpdateResult } from "@/lib/exec/client-update";
@@ -56,7 +59,7 @@ import { getSlackItemsByIds, getSlackReadingState, listIntelChannels, readOpenSl
 import type { DigestCardView } from "@/lib/exec/slack-page";
 import { searchSlack, type SlackSearchHit } from "@/lib/exec/slack-search";
 import { getSyncState } from "@/lib/exec/sync-state";
-import { installDefaults, makeCtx, runTool, storedThread, type ToolRun } from "./__tests__/b-tools-harness";
+import { feedItem, installDefaults, makeCtx, runTool, storedThread, type ToolRun } from "./__tests__/b-tools-harness";
 
 // P7b Area D: the three Slack tools in agent/tools.ts and their P5b seams (contract §3.15.2, §3.17.3 D2/D4, N15-N17,
 // C16-C18, C24, C30, C31, C34; §5.6 TL03, TL05-TL11, TL14-TL17). The executor, the ref registry, the consulted budgets
@@ -667,5 +670,176 @@ describe("prepare_client_update (§3.15.2, C34, C40, C24)", () => {
     const r = await call({ ...ctx, memo: makeCtx({ settings: { ...makeCtx().settings, emailEnabled: false } }).memo }, "prepare_client_update", cuArgs());
     expect(r.json.email).toBe("off");
     expect(prepareClientUpdate).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 F3 (data-scope-1 + injection-1): a Slack Needs Attention item read through list_attention, get_overview, get_source
+// or the context chip is a Slack consult (N15, C24): admitted to the turn's budget, its text in an <untrusted_slack> block.
+// ---------------------------------------------------------------------------
+
+describe("TL06b (P9 F3): Slack Needs Attention items are Slack consults", () => {
+  const DM = "D0JORDAN01";
+  const TS = "1794140000.000100";
+  const KEY = `m:${DM}:${TS}`;
+  const ATT = `ea_${"5".repeat(32)}`;
+  const dmRef = slackMessageRef({ channelId: DM, ts: TS, label: "a DM", isPrivate: true });
+  /** P7a's producer shape for an IM request: the AI summary in whatHappened and as an AI fact (producers/slack.ts). */
+  function slackFeed(over: Partial<AttentionFeedItem> = {}): AttentionFeedItem {
+    return feedItem({
+      id: ATT,
+      source: "slack",
+      kind: "slack_request",
+      category: "my_action",
+      fingerprint: `slack:msg:${DM}:${TS}`,
+      title: "Slack DM from Jordan",
+      whatHappened: `AI summary: ${S.summary}`,
+      whyItMatters: "It was sent to you and hasn't been answered.",
+      recommendedNext: "Reply in Slack.",
+      facts: [
+        { text: "Sent Nov 3, 9:00 AM in a DM", basis: "record", refs: [dmRef] },
+        { text: "Unanswered for 1 day(s)", basis: "derived", refs: [] },
+        { text: S.summary, basis: "ai", refs: [] }
+      ],
+      refs: [dmRef],
+      ...over
+    });
+  }
+  const page = (items: AttentionFeedItem[]) => ({ items, nextCursor: null, hiddenEmail: 0, emailScreen: "none" as const });
+  const listArgs = (source = "any") => ({ status: "active", category: "any", band: "any", source, limit: 10 });
+  const contextOf = (): RefEntry[] => [{ ref: "r1", target: { type: "attention", id: ATT, threadId: null }, source: dmRef }];
+  type Items = { items: Record<string, unknown>[] };
+
+  /** What every admitted Slack item must look like in a result: its text only in an untrusted_slack block. */
+  function expectSlackBlock(r: ToolRun, item: Record<string, unknown>): void {
+    expect(findIntelText(r.json)).toEqual([]);
+    expect(r.text).not.toContain(S.summary);
+    expect(item).toMatchObject({ source: "slack", kind: "slack_request", text: "U1" });
+    expect(item).not.toHaveProperty("what_happened");
+    expect(item).not.toHaveProperty("why_it_matters");
+    expect(item.facts).toContainEqual({ basis: "ai", refs: [] });
+    expect(r.blocks).toHaveLength(1);
+    expect(r.blocks[0].startsWith("<untrusted_slack ")).toBe(true);
+    expect(r.blocks[0].endsWith("</untrusted_slack>")).toBe(true);
+    expect(r.blocks[0]).toContain(S.summary);
+  }
+
+  it("(a) list_attention, sources any and slack: the IM item is admitted (its key, its channel, private) and its text is in an <untrusted_slack> block", async () => {
+    for (const source of ["any", "slack"]) {
+      vi.mocked(listScreenedAttention).mockResolvedValue(page([slackFeed()]));
+      const budget = new SlackConsultedBudget();
+      const ctx = slackCtx({}, { budget });
+      const r = await call(ctx, "list_attention", listArgs(source));
+      expect(budget.snapshot(), source).toEqual({ refs: [KEY], channels: [DM], privateSlack: true });
+      expectSlackBlock(r, (r.json.items as Items).items[0]);
+      // A Slack block is not DD text (C24's dd_text kind stays clean).
+      expect(ctx.markDdText).not.toHaveBeenCalled();
+    }
+  });
+
+  it("(b) get_overview's new_attention, get_source on the item's ref and the context chip's ref: the same admission and block", async () => {
+    vi.mocked(listScreenedAttention).mockResolvedValue(page([slackFeed()]));
+    const budget = new SlackConsultedBudget();
+    const ctx = slackCtx({}, { budget });
+    const o = await call(ctx, "get_overview", { since: "today" });
+    expect(budget.snapshot()).toEqual({ refs: [KEY], channels: [DM], privateSlack: true });
+    expectSlackBlock(o, ((o.json.window_activity as Record<string, unknown>).new_attention as Items).items[0]);
+
+    vi.mocked(getScreenedAttentionItem).mockResolvedValue({ ok: true, item: slackFeed() });
+    const chip = new SlackConsultedBudget();
+    const viaChip = slackCtx({ ...makeCtx({ refSeq: 1, contexts: contextOf() }) }, { budget: chip });
+    const s = await call(viaChip, "get_source", { ref: "r1" });
+    expect(chip.snapshot()).toEqual({ refs: [KEY], channels: [DM], privateSlack: true });
+    expectSlackBlock(s, s.json.item as Record<string, unknown>);
+
+    // get_source on the ref list_attention issued: re-read and admitted again (idempotent for the budget).
+    const ctx2 = slackCtx({}, { budget: new SlackConsultedBudget() });
+    const first = await call(ctx2, "list_attention", listArgs());
+    const ref = String((first.json.items as Items).items[0].ref);
+    const src = await call(ctx2, "get_source", { ref });
+    expect(ctx2.consultedSlack?.snapshot()).toEqual({ refs: [KEY], channels: [DM], privateSlack: true });
+    expect(src.blocks[0].startsWith("<untrusted_slack ")).toBe(true);
+  });
+
+  it("(c) a public-channel item is admitted as public: no private flag", async () => {
+    const pubRef = slackMessageRef({ channelId: CH.publicWatched.channelId, ts: TS, label: "#acme-dental-seo", isPrivate: false });
+    vi.mocked(listScreenedAttention).mockResolvedValue(page([slackFeed({ fingerprint: `slack:msg:${CH.publicWatched.channelId}:${TS}`, refs: [pubRef], facts: [] })]));
+    const budget = new SlackConsultedBudget();
+    await call(slackCtx({}, { budget }), "list_attention", listArgs());
+    expect(budget.snapshot()).toEqual({ refs: [`m:${CH.publicWatched.channelId}:${TS}`], channels: [CH.publicWatched.channelId], privateSlack: false });
+    // A finance-class ref (or no ref at all) is never public.
+    for (const refs of [[{ ...pubRef, class: "finance" as const }], []]) {
+      vi.mocked(listScreenedAttention).mockResolvedValue(page([slackFeed({ fingerprint: `slack:msg:${CH.publicWatched.channelId}:${TS}`, refs, facts: [] })]));
+      const b = new SlackConsultedBudget();
+      await call(slackCtx({}, { budget: b }), "list_attention", listArgs());
+      expect(b.snapshot().privateSlack, JSON.stringify(refs)).toBe(true);
+    }
+  });
+
+  it("(d) an unparseable fingerprint and (e) a turn without the Slack budget: the item is withheld with the note (fail closed)", async () => {
+    for (const fingerprint of ["slack:dm:D0JORDAN01", `slack:msg:x0bad:${TS}`, "slack:msg:D0JORDAN01:notats"]) {
+      vi.mocked(listScreenedAttention).mockResolvedValue(page([slackFeed({ fingerprint })]));
+      const budget = new SlackConsultedBudget();
+      const r = await call(slackCtx({}, { budget }), "list_attention", listArgs());
+      expect((r.json.items as Items).items, fingerprint).toEqual([]);
+      expect(r.json.notes).toContain(SLACK_ATTENTION_WITHHELD);
+      expect(r.all).not.toContain(S.summary);
+      expect(budget.snapshot().refs).toEqual([]);
+    }
+    vi.mocked(listScreenedAttention).mockResolvedValue(page([slackFeed()]));
+    const none = await call(makeCtx(), "list_attention", listArgs());
+    expect((none.json.items as Items).items).toEqual([]);
+    expect(none.json.notes).toContain(SLACK_ATTENTION_WITHHELD);
+    expect(none.all).not.toContain(S.summary);
+    // get_source on the context chip's ref, no Slack budget: the Slack note, not the email cap's.
+    vi.mocked(getScreenedAttentionItem).mockResolvedValue({ ok: true, item: slackFeed() });
+    const chip = await call(makeCtx({ refSeq: 1, contexts: contextOf() }), "get_source", { ref: "r1" });
+    expect(chip.json).not.toHaveProperty("item");
+    expect(chip.json).not.toHaveProperty("note");
+    expect(chip.json.notes).toContain(SLACK_ATTENTION_WITHHELD);
+    expect(chip.all).not.toContain(S.summary);
+  });
+
+  it("(f) a full Slack budget: the item is withheld with slackBudgetFull; an email or DD item beside it is unaffected", async () => {
+    const dd = feedItem({ id: `ea_${"6".repeat(32)}` });
+    vi.mocked(listScreenedAttention).mockResolvedValue(page([slackFeed(), dd]));
+    for (const budget of [new SlackConsultedBudget(0, 200), new SlackConsultedBudget(600, 0)]) {
+      const r = await call(slackCtx({}, { budget }), "list_attention", listArgs());
+      const items = (r.json.items as Items).items;
+      expect(items.map((i) => i.source)).toEqual(["dd"]);
+      expect(r.json.notes).toContain(SLACK_INTEL_COPY.slackBudgetFull);
+      expect(r.all).not.toContain(S.summary);
+    }
+    // get_source on the context chip's ref with a full budget: withheld with slackBudgetFull, not the email cap's note.
+    vi.mocked(getScreenedAttentionItem).mockResolvedValue({ ok: true, item: slackFeed() });
+    const s = await call(slackCtx({ ...makeCtx({ refSeq: 1, contexts: contextOf() }) }, { budget: new SlackConsultedBudget(0, 200) }), "get_source", { ref: "r1" });
+    expect(s.json).not.toHaveProperty("item");
+    expect(s.json).not.toHaveProperty("note");
+    expect(s.json.notes).toContain(SLACK_INTEL_COPY.slackBudgetFull);
+    expect(s.all).not.toContain(S.summary);
+  });
+
+  it("(g) a create_draft or prepare_client_update after it: usesPrivateRefs with private_slack (the second confirmation; no Save in Slack)", async () => {
+    vi.mocked(listScreenedAttention).mockResolvedValue(page([slackFeed()]));
+    const draftCtx = slackCtx({}, { budget: new SlackConsultedBudget() });
+    await call(draftCtx, "list_attention", listArgs());
+    await call(draftCtx, "create_draft", { thread_id: "th_acme", instruction: "Reply to Acme about what Jordan asked." });
+    expect(vi.mocked(createChatReplyDraft).mock.calls[0][1]).toMatchObject({ threadId: "th_acme", usesPrivateRefs: true });
+    expect(draftCtx.cards.at(-1)).toMatchObject({ kind: "draft", privateRefKinds: ["private_slack"] });
+
+    vi.mocked(getScreenedAttentionItem).mockResolvedValue({ ok: true, item: slackFeed() });
+    const cuCtx = slackCtx({ ...makeCtx({ refSeq: 1, contexts: contextOf() }) }, { budget: new SlackConsultedBudget() });
+    await call(cuCtx, "get_source", { ref: "r1" });
+    await call(cuCtx, "prepare_client_update", cuArgs());
+    expect(vi.mocked(prepareClientUpdate).mock.calls[0][3]).toMatchObject({ usesPrivateRefs: true, privateRefKinds: ["private_slack"] });
+  });
+
+  it("the Slack DM surface reads the same way (surface slack screen) and admits the item", async () => {
+    vi.mocked(listScreenedAttention).mockResolvedValue(page([slackFeed()]));
+    const budget = new SlackConsultedBudget();
+    const r = await call(slackCtx({ surface: "slack" }, { budget }), "list_attention", listArgs());
+    expect(vi.mocked(listScreenedAttention).mock.calls[0][2]).toMatchObject({ surface: "slack" });
+    expect(budget.snapshot().privateSlack).toBe(true);
+    expectSlackBlock(r, (r.json.items as Items).items[0]);
   });
 });

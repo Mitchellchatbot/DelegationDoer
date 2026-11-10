@@ -36,7 +36,8 @@ function FilterBar({ active }: { active: ProjectsFilter }) {
           prefetch={false}
           aria-current={f.key === active ? "true" : undefined}
           className={cn(
-            "rounded-full border px-3 py-1 text-[12px] font-semibold transition-colors",
+            // P9 F25: a 40 px tap target below sm.
+            "inline-flex min-h-10 items-center rounded-full border px-3 py-1 text-[12px] font-semibold transition-colors sm:min-h-0",
             f.key === active ? "border-indigo-600 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:text-ink"
           )}
         >
@@ -66,6 +67,12 @@ function ProjectRow({ row, now }: { row: ProjectListRow; now: string }) {
           </span>
         )}
       </div>
+      {/* P9 F36: the stuck batches' reasons as a visible line (they were only in the badge's title). */}
+      {row.stuck.length > 0 && (
+        <p data-stuck-reasons className="break-words text-[12px] leading-relaxed text-amber-800">
+          {row.stuck.map(stuckText).join(" · ")}
+        </p>
+      )}
       {first && (
         <p className="break-words text-[12px] leading-relaxed text-slate-600">
           {first}

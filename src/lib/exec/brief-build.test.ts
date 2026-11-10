@@ -389,6 +389,47 @@ describe("BB18 (fixer correctness-2) the optional check-ins never cost the deliv
     expect(db.tables.exec_brief_checkins).toHaveLength(0);
   });
 
+  it("BB19 (P9 F20) Slack lookups taking 20 s still leave the model call at least 30 s (its own deadline, measured after the selection), at most 60 s", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"], now: NOW });
+    const seen: { abortedAt30s?: boolean; abortedAt61s?: boolean } = {};
+    vi.mocked(selectCheckinRecipients).mockImplementationOnce(async (_p, _t, o) => {
+      expect(o.lookupsMs).toBe(10_000);
+      await vi.advanceTimersByTimeAsync(20_000);   // the selection (lookups) took 20 s
+      return {
+        candidates: [1, 2, 3].map((n) => ({ userId: `u_p${n}`, firstName: `P${n}`, departments: [], role: "worker" as const, daysSinceLast: null, openTasks: 2,
+          slackUserId: `U0P${n}AAAA` })),
+        skipped: { leaders: 0, owner: 0, noWork: 0, recent: 0, noSlack: 0, guest: 0 }
+      };
+    });
+    vi.mocked(generateCheckins).mockImplementationOnce(async (_p, input, o) => {
+      await vi.advanceTimersByTimeAsync(30_000);   // the model has run 30 s
+      seen.abortedAt30s = o.signal.aborted;
+      await vi.advanceTimersByTimeAsync(31_000);   // 61 s: past its own 60 s ceiling
+      seen.abortedAt61s = o.signal.aborted;
+      return input.candidates.map((_, i) => newCheckin(input.briefId, input.briefRev, i + 1));
+    });
+    const r = await runBriefBuild(req());
+    expect(seen).toEqual({ abortedAt30s: false, abortedAt61s: true });
+    expect(r).toMatchObject({ outcome: "built", status: "built", deliver: "full", checkins: 3 });
+    expect(enqueueJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("BB20 (P9 F20) when the build has too little left after the selection, the model call is skipped for budget; the brief still delivers", async () => {
+    vi.mocked(selectCheckinRecipients).mockImplementationOnce(async () => {
+      vi.setSystemTime(new Date(NOW.getTime() + 212_000));   // 240 - 15 (margin) - 10 (after the model) leaves < 5 s
+      return {
+        candidates: [{ userId: "u_p1", firstName: "P1", departments: [], role: "worker" as const, daysSinceLast: null, openTasks: 2, slackUserId: "U0P1AAAA" }],
+        skipped: { leaders: 0, owner: 0, noWork: 0, recent: 0, noSlack: 0, guest: 0 }
+      };
+    });
+    const r = await runBriefBuild(req());
+    expect(r).toMatchObject({ outcome: "built", deliver: "full", checkins: 0 });
+    expect(generateCheckins).not.toHaveBeenCalled();
+    expect(consoleSpy.calls().some((c) => String(c[0]).includes("checkins_skipped (budget)"))).toBe(true);
+    expect(enqueueJob).toHaveBeenCalledTimes(1);
+  });
+
   it("BB18 too little of the job's 240 s left (a slow gather and model) → check-ins skipped for budget; the deliver job enqueued", async () => {
     vi.mocked(gatherBrief).mockImplementationOnce(async () => {
       vi.setSystemTime(new Date(NOW.getTime() + 222_000));
@@ -423,10 +464,11 @@ describe("BB15-BB17 the post-write catch-up and the first successful build (inte
     expect(briefRow().ref_thread_ids).not.toContain("th_imp1");
     expect(briefRow().ref_slack_keys).not.toContain("m:C0SALES01:1794148000.000100");
     expect(JSON.stringify(lines)).not.toContain(BRIEF_TEXT_SENTINELS.briefLine);
-    // Order: the content write, then both scrubs, then (check-ins and) the delivery job.
+    // Order: the content write, then both scrubs, then (check-ins and) the delivery job. P9 §3.1 (Area C's request): the
+    // scrubs are the _v2 RPCs now (v1 is the fallback when v2 is missing).
     const finish = events.indexOf("rpc:exec_brief_finish_build");
-    const slackScrub = events.indexOf("rpc:exec_brief_scrub_slack");
-    const threadScrub = events.indexOf("rpc:exec_brief_scrub_threads");
+    const slackScrub = events.indexOf("rpc:exec_brief_scrub_slack_v2");
+    const threadScrub = events.indexOf("rpc:exec_brief_scrub_threads_v2");
     expect(finish).toBeGreaterThan(-1);
     expect(slackScrub).toBeGreaterThan(finish);
     expect(threadScrub).toBeGreaterThan(slackScrub);

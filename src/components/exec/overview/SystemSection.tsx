@@ -2,11 +2,12 @@ import { ServerCog } from "lucide-react";
 import { BRIEF_COPY, fillBrief } from "@/lib/exec/brief-copy";
 import { formatCount, formatInZone } from "@/lib/exec/format";
 import type { MailSummary } from "@/lib/exec/email-view";
-import type { JobKindHealth, OverviewBriefSystem, OverviewDraftsSystem, OverviewSection, OverviewSystem, OverviewTokenVerdict } from "@/lib/exec/overview";
+import type { OverviewBriefSystem, OverviewDraftsSystem, OverviewSection, OverviewSystem, OverviewTokenVerdict } from "@/lib/exec/overview";
 import type { SlackReadingSummary, SlackSystemSummary } from "@/lib/exec/slack-types";
 import { reasonWords, sendTokenReasonWords, voiceErrorWords } from "../drafts/copy";
 import { cn } from "@/lib/utils";
 import { SectionCard } from "../SectionCard";
+import { systemJobRows, type SystemJobRow } from "./job-labels";
 import { ago } from "./labels";
 
 // The assistant's background work, from exec_jobs: when each kind last
@@ -27,27 +28,7 @@ export function draftChecksOverdue(reconcile: OverviewDraftsSystem["reconcile"],
   return ran === null || !Number.isFinite(ran) || ran <= due;
 }
 
-const JOB_LABELS: Readonly<Record<string, string>> = {
-  "exec.dd-attention": "Needs Attention refresh",
-  "exec.purge": "Retention cleanup",
-  "exec.email-triage": "Email assessment",
-  "exec.email-reconcile": "Mail sync check",
-  "exec.email-attention": "Email Needs Attention refresh",
-  "exec.draft-generate": "Drafting",
-  "exec.draft-reconcile": "Draft checks",
-  "exec.voice-refresh": "Voice profile",
-  // P8: the morning brief's jobs (only exec.brief is tracked; the others show when they ran or failed).
-  "exec.brief": "Morning brief",
-  "exec.brief-deliver": "Morning brief delivery",
-  "exec.brief-fallback": "Morning brief backup",
-  "exec.brief-prep": "Morning brief Slack check",
-  "exec.brief-sweep": "Morning brief upkeep",
-  "exec.brief-health": "Check-in token check",
-  "exec.checkin-send": "Check-in send",
-  "exec.checkin-rewrite": "Check-in rewrite",
-  "exec.ops-watch": "Job watch",
-  "exec.access-alert": "Sign-in alert"
-};
+// P9 F26: the job labels live in job-labels.ts (every registered kind; Slack reading jobs grouped; never a raw kind).
 
 const TOKEN_WARN_MS = 30 * 86_400_000;
 
@@ -261,15 +242,19 @@ export function SlackReadingRow({ reading, now, tz }: { reading: SlackReadingSum
 // ---------------------------------------------------------------------------
 
 const BRIEF_NONE_TEXT = "Not built yet today";
+/** P9 F31: the same day once it is more than 45 minutes past the brief time (the header pill reads "late"). */
+export const BRIEF_NONE_LATE_TEXT = "Not built yet today · late";
 const CHECKIN_ORDER: readonly (keyof OverviewBriefSystem["checkins"])[] = ["proposed", "sending", "sent", "unknown", "failed", "expired"];
 const PAGE_ONLY_KEYS: ReadonlySet<string> = new Set(Object.keys(BRIEF_COPY.pageOnlyReason));
 const usd2 = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : "—");
 
-/** "<owner> · <status line> · <channel> · <mode>" (M12), its tone, and a second line: the DD brief's day and the check-ins. */
-export function briefSystemLines(b: OverviewBriefSystem, now: string, tz: string): { value: string; tone: Tone; detail: string | null } {
+/** "<owner> · <status line> · <channel> · <mode>" (M12), its tone, and a second line: the DD brief's day and the check-ins.
+ *  P9 F31: `late` (the pill's "late") turns a not-built day's row amber and says so. */
+export function briefSystemLines(b: OverviewBriefSystem, now: string, tz: string, late = false): { value: string; tone: Tone; detail: string | null } {
   const sys = BRIEF_COPY.system;
   const parts: string[] = [sys.owner[b.owner] ?? sys.owner.unknown];
-  if (b.status === "none") parts.push(BRIEF_NONE_TEXT);
+  const lateNone = late && b.status === "none";
+  if (b.status === "none") parts.push(lateNone ? BRIEF_NONE_LATE_TEXT : BRIEF_NONE_TEXT);
   else {
     let line: string =
       b.status === "delivered" ? fillBrief(BRIEF_COPY.status.delivered, { time: formatInZone(b.deliveredAt, tz, "time", now) }) : BRIEF_COPY.status[b.status];
@@ -295,7 +280,7 @@ export function briefSystemLines(b: OverviewBriefSystem, now: string, tz: string
   const tone: Tone =
     b.status === "failed" || b.fallbackErrorCode !== null
       ? "rose"
-      : b.status === "delivery_unknown" || b.owner === "unknown" || b.fallbackSentAt !== null
+      : b.status === "delivery_unknown" || b.owner === "unknown" || b.fallbackSentAt !== null || lateNone
         ? "amber"
         : "ok";
   return { value: parts.join(" · "), tone, detail: detail.length > 0 ? detail.join(" · ") : null };
@@ -328,11 +313,36 @@ export function aiLines(ai: NonNullable<OverviewSystem["ai"]>): { spend: { value
 
 const UNAVAILABLE_LINE: { value: string; tone: Tone } = { value: "couldn't load", tone: "amber" };
 
-/** P8: the brief, token and AI rows; nothing at all for a part the overview didn't read (undefined). */
-export function BriefSystemRows({ system, now, tz }: { system: OverviewSystem; now: string; tz: string }) {
+/**
+ * P9 F13: the stored Slack tokens' key ids against this server's keys (overview.ts compares kids, never decrypts):
+ * "Slack tokens on the previous key: N", amber while N > 0 (the re-seal hasn't run yet, so EXEC_TOKEN_KEY_PREVIOUS must
+ * stay), rose when any is on a key this server doesn't hold (it can't be opened until Reconnect). null = the read failed.
+ */
+export function tokenKeysLine(k: NonNullable<OverviewSystem["tokenKeys"]> | null): { value: string; tone: Tone } {
+  if (k === null) return { value: "Slack token keys: couldn't load", tone: "amber" };
+  const parts = [`Slack tokens on the previous key: ${formatCount(k.previousKey)}`];
+  if (k.unknownKey > 0) parts.push(`on a key this server doesn't have: ${formatCount(k.unknownKey)}`);
+  return { value: parts.join(" · "), tone: k.unknownKey > 0 ? "rose" : k.previousKey > 0 ? "amber" : "ok" };
+}
+
+/** P9 F13: the token-key row; nothing without a Slack installation (tokenKeys absent). */
+export function TokenKeysRow({ tokenKeys }: { tokenKeys: OverviewSystem["tokenKeys"] }) {
+  if (tokenKeys === undefined) return null;
+  const line = tokenKeysLine(tokenKeys);
+  return (
+    <ul data-token-keys-system className="border-t border-slate-100">
+      <li data-token-keys-row={tokenKeys === null ? "unavailable" : line.tone} className={cn("px-4 py-2 text-[12px]", TONE_CLASS[line.tone])}>
+        {line.value}
+      </li>
+    </ul>
+  );
+}
+
+/** P8: the brief, token and AI rows; nothing at all for a part the overview didn't read (undefined). P9 F31: briefLate. */
+export function BriefSystemRows({ system, now, tz, briefLate = false }: { system: OverviewSystem; now: string; tz: string; briefLate?: boolean }) {
   const { brief, userToken, ai } = system;
   if (brief === undefined && userToken === undefined && ai === undefined) return null;
-  const b = brief === undefined ? undefined : brief === null ? { ...UNAVAILABLE_LINE, detail: null } : briefSystemLines(brief, now, tz);
+  const b = brief === undefined ? undefined : brief === null ? { ...UNAVAILABLE_LINE, detail: null } : briefSystemLines(brief, now, tz, briefLate);
   const t = userToken === undefined ? undefined : userToken === null ? UNAVAILABLE_LINE : userTokenLine(userToken, now, tz);
   const a = ai === undefined ? undefined : ai === null ? null : aiLines(ai);
   return (
@@ -394,9 +404,9 @@ function MailLine({ mail, now }: { mail: OverviewSection<MailSummary>; now: stri
   );
 }
 
-function KindRow({ job, lookbackHours, now }: { job: JobKindHealth; lookbackHours: number; now: string }) {
-  // A kind with no label (a later phase's) shows its id, which is what the logs use.
-  const label = JOB_LABELS[job.kind] ?? job.kind;
+function KindRow({ job, lookbackHours, now }: { job: SystemJobRow; lookbackHours: number; now: string }) {
+  // P9 F26: the row's words come from job-labels.ts; a kind without a label reads "Other background jobs", never its id.
+  const label = job.label;
   return (
     <li className="flex items-center justify-between gap-3 px-4 py-2.5">
       <div className="min-w-0">
@@ -433,7 +443,8 @@ export function SystemSection({
   system,
   now,
   mail = null,
-  tz = "America/New_York"
+  tz = "America/New_York",
+  briefLate = false
 }: {
   system: OverviewSection<OverviewSystem>;
   now: string;
@@ -441,14 +452,16 @@ export function SystemSection({
   mail?: OverviewSection<MailSummary> | null;
   /** His zone, for the drafts rows' dates (P4). */
   tz?: string;
+  /** P9 F31: the header pill reads "late" (today's brief more than 45 minutes past its time, not started). */
+  briefLate?: boolean;
 }) {
   if (!system.ok) return <SectionCard title="System" icon={ServerCog} error />;
   const { kinds, successLookbackHours, dead24h, queued, due, oldestDueAt } = system.data;
   return (
     <SectionCard title="System" icon={ServerCog} basis="record" subtitle="The assistant's background jobs" padded={false}>
       <ul className="divide-y divide-slate-100">
-        {kinds.map((job) => (
-          <KindRow key={job.kind} job={job} lookbackHours={successLookbackHours} now={now} />
+        {systemJobRows(kinds).map((job) => (
+          <KindRow key={job.key} job={job} lookbackHours={successLookbackHours} now={now} />
         ))}
       </ul>
       <dl className="grid grid-cols-3 gap-2 border-t border-slate-100 px-4 py-3">
@@ -463,7 +476,8 @@ export function SystemSection({
       {mail !== null && <MailLine mail={mail} now={now} />}
       {system.data.drafts !== undefined && <DraftsRows drafts={system.data.drafts} now={now} tz={tz} />}
       <SlackRow slack={system.data.slack} now={now} tz={tz} />
-      <BriefSystemRows system={system.data} now={now} tz={tz} />
+      <TokenKeysRow tokenKeys={system.data.tokenKeys} />
+      <BriefSystemRows system={system.data} now={now} tz={tz} briefLate={briefLate} />
     </SectionCard>
   );
 }

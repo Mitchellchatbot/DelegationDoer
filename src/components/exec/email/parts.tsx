@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 
 export type ChipTone = "slate" | "indigo" | "amber" | "rose" | "emerald" | "sky" | "violet";
 
-const CHIP_TONE: Readonly<Record<ChipTone, string>> = {
+export const CHIP_TONE: Readonly<Record<ChipTone, string>> = {
   slate: "border-slate-200 bg-slate-50 text-slate-700",
   indigo: "border-indigo-200/70 bg-indigo-50 text-indigo-700",
   amber: "border-amber-200/80 bg-amber-50 text-amber-800",

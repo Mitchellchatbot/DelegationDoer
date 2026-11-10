@@ -145,7 +145,9 @@ function parsePurgeCursor(raw: unknown): { afterId: number; done: number[] } | n
   return { afterId: v, done };
 }
 
-function parseOptoutState(raw: unknown): { fp: string; count: number } | null {
+/** C33: a stored opt-out fingerprint state, or null when it does not parse. P9 F4: exported (no behaviour change) so the brief
+ *  sweep reads the same shape for its own brief/optouts state. */
+export function parseOptoutState(raw: unknown): { fp: string; count: number } | null {
   if (typeof raw !== "object" || raw === null) return null;
   const { fp, count } = raw as { fp?: unknown; count?: unknown };
   if (typeof fp !== "string" || !(fp === "" || FP.test(fp)) || typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) return null;

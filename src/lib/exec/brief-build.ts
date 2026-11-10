@@ -204,7 +204,7 @@ export async function runBriefBuild(req: BuildRequest): Promise<BuildResult> {
   let compose: Awaited<ReturnType<typeof composeBrief>>;
   try {
     compose = await composeBrief(principal, { gather, verdicts, nonce: newNonce() },
-      { rev, builtAt, trigger, prettyDate: prettyLocalDate(localDate), tz }, { signal });
+      { rev, builtAt, trigger, prettyDate: prettyLocalDate(localDate), tz, localDate }, { signal });
   } catch (err) {
     rethrowAbort();
     console.warn(`[exec-brief] principal ${principal.id} compose_failed (${errName(err)})`);
@@ -295,7 +295,10 @@ export async function runBriefBuild(req: BuildRequest): Promise<BuildResult> {
       console.warn(`[exec-brief] brief ${briefId} checkins_skipped (budget)`);
     } else {
       try {
-        checkins = await makeCheckins(req, { briefId, rev: fin.rev, checkinsTs, regenerate, deadlineMs: Math.min(BRIEF_LIMITS.checkinDeadlineMs, left) });
+        checkins = await makeCheckins(req, {
+          briefId, rev: fin.rev, checkinsTs, regenerate, deadlineMs: Math.min(BRIEF_LIMITS.checkinDeadlineMs, left),
+          budgetEndMs: startedMs + BRIEF_LIMITS.buildTimeoutMs - BUILD_MARGIN_MS
+        });
       } catch (err) {
         if (!signal.aborted) throw err;
         checkinsAbort = { reason: err };
@@ -325,17 +328,24 @@ export async function runBriefBuild(req: BuildRequest): Promise<BuildResult> {
 }
 
 /**
- * Step 10, best-effort under BRIEF_LIMITS.checkinDeadlineMs: any failure is logged by id and code and skipped (the brief still
- * delivers). Not while his DD Slack token is known to be someone else's or missing (C19). A normal build expires the earlier
- * days' proposed rows (C45), selects and generates; a regenerate expires this brief's proposed rows (C12), fills the brief back
- * up to 3 live check-ins (M6: ≤ 3 per brief) with the new rev and edits the existing check-ins message in place.
+ * Step 10, best-effort: any failure is logged by id and code and skipped (the brief still delivers). Not while his DD Slack
+ * token is known to be someone else's or missing (C19). A normal build expires the earlier days' proposed rows (C45), selects
+ * and generates; a regenerate expires this brief's proposed rows (C12), fills the brief back up to 3 live check-ins (M6: ≤ 3
+ * per brief) with the new rev and edits the existing check-ins message in place.
+ * P9 F20: three deadlines, each linked to the job's signal. The reads and the recipient selection run under b.deadlineMs
+ * (BRIEF_LIMITS.checkinDeadlineMs at most), with the Slack lookups inside it bounded by BRIEF_LIMITS.checkinLookupsMs. The
+ * model call gets its own, min(checkinModelMs, what is left until b.budgetEndMs - checkinAfterModelMs), measured once the
+ * recipients are chosen (skipped, "budget", under 5 s), so slow lookups no longer starve it. The steps after the model (a
+ * regenerate's message rebuild) run under checkinAfterModelMs.
  */
-async function makeCheckins(req: BuildRequest, b: { briefId: string; rev: number; checkinsTs: string | null; regenerate: boolean; deadlineMs: number }):
-  Promise<number> {
+async function makeCheckins(req: BuildRequest, b: { briefId: string; rev: number; checkinsTs: string | null; regenerate: boolean; deadlineMs: number;
+  budgetEndMs: number }): Promise<number> {
   const { principal, localDate, now, signal } = req;
   const tz = principal.briefTimezone;
   const linked = linkedDeadline(signal, b.deadlineMs);
   const s = linked.signal;
+  let model: { signal: AbortSignal; dispose: () => void } | null = null;
+  let after: { signal: AbortSignal; dispose: () => void } | null = null;
   try {
     const health = await getSyncState(principal, "brief", "token-health", parseTokenHealthState, { signal: s });
     if (health !== null && (health.value.state === "mismatch" || health.value.state === "missing")) return 0;
@@ -351,15 +361,25 @@ async function makeCheckins(req: BuildRequest, b: { briefId: string; rev: number
     if (inst === null) return 0;
     let inserted = 0;
     if (room > 0) {
-      const selection = await selectCheckinRecipients(principal, inst.target.token, { now, localDate, tz, signal: s, teamId: inst.row.teamId });
+      const selection = await selectCheckinRecipients(principal, inst.target.token, {
+        now, localDate, tz, signal: s, teamId: inst.row.teamId, lookupsMs: BRIEF_LIMITS.checkinLookupsMs
+      });
       const candidates = selection.candidates.slice(0, room);
       if (candidates.length > 0) {
-        const rows = await generateCheckins(principal, { briefId: b.briefId, briefRev: b.rev, localDate, candidates, now }, { signal: s });
-        if (rows.length > 0) inserted = (await insertCheckins(principal, rows)).length;
+        // P9 F20: the model's own deadline, measured now that the recipients are chosen.
+        const modelMs = Math.min(BRIEF_LIMITS.checkinModelMs, b.budgetEndMs - Date.now() - BRIEF_LIMITS.checkinAfterModelMs);
+        if (modelMs < CHECKINS_MIN_MS) {
+          console.warn(`[exec-brief] brief ${b.briefId} checkins_skipped (budget)`);
+        } else {
+          model = linkedDeadline(signal, modelMs);
+          const rows = await generateCheckins(principal, { briefId: b.briefId, briefRev: b.rev, localDate, candidates, now }, { signal: model.signal });
+          if (rows.length > 0) inserted = (await insertCheckins(principal, rows)).length;
+        }
       }
     }
     if (b.regenerate && b.checkinsTs !== null) {
-      const parts = await checkinsMessageParts(principal, b.briefId, { tz, now, paused: null, signal: s });
+      after = linkedDeadline(signal, BRIEF_LIMITS.checkinAfterModelMs);
+      const parts = await checkinsMessageParts(principal, b.briefId, { tz, now, paused: null, signal: after.signal });
       if (parts !== null) await dmUpdate(inst, b.checkinsTs, parts, { signal: AbortSignal.timeout(BRIEF_LIMITS.slackCallMs) });
     }
     return inserted;
@@ -369,5 +389,7 @@ async function makeCheckins(req: BuildRequest, b: { briefId: string; rev: number
     return 0;
   } finally {
     linked.dispose();
+    model?.dispose();
+    after?.dispose();
   }
 }

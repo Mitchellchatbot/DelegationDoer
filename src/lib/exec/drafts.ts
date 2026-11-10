@@ -1210,10 +1210,13 @@ export async function previewReply(principal: ExecPrincipal, threadId: string): 
 // Recipient suggestions (new drafts, L8)
 // ---------------------------------------------------------------------------
 
-/** Internal users, active clients' contacts, then his screened P3 correspondents; minus his own, no-reply and restricted addresses. */
+/** Internal users, active clients' contacts, then his screened P3 correspondents; minus his own, no-reply and restricted addresses.
+ *  P9 F7 (P3 ui-3): only the correspondents of rows on a mailbox pinned to him now; a row of a mailbox he no longer has
+ *  pinned is left out, as every page surface leaves it out. */
 async function suggestionsFor(principal: ExecPrincipal, gates: DraftGates, policy: { rules: RestrictedSenderRule[]; hash: string }): Promise<RecipientSuggestion[]> {
   const out = await ddContacts(principal);
   for (const r of await listCorrespondentRows(principal)) {
+    if (!isPinnedAccount(principal, r.accountId)) continue;
     if (screenStoredRow(r, policy.rules, policy.hash).verdict === "restricted") continue;
     for (const raw of r.correspondents) {
       const a = normalizeDraftAddress({ address: raw });

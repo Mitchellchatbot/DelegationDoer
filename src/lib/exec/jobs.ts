@@ -142,15 +142,46 @@ function state(): JobsState {
 /** This process's identity on leases: `${hostname}:${pid}:${6 hex}`, fixed for the process lifetime. */
 export const WORKER_ID: string = state().workerId;
 
-/** Test seam: forget handlers, in-flight counts and the kick latch. The worker id stays. */
+/** Test seam: forget handlers, in-flight counts and the kick latch, and (P9 F19) the draining flag. The worker id stays. */
 export function __resetJobsForTests(): void {
   (globalThis as GlobalWithJobs)[STATE_KEY] = newState(state().workerId);
+  delete (globalThis as GlobalWithDrain)[EXEC_DRAINING_KEY];
 }
 
 /** In-flight job counts per lane in this process (health checks, tests). */
 export function jobsInFlight(): Readonly<Record<JobLane, number>> {
   const { inFlight } = state();
   return { interactive: inFlight.interactive, bulk: inFlight.bulk };
+}
+
+// ---------------------------------------------------------------------------
+// P9 F19 (contract §1, AM-P9-23): the shutdown drain
+// ---------------------------------------------------------------------------
+//
+// On SIGTERM, cron-bootstrap's handler (installed by src/instrumentation.ts on Node) sets this flag on globalThis, so
+// every copy of this module in the process sees it: from then on a worker pass claims nothing ("draining") and a kick is
+// a no-op, while the runs already claimed keep their leases, finish and record their outcome. With
+// NEXT_MANUAL_SIG_HANDLE=true the handler then waits (bounded) until inFlightCount() is 0 before it exits. The flag is
+// never cleared in production: a draining process is about to exit.
+
+/** The globalThis key of the draining flag. cron-bootstrap.ts sets the same literal (it can't import this Node-only file). */
+export const EXEC_DRAINING_KEY = "__ddExecDraining" as const;
+type GlobalWithDrain = typeof globalThis & { [EXEC_DRAINING_KEY]?: boolean };
+
+/** True once this process has started shutting down: worker passes claim nothing and kicks are no-ops. */
+export function isExecDraining(): boolean {
+  return (globalThis as GlobalWithDrain)[EXEC_DRAINING_KEY] === true;
+}
+
+/** Marks this process as draining (what the SIGTERM handler does; also the tests' seam). */
+export function startExecDraining(): void {
+  (globalThis as GlobalWithDrain)[EXEC_DRAINING_KEY] = true;
+}
+
+/** Runs in flight in this process, both lanes, plus slots a claim still in flight has reserved. 0 = nothing to wait for. */
+export function inFlightCount(): number {
+  const { inFlight } = state();
+  return inFlight.interactive + inFlight.bulk;
 }
 
 // ---------------------------------------------------------------------------
@@ -279,6 +310,9 @@ export function registerJobHandler(handler: JobHandler): void {
   if (!Number.isFinite(handler.timeoutMs) || handler.timeoutMs <= 0 || handler.timeoutMs > MAX_TIMER_MS) {
     throw new Error(`exec job handler ${handler.kind}: timeoutMs must be between 1 and ${MAX_TIMER_MS}`);
   }
+  if (handler.claimable !== undefined && typeof handler.claimable !== "function") {
+    throw new Error(`exec job handler ${handler.kind}: claimable must be a function when given`);
+  }
   const { handlers } = state();
   if (handlers.has(handler.kind)) throw new Error(`exec job handler already registered for kind "${handler.kind}"`);
   handlers.set(handler.kind, handler);
@@ -286,6 +320,29 @@ export function registerJobHandler(handler: JobHandler): void {
 
 export function getJobHandler(kind: string): JobHandler | undefined {
   return state().handlers.get(kind);
+}
+
+/**
+ * P9 F18 (seed S4): the kinds this process may claim, in registration order: every registered kind whose handler has no
+ * `claimable`, or whose `claimable()` answers true. A kind left out stays queued for a process that can run it (the draft
+ * kinds on a process without MISSIVE_EA_TOKEN). A `claimable()` that throws counts as false (logged by kind and error
+ * name only).
+ */
+export function claimableJobKinds(): string[] {
+  const kinds: string[] = [];
+  for (const [kind, handler] of state().handlers) {
+    if (handler.claimable === undefined) {
+      kinds.push(kind);
+      continue;
+    }
+    try {
+      if (handler.claimable() === true) kinds.push(kind);
+    } catch (err) {
+      const name = err instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(err.name) ? err.name : "error";
+      console.warn(`[exec-jobs] ${kind}: claimable() threw (${name}); not claiming it this pass`);
+    }
+  }
+  return kinds;
 }
 
 // ---------------------------------------------------------------------------
@@ -923,8 +980,8 @@ export interface WorkerPassOptions {
 
 export interface WorkerPassSummary {
   lane: JobLane;
-  /** Set when the pass didn't claim at all. */
-  skipped: "disabled" | "no-handlers" | "at-capacity" | null;
+  /** Set when the pass didn't claim at all. P9 F19: "draining" once SIGTERM arrived (runs already claimed still finish). */
+  skipped: "disabled" | "draining" | "no-handlers" | "at-capacity" | null;
   /** Jobs this pass claimed and started. */
   claimed: number;
   // Outcomes of the jobs that ended while the pass waited (awaitCompletion only).
@@ -994,6 +1051,11 @@ export async function runWorkerPass(opts: WorkerPassOptions): Promise<WorkerPass
     summary.skipped = "disabled";
     return summary;
   }
+  // P9 F19: a process shutting down claims nothing more; what it already holds runs to its recorded end.
+  if (isExecDraining()) {
+    summary.skipped = "draining";
+    return summary;
+  }
 
   if (opts.concurrency !== undefined && !(Number.isInteger(opts.concurrency) && opts.concurrency >= 0)) {
     throw new Error(`runWorkerPass: concurrency must be a non-negative integer (got ${opts.concurrency})`);
@@ -1009,7 +1071,9 @@ export async function runWorkerPass(opts: WorkerPassOptions): Promise<WorkerPass
   // tick calls before its passes. A pass that finds none (a kick that fires
   // before this process's first tick) leaves the work for the tick instead of
   // claiming jobs it could only send back to the queue, an attempt used up.
-  if (s.handlers.size === 0) {
+  // P9 F18: only the kinds this process can run (a handler's claimable() can opt its kind out, e.g. no EA token here).
+  const kinds = s.handlers.size === 0 ? [] : claimableJobKinds();
+  if (kinds.length === 0) {
     summary.skipped = "no-handlers";
     return summary;
   }
@@ -1028,7 +1092,7 @@ export async function runWorkerPass(opts: WorkerPassOptions): Promise<WorkerPass
   const claimSentAt = monotonicNow();
   let jobs: ExecJobRow[];
   try {
-    jobs = await claimJobs(lane, free, leaseSeconds, [...s.handlers.keys()]);
+    jobs = await claimJobs(lane, free, leaseSeconds, kinds);
   } catch (err) {
     s.inFlight[lane] -= free;
     throw err;
@@ -1075,7 +1139,8 @@ export async function runWorkerPass(opts: WorkerPassOptions): Promise<WorkerPass
  */
 export function kickInteractive(): void {
   try {
-    if (!isExecEnabled()) return;
+    // P9 F19: no new pass once SIGTERM arrived; the job stays queued for the next process.
+    if (!isExecEnabled() || isExecDraining()) return;
     const s = state();
     if (s.kick.scheduled) return;
     if (s.kick.running) {

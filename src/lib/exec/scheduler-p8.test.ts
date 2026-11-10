@@ -258,8 +258,9 @@ describe("the system registry and its pass (M10, C17, C18)", () => {
   it("OP02 the same bucket twice → one job (the system key dedupes)", async () => {
     await runSchedulerTick(at("2026-11-06T13:00:00Z"));
     const second = await runSchedulerTick(at("2026-11-06T13:14:59Z"));
+    // P9 F23 (an expectation flip §1 implies): the second tick of the bucket doesn't upsert at all (the scheduler's memo);
+    // before P9 it upserted again and the dedupe key absorbed it.
     expect(byKind("exec.ops-watch").map((e) => e.dedupeKey)).toEqual([
-      `exec.ops-watch:system:i${intervalBucket(at("2026-11-06T13:00:00Z"), 15)}`,
       `exec.ops-watch:system:i${intervalBucket(at("2026-11-06T13:00:00Z"), 15)}`
     ]);
     expect([...stored.keys()].filter((k) => k.startsWith("exec.ops-watch:"))).toHaveLength(1);

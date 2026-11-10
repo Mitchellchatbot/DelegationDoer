@@ -4,10 +4,41 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 vi.mock("@/lib/supabase-server", () => ({ getSupabaseServer: vi.fn() }));
 vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
 vi.mock("@/lib/exec/principal", () => ({ loadPrincipalForUser: vi.fn(), loadSettings: vi.fn() }));
+// P9: the refusal alert, the new-network job's DM and its queue are mocks at their module boundary.
+vi.mock("@/lib/exec/ops", () => ({ notifyOps: vi.fn(async () => false) }));
+vi.mock("@/lib/exec/jobs", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/jobs")>()), enqueueJob: vi.fn(async () => ({ enqueued: true, id: 1 })) }));
+vi.mock("@/lib/exec/slack-install", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/slack-install")>()), openActiveInstallation: vi.fn(async () => null) }));
 
 import { SENTINELS, findSentinel } from "@/lib/exec/__tests__/slack-assert";
 import { createFakeSlackDb } from "@/lib/exec/__tests__/fake-slack-db";
-import { logAccess, requireExecPrincipal, requireExecSession, type ExecSessionResult } from "@/lib/exec/access";
+import { createFakeJobsRead, type ReadRow } from "@/lib/exec/__tests__/fake-jobs-read";
+import { jobRow } from "@/lib/exec/__tests__/fake-exec-db";
+import {
+  PINNED_FACTOR_ID,
+  SIGNED_IN_AT,
+  STRANGER_FACTOR_ID,
+  fakeFactorAdmin,
+  linkWithOwnFactorToken,
+  passwordOnlyToken,
+  pinFactors,
+  settle,
+  strongToken,
+  verifiedFactor,
+  type FactorAdminOptions
+} from "@/lib/exec/__tests__/step-up-fixtures";
+import {
+  STEP_UP_REFUSED_OPS,
+  STEP_UP_REFUSED_SUFFIX,
+  listWebAccessSince,
+  logAccess,
+  requireExecPrincipal,
+  requireExecSession,
+  type ExecSessionResult
+} from "@/lib/exec/access";
+import { BRIEF_OPS } from "@/lib/exec/brief-copy";
+import { ACCESS_ALERT_JOB_KIND, accessAlertJobHandler } from "@/lib/exec/handlers/access-alert";
+import { ipNetwork, uaFamily } from "@/lib/exec/network";
+import { notifyOps } from "@/lib/exec/ops";
 import { loadPrincipalForUser } from "@/lib/exec/principal";
 import type { ExecPrincipal } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -16,17 +47,20 @@ import { getSupabaseServer } from "@/lib/supabase-server";
 // P6 contract §3.8 (C3, K9): requireExecSession and the access log's Slack
 // columns (AC01, AC03-AC05). AC02 is access.test.ts itself, run unchanged:
 // requireExecPrincipal now delegates to requireExecSession.
+//
+// P9 (F1, F2, AM-P9-13): the step-up through requireExecSession. A strong session is now his password plus his pinned
+// authenticator code (aal2); STRONG below is that session, with EXEC_OWNER_MFA_FACTOR_IDS set in beforeEach.
 
 const OWNER_AUTH_ID = "11111111-1111-4111-8111-111111111111";
 const ROUTE = "GET /api/integrations/exec-slack/start";
 const b64url = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
 const jwt = (payload: unknown) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url(payload)}.c2ln`;
-const STRONG = jwt({ sub: OWNER_AUTH_ID, session_id: "sess-strong-1", aal: "aal1", amr: [{ method: "password", timestamp: 1793977000 }] });
+const STRONG = strongToken("sess-strong-1", OWNER_AUTH_ID);
 const LINK = jwt({ sub: OWNER_AUTH_ID, session_id: "sess-link-1", aal: "aal1", amr: [{ method: "otp", timestamp: 1793977000 }] });
 
 const PRINCIPAL = Object.freeze({
   id: "ep_1", userId: "u_1", email: "mitchell@scaledai.org", name: "Mitchell", timezone: "America/New_York",
-  mailAccountIds: Object.freeze([]), slackTeamId: null, slackUserId: null
+  briefTimezone: "America/New_York", mailAccountIds: Object.freeze([]), slackTeamId: null, slackUserId: null
 }) as unknown as ExecPrincipal;
 
 function fakeServer(token: string | null, opts: { user?: { id: string } | null } = {}) {
@@ -38,9 +72,11 @@ function fakeServer(token: string | null, opts: { user?: { id: string } | null }
   return auth;
 }
 
-function fakeAdmin() {
+function fakeAdmin(factors: FactorAdminOptions = {}) {
   const logRows: Record<string, unknown>[] = [];
+  const factorAdmin = fakeFactorAdmin(factors);
   const client = {
+    auth: factorAdmin.auth,
     from(table: string) {
       if (table === "users") {
         const b = { select: () => b, eq: () => b, maybeSingle: async () => ({ data: { id: "u_1", email: "mitchell@scaledai.org" }, error: null }) };
@@ -51,7 +87,7 @@ function fakeAdmin() {
     }
   };
   vi.mocked(getSupabaseAdmin).mockReturnValue(client as unknown as SupabaseClient);
-  return { logRows };
+  return { logRows, listFactors: factorAdmin.listFactors };
 }
 
 const request = () =>
@@ -64,7 +100,9 @@ beforeEach(() => {
   vi.mocked(getSupabaseAdmin).mockReset();
   vi.mocked(loadPrincipalForUser).mockReset();
   vi.mocked(loadPrincipalForUser).mockResolvedValue(PRINCIPAL);
+  vi.mocked(notifyOps).mockResolvedValue(false);
   vi.stubEnv("EXEC_ENABLED", "true");
+  pinFactors(PINNED_FACTOR_ID);
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -126,6 +164,117 @@ describe("requireExecSession (C3)", () => {
     const denied = await requireExecPrincipal(request(), ROUTE);
     expect(denied.ok).toBe(false);
     if (!denied.ok) expect(denied.response.status).toBe(404);
+  });
+});
+
+// P9 F1, F2 through requireExecSession (the Slack OAuth routes' gate).
+describe("requireExecSession: the P9 step-up (F1, F2)", () => {
+  const strong = { requireStrongSignIn: true } as const;
+  const refusalRows = (rows: Record<string, unknown>[]) => rows.filter((r) => String(r.route).endsWith(STEP_UP_REFUSED_SUFFIX));
+
+  it("F1: a link session that enrolled its own second factor (aal2, amr [totp, otp]) → 404, one refusal row, no factor read", async () => {
+    fakeServer(linkWithOwnFactorToken("sess-own-factor", OWNER_AUTH_ID));
+    const { logRows, listFactors } = fakeAdmin();
+    expect(await denial(await requireExecSession(request(), ROUTE, strong))).toEqual({ status: 404, body: { error: "not found" } });
+    expect(listFactors).not.toHaveBeenCalled();
+    await settle();
+    expect(logRows).toEqual([
+      { principal_id: "ep_1", auth_user_id: OWNER_AUTH_ID, session_id: "sess-own-factor", ip: "203.0.113.7", user_agent: "UA/1", route: `${ROUTE}${STEP_UP_REFUSED_SUFFIX}`, surface: "web" }
+    ]);
+    expect(vi.mocked(notifyOps).mock.calls.map(([a]) => a)).toEqual([
+      { key: STEP_UP_REFUSED_OPS.key(new Date().toISOString().slice(0, 10)), title: STEP_UP_REFUSED_OPS.title, detail: "totp, otp aal=aal2 (sign_in)" }
+    ]);
+  });
+
+  it("F2: pin set, an aal1 password sign-in → 404 and exactly one step_up_refused row", async () => {
+    fakeServer(passwordOnlyToken("sess-pw", OWNER_AUTH_ID));
+    const { logRows, listFactors } = fakeAdmin();
+    expect((await denial(await requireExecSession(request(), ROUTE, strong))).status).toBe(404);
+    expect(listFactors).not.toHaveBeenCalled();
+    await settle();
+    expect(refusalRows(logRows)).toHaveLength(1);
+    expect(logRows).toHaveLength(1);
+    expect(logRows[0]).toMatchObject({ session_id: "sess-pw", principal_id: "ep_1" });
+  });
+
+  it("F2: aal2 [totp, password] with the pinned factor → admitted with its session id; no refusal", async () => {
+    fakeServer(jwt({ sub: OWNER_AUTH_ID, session_id: "sess-tp", aal: "aal2", amr: [{ method: "totp", timestamp: SIGNED_IN_AT }, { method: "password", timestamp: SIGNED_IN_AT }] }));
+    const { logRows, listFactors } = fakeAdmin();
+    expect(await requireExecSession(request(), ROUTE, strong)).toEqual({ ok: true, principal: PRINCIPAL, authUserId: OWNER_AUTH_ID, sessionId: "sess-tp" });
+    expect(listFactors).toHaveBeenCalledWith({ userId: OWNER_AUTH_ID });
+    await settle();
+    expect(refusalRows(logRows)).toEqual([]);
+    expect(notifyOps).not.toHaveBeenCalled();
+  });
+
+  it("F2: the factor list can't be read → 503 (never a 404, never ok), no refusal row", async () => {
+    fakeServer(STRONG);
+    const { logRows } = fakeAdmin({ error: { name: "AuthRetryableFetchError", message: "fetch failed", status: 0 } });
+    expect(await denial(await requireExecSession(request(), ROUTE, strong))).toEqual({ status: 503, body: { error: "auth unavailable" } });
+    fakeServer(STRONG);
+    fakeAdmin({ throws: new Error("@supabase/auth-js: Expected parameter to be UUID but is not") });
+    expect((await denial(await requireExecSession(request(), ROUTE, strong))).status).toBe(503);
+    await settle();
+    expect(logRows).toEqual([]);
+  });
+
+  it("F2: an unpinned verified factor beside his → 404 with the refusal row; without the step-up nothing changes", async () => {
+    fakeServer(STRONG);
+    const { logRows } = fakeAdmin({ factors: [verifiedFactor(PINNED_FACTOR_ID), verifiedFactor(STRANGER_FACTOR_ID)] });
+    expect((await denial(await requireExecSession(request(), ROUTE, strong))).status).toBe(404);
+    await settle();
+    expect(refusalRows(logRows)).toHaveLength(1);
+    // A gate call without requireStrongSignIn never reads the factors (P2a's routes are unchanged).
+    fakeServer(passwordOnlyToken());
+    const plain = fakeAdmin();
+    expect((await requireExecSession(request(), ROUTE)).ok).toBe(true);
+    expect(plain.listFactors).not.toHaveBeenCalled();
+  });
+});
+
+// AM-P9-13: a refused step-up's row must not teach P8's new-network check that its network or browser is "seen".
+describe("listWebAccessSince never reads a refused step-up's row (AM-P9-13)", () => {
+  const AT = "2026-11-06T15:00:00.000Z";
+  const AT_MS = Date.parse(AT);
+  const DAY = 86_400_000;
+  const CHROME_MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+  /** 25 strong rows from the office network over the last month (the learning floor is 20). */
+  const office = (): ReadRow[] =>
+    Array.from({ length: 25 }, (_, i) => ({
+      principal_id: "ep_1", surface: "web", route: "GET /executive", ip: `198.51.100.${i + 1}`, user_agent: CHROME_MAC,
+      created_at: new Date(AT_MS - (i + 1) * DAY).toISOString()
+    }));
+  /** Refused step-ups from network N (a team member's link session), the day before. */
+  const refusedFromN = (): ReadRow[] =>
+    Array.from({ length: 3 }, (_, i) => ({
+      principal_id: "ep_1", surface: "web", route: `GET /executive${STEP_UP_REFUSED_SUFFIX}`, ip: `203.0.113.${i + 7}`, user_agent: CHROME_MAC,
+      created_at: new Date(AT_MS - DAY / 2 - i * 60_000).toISOString()
+    }));
+  const runAlert = (net: string, family: string) =>
+    accessAlertJobHandler.run({
+      job: jobRow({ kind: ACCESS_ALERT_JOB_KIND, principal_id: "ep_1", payload: { net, family, at: AT } }),
+      principal: PRINCIPAL,
+      signal: new AbortController().signal,
+      workerId: "w"
+    });
+
+  it("the read excludes routes ending in the refusal suffix, and keeps every other web row", async () => {
+    const db = createFakeJobsRead({ exec_access_log: [...office(), ...refusedFromN()] });
+    vi.mocked(getSupabaseAdmin).mockReturnValue(db.client as SupabaseClient);
+    const rows = await listWebAccessSince("ep_1", new Date(AT_MS - 30 * DAY).toISOString(), AT, 5_000);
+    expect(rows).toHaveLength(25);
+    expect(rows.some((r) => r.ip?.startsWith("203.0.113."))).toBe(false);
+    expect(db.queries[0].filters).toContainEqual({ op: "notLike", column: "route", value: `%${STEP_UP_REFUSED_SUFFIX}` });
+  });
+
+  it("a refused row from network N, then a strong session from N → the new-network alert still fires", async () => {
+    const db = createFakeJobsRead({ exec_access_log: [...office(), ...refusedFromN()] });
+    vi.mocked(getSupabaseAdmin).mockReturnValue(db.client as SupabaseClient);
+    const net = ipNetwork("203.0.113.50");
+    expect(net).toBe("203.0.113.0/24");
+    const out = await runAlert(net as string, uaFamily(CHROME_MAC));
+    expect(out).toMatchObject({ outcome: "alerted", newNetwork: true, newFamily: false });
+    expect(vi.mocked(notifyOps).mock.calls.map(([a]) => a.key)).toEqual([BRIEF_OPS.newNetwork.key("ep_1")]);
   });
 });
 
@@ -194,5 +343,6 @@ describe("logAccess: the Slack columns (K9, §3.8)", () => {
     vi.mocked(getSupabaseAdmin).mockReturnValue(db.client as SupabaseClient);
     await logAccess({ principalId: "ep_1", authUserId: null, sessionId: null, ip: null, userAgent: null, route: "GET /api/exec/overview", surface: "web" });
     expect(db.tables.exec_access_log.at(-1)).toMatchObject({ surface: "web", route: "GET /api/exec/overview" });
+    void SENTINELS;
   });
 });

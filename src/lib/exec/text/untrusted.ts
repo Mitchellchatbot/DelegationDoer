@@ -2,6 +2,7 @@ import "server-only";
 
 import { randomBytes } from "node:crypto";
 import { sanitizeText as sanitizeInvisible } from "@/lib/exec/triage/email-text";
+import { maskSecrets } from "@/lib/exec/text/secrets";
 
 // The one DD text wrapping module of both P5 phases (P5a contract §3.11.1,
 // S4, coherence-12; Area D). DD free text that goes to a model is sanitized,
@@ -180,38 +181,12 @@ const UNTRUSTED_KINDS: ReadonlySet<string> = new Set<UntrustedKind>([
   "eod_note", "sod_note", "meeting_brief", "ai_summary", "attention_text", "slack_text"
 ]);
 
-const HIDDEN = "[hidden]";
-// C46: a credential label, whole word, any case, then ":" or "=" and a value on the same line. The longer labels come
-// first so "username/password" is not read as "username" + "/password".
-const SECRET_LABEL =
-  /(?<![A-Za-z0-9_])(username\/password|user\/pass|client[^\S\n]+secret|api[^\S\n]+key|apikey|password|passcode|secret|token|login|pwd|pass)(?![A-Za-z0-9_])[^\S\n]*[:=][^\S\n]*(?=\S)[^\n]*/gi;
-// C46: a long run of key-like characters (an API key, a token) holding at least one letter and one digit.
-const SECRET_RUN = /[A-Za-z0-9_-]{32,}/g;
-const HAS_LETTER = /[A-Za-z]/;
-const HAS_DIGIT = /[0-9]/;
 // C47 (1): "[" then optional spaces, "r" (any case), 1-5 digits, optional spaces, then "]" or ",".
 const REF_MARKER_LIKE = /\[(?=\s*[rR]\d{1,5}\s*[\],])/g;
 
-/**
- * C46. A label (password, passcode, pwd, pass, login, user/pass, username/password, token, api key, apikey, secret,
- * client secret; any case, whole word) followed by ":" or "=" keeps the label and loses the value up to the end of the
- * line ("<label>: [hidden]"); a run of 32 or more characters of [A-Za-z0-9_-] holding a letter and a digit becomes
- * "[hidden]". masked = anything changed.
- */
-export function maskSecrets(s: string): { text: string; masked: boolean } {
-  if (typeof s !== "string" || s === "") return { text: "", masked: false };
-  let masked = false;
-  const labelled = s.replace(SECRET_LABEL, (_all, label: string) => {
-    masked = true;
-    return `${label}: ${HIDDEN}`;
-  });
-  const text = labelled.replace(SECRET_RUN, (run) => {
-    if (!HAS_LETTER.test(run) || !HAS_DIGIT.test(run)) return run;
-    masked = true;
-    return HIDDEN;
-  });
-  return { text, masked };
-}
+// C46's maskSecrets lives in text/secrets.ts since P9 (fixer security-5: triage/email-text.ts masks message bodies with it,
+// and this file imports email-text.ts, so the masker is a leaf both import); re-exported here for its earlier importers.
+export { maskSecrets };
 
 /**
  * C47 (1): every "[" that starts "[", optional spaces, "r" (any case), 1-5 digits, optional spaces, then "]" or ","

@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/exec/llm/client", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/llm/client")>()), callModel: vi.fn() }));
+// P9 F21: the compose timeout's ops alert (BC16).
+vi.mock("@/lib/exec/ops", () => ({ notifyOps: vi.fn(async () => false) }));
 
 import gatherFixture from "@/lib/exec/__tests__/fixtures/brief-gather.json";
 import validOut from "@/lib/exec/__tests__/fixtures/brief-model-output/valid.json";
@@ -20,6 +22,7 @@ import { assembleSections, gatherItems, type AssembleInput } from "@/lib/exec/br
 import { BRIEF_SECTION_KEYS } from "@/lib/exec/brief-types";
 import type { BriefGather, BriefInputItem, BriefSectionKey, NoveltyVerdict } from "@/lib/exec/brief-types";
 import { LlmCallError, callModel, type CallModelResult } from "@/lib/exec/llm/client";
+import { notifyOps } from "@/lib/exec/ops";
 import { OPUS_MODEL } from "@/lib/exec/llm/models";
 import { assertExecRequestShape, type ExecRequestParams } from "@/lib/exec/llm/request";
 import { DEFAULT_SETTINGS, principalFromRows } from "@/lib/exec/principal";
@@ -270,6 +273,39 @@ describe("BC11-BC14 the outcome map (one call, never retried)", () => {
     already.abort(reason);
     await expect(composeBrief(principal, input(), META, { signal: already.signal })).rejects.toBe(reason);
     expect(callModel).toHaveBeenCalledTimes(2);
+  });
+
+  it("BC16 (P9 F21) a timeout raises the brief-compose-timeout:<local date> ops alert once, content-free and not awaited; other outcomes raise none", async () => {
+    vi.mocked(notifyOps).mockClear();
+    vi.useFakeTimers();
+    vi.mocked(callModel).mockImplementation(({ signal: s }) => new Promise((_, reject) => {
+      s?.addEventListener("abort", () => reject(s.reason), { once: true });
+    }));
+    const TITLE = "Morning brief: the AI summary timed out; the deterministic version was used";
+    const pending = composeBrief(principal, input(), { ...META, localDate: "2026-11-07" }, { signal: signal() });
+    await vi.advanceTimersByTimeAsync(150_000);
+    await expect(pending).resolves.toMatchObject({ kind: "deterministic", reason: "timeout" });
+    expect(vi.mocked(notifyOps).mock.calls).toEqual([[{ key: "brief-compose-timeout:2026-11-07", title: TITLE }]]);
+    // Without meta.localDate: the build time's date in the brief zone (13:05Z on 11-06 is 08:05 EST on 11-06).
+    const second = composeBrief(principal, input(), META, { signal: signal() });
+    await vi.advanceTimersByTimeAsync(150_000);
+    await second;
+    expect(vi.mocked(notifyOps).mock.calls[1]).toEqual([{ key: "brief-compose-timeout:2026-11-06", title: TITLE }]);
+    assertNoBriefText(vi.mocked(notifyOps), { label: "ops alerts" });
+    // A hung Slack never holds the compose: the alert isn't awaited.
+    vi.mocked(notifyOps).mockClear().mockImplementation(() => new Promise<boolean>(() => undefined));
+    const third = composeBrief(principal, input(), META, { signal: signal() });
+    await vi.advanceTimersByTimeAsync(150_000);
+    await expect(third).resolves.toMatchObject({ reason: "timeout" });
+    // Every other outcome: no alert.
+    vi.mocked(notifyOps).mockClear().mockResolvedValue(false);
+    for (const arm of [() => vi.mocked(callModel).mockRejectedValue(new LlmCallError("model call failed (500)", { status: 500, errorClass: "retryable" })),
+      () => vi.mocked(callModel).mockRejectedValue(new BudgetExceededError(15, 15)), () => vi.mocked(callModel).mockResolvedValue(result("{}", { refused: true }))]) {
+      vi.mocked(callModel).mockReset();
+      arm();
+      await composeBrief(principal, input(), META, { signal: signal() });
+    }
+    expect(notifyOps).not.toHaveBeenCalled();
   });
 
   it("BC14 / BC15 one call per compose; nothing from the input or the output reaches console", async () => {

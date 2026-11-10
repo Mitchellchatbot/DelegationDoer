@@ -57,6 +57,17 @@ describe("ProjectsListPageView (test 74)", () => {
     expect(blog).not.toContain("data-stuck-badge");
   });
 
+  it("P9 F36: a stuck batch's reasons are a visible line, not only the badge's title", () => {
+    const html = list();
+    const acme = html.slice(html.indexOf('data-project-row="p_acme"'), html.indexOf('data-project-row="p_blog"'));
+    const line = /<p data-stuck-reasons="true"[^>]*>([^<]+)<\/p>/.exec(acme)?.[1] ?? "";
+    expect(line.length).toBeGreaterThan(0);
+    const title = /data-stuck-badge="true" title="([^"]*)"/.exec(acme)?.[1] ?? "";
+    for (const reason of title.split("\n").filter(Boolean)) expect(textOf(line)).toContain(textOf(reason));
+    const blog = html.slice(html.indexOf('data-project-row="p_blog"'));
+    expect(blog).not.toContain("data-stuck-reasons");
+  });
+
   it("the filter bar: All, Needs attention, Has open work, the current one marked", () => {
     const html = list({ filter: "problems" });
     expect(html).toMatch(/href="\/executive\/projects\?show=problems"[^>]*aria-current="true"|aria-current="true"[^>]*href="\/executive\/projects\?show=problems"/);

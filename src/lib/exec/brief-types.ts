@@ -35,6 +35,10 @@ export const BRIEF_LIMITS = Object.freeze({
   // check-ins (M6, C8–C10, C45)
   checkinsPerBrief: 3, checkinTextChars: 600, checkinRotationDays: 5, checkinValidityMs: 48 * 3_600_000,
   checkinLookupsMax: 8, checkinHistoryTexts: 3, checkinMacHex: 32,
+  // P9 F20 (Area D): the Slack lookups' own bound (the loop keeps who resolved by then); the model call's own deadline,
+  // min(checkinModelMs, what is left of the build - checkinAfterModelMs), measured after the recipients are chosen; the
+  // steps after the model (insert, a regenerate's chat.update) run under checkinAfterModelMs.
+  checkinLookupsMs: 10_000, checkinModelMs: 60_000, checkinAfterModelMs: 10_000,
   // storage (M8, M9, C28)
   contentTtlDays: 30, rowTtlDays: 180, checkinTtlDays: 30, mentionTtlDays: 90, purgeBatch: 1_000, purgeRounds: 10,
   scrubBatch: 500, purgeLogBatch: 200, purgeLogBatchesPerRun: 10, revokedReadingPerDay: 50, fallbackDmDeletesPerDay: 50,

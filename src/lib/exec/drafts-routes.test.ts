@@ -987,6 +987,22 @@ describe("RO15 the send probe", () => {
     expect(writes.length).toBeGreaterThanOrEqual(3); // one per probe since the last setupDraftEnv
     expect(writes[writes.length - 1][3]).toMatchObject({ ok: false, reason: "token_missing" });
   });
+  it("P9 fixer correctness-2: a stored ok verdict, but this process has no EA token → the view says token_missing (DB-only), as POST does", async () => {
+    env = setupDraftEnv({ rows: [savedRow({ status: "draft", version: 2, saved_version: 1 })] });
+    withVerdict();
+    const before = await bodyOf(await draftRoute.GET(jsonRequest("GET", P()), ctx()));
+    expect((before.capabilities as { draftsUnavailable: string | null; canSave: boolean })).toMatchObject({ draftsUnavailable: null, canSave: true });
+    delete process.env.MISSIVE_EA_TOKEN;
+    const { invalidateEaReadiness } = await import("@/lib/exec/sources/mail");
+    invalidateEaReadiness();
+    const after = await bodyOf(await draftRoute.GET(jsonRequest("GET", P()), ctx()));
+    expect((after.capabilities as { draftsUnavailable: string | null; canSave: boolean })).toMatchObject({ draftsUnavailable: "token_missing", canSave: false });
+    expect(env.fake.of("auth_me")).toHaveLength(0);
+    expect(env.fake.of("status")).toHaveLength(0);
+    const res = await saveRoute.POST(jsonRequest("POST", `${P()}/save`, { version: 2 }), ctx());
+    expect(res.status).toBe(409);
+    expect(await bodyOf(res)).toMatchObject({ error: "drafts_unavailable", reason: "token_missing" });
+  });
   it("a stored failed verdict is proven again (ui-2): the recovered clone gives Save back without another draft", async () => {
     env = setupDraftEnv({ rows: [savedRow({ status: "draft", version: 2, saved_version: 1 })] });
     withVerdict({ ok: false, reason: "cl2_not_ready", cl2Ready: false });

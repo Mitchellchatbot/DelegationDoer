@@ -470,6 +470,16 @@ export interface ScanContext {
 }
 
 const URL_RE = /\bhttps?:\/\/[^\s<>"'()[\]{}]+|\bwww\.[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[^\s<>"'()[\]{}]*)?/gi;
+/**
+ * P9 F9: a bare domain, with an optional path ("bit.ly/3xYzQ", "evil.example.com/pay?id=123"), as Gmail and Outlook
+ * turn into a live link. slack-ui's domain rule: labels of letters, digits and inner hyphens, then a letters-only TLD of
+ * 2-24, so "2.5", "e.g." and "Mr." are not domains. Not right after a word character, "@", "." or "-" (inside an
+ * address or a longer name), and not followed by a letter, digit, "@", "_" or "-" (the local part of "jane.doe@x.com"
+ * is not a domain). Matched after URL_RE's alternatives, so a token URL_RE takes is never scanned twice.
+ */
+const BARE_DOMAIN_RE = /(?<![\w@.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}(?![a-z0-9@_-])(?:\/[^\s<>"'()[\]{}]*)?/;
+/** The scan's link tokenizer: URL_RE's two forms, then a bare domain (F9). */
+const SCAN_URL_RE = new RegExp(`${URL_RE.source}|${BARE_DOMAIN_RE.source}`, "gi");
 const EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/gi;
 // A phone needs a separator (or a leading +) between its digit groups; a bare run is a number.
 // Separators are ASCII here: scanForm has already folded every Unicode dash to "-" and slash-likes to "/".
@@ -605,7 +615,10 @@ export function scanDraftOutput(out: DraftModelOutput, ctx: ScanContext): Genera
   const homeDomains = [...ctx.ownDomains, ...ctx.internalDomains];
   const recipients = new Set([...ctx.recipients].map((r) => r.trim().toLowerCase()));
 
-  for (const raw of matchesOf(URL_RE, text)) {
+  // P9 F9: bare domains too. Allowed on his own and the internal domains, or when the instruction (his own) or a DD fact
+  // carries it, exactly as an http(s) link is: never just because it is a recipient's domain, since the hostile sender
+  // is the reply's own recipient.
+  for (const raw of matchesOf(SCAN_URL_RE, text)) {
     const u = normalizeUrl(raw);
     const host = urlHost(raw);
     if ((host !== null && onDomain(host, homeDomains)) || allowed.urls.has(u) || allowedText.includes(u)) continue;

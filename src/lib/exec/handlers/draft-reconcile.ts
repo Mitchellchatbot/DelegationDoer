@@ -34,6 +34,7 @@ import type { ScheduledWork } from "@/lib/exec/scheduler";
 import {
   createNewDraft,
   createReplyDraft,
+  eaTokenConfigured,
   getOutlookDraft,
   getEaReadiness,
   loadScreeningPolicy,
@@ -585,7 +586,10 @@ export const draftReconcileJobHandler: JobHandler = {
   kind: KIND,
   lane: "bulk",
   timeoutMs: DRAFT_RECONCILE_TIMEOUT_MS,
-  run: (ctx: JobContext) => runReconcile(ctx)
+  run: (ctx: JobContext) => runReconcile(ctx),
+  // P9 F18: only a process holding the EA (draft) token claims this kind (its kicks run on the interactive lane under the
+  // same kind, so they follow too); elsewhere it stays queued for the one that does.
+  claimable: () => eaTokenConfigured()
 };
 
 /** Every 5 minutes on the bulk lane while the drafts schema is installed and a row is due (Y4 `when`); 2 attempts. */

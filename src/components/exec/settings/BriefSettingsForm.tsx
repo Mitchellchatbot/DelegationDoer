@@ -7,6 +7,7 @@ import { confirmFocusStep } from "@/lib/exec/ui/focus";
 import { saveBriefSettingsRetryingVersion } from "@/lib/exec/ui/settings-api";
 import { cn } from "@/lib/utils";
 import { useIsTopWindow } from "../drafts/frame-guard";
+import { SWITCH_BUTTON, switchKnobClass, switchTrackClass } from "./SettingsForm";
 
 // The Settings page's Brief controls (P8 contract §3.17.5, C22, M5): build a brief, its time (15-minute steps) and zone
 // (his work zone by default, or one of the twelve listed), suggest check-ins, and send it to Slack in place of the 8am DD
@@ -60,12 +61,11 @@ function Switch({ on, disabled, labelledBy, onClick, name, buttonRef }: {
       data-brief-setting={name}
       disabled={disabled}
       onClick={onClick}
-      className={cn(
-        "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-        on ? "bg-indigo-600" : "bg-slate-300"
-      )}
+      className={SWITCH_BUTTON}
     >
-      <span className={cn("inline-block h-5 w-5 rounded-full bg-white shadow transition-transform", on ? "translate-x-[22px]" : "translate-x-0.5")} />
+      <span aria-hidden className={switchTrackClass(on)}>
+        <span className={switchKnobClass(on)} />
+      </span>
     </button>
   );
 }

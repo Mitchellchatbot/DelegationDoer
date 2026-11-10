@@ -186,6 +186,9 @@ export interface JobHandler {
   /** Hard ceiling for one run; the signal aborts when it elapses. */
   timeoutMs: number;
   run: (ctx: JobContext) => Promise<unknown>;
+  /** P9 seed S4 (contract F18; Area D wires it): false = this process can't run the kind (for example no MISSIVE_EA_TOKEN
+   *  for the draft kinds); jobs.ts leaves it out of p_kinds, so another process claims it. Absent = always claimable. */
+  claimable?: () => boolean;
 }
 
 /** How the runner treats a thrown error. */

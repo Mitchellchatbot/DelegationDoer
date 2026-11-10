@@ -162,7 +162,14 @@ function withSignal<T extends { abortSignal(signal: AbortSignal): T }>(q: T, sig
 // Installations
 // ---------------------------------------------------------------------------
 
-const tokenContext = (principalId: string) => `exec_slack_installations.bot_token:${principalId}`;
+/** P9 F13 (AM-P9-20): the AES-GCM contexts the two Slack token blobs are sealed under (the prefix, then the principal id), exported
+ *  from this one place for the re-seal sweep (slack-token-reseal.ts). slack-oauth.ts keeps its own copies of the same strings;
+ *  slack-token-reseal.test.ts proves they agree. */
+export const SLACK_BOT_TOKEN_CONTEXT = "exec_slack_installations.bot_token:";
+export const SLACK_USER_TOKEN_CONTEXT = "exec_slack_installations.user_token:";
+export const botTokenContext = (principalId: string): string => `${SLACK_BOT_TOKEN_CONTEXT}${principalId}`;
+export const userTokenContext = (principalId: string): string => `${SLACK_USER_TOKEN_CONTEXT}${principalId}`;
+const tokenContext = botTokenContext;
 
 function toInstallationRow(r: Row, op: string): InstallationRow {
   const id = str(r.id);
@@ -1035,8 +1042,6 @@ const READING_MISSING_CODES: ReadonlySet<string> = new Set(["42703", "PGRST204",
 const GATE_LIMIT = 1000;
 const REVOKED_READING_LIMIT = 100;
 
-const userTokenContext = (principalId: string) => `exec_slack_installations.user_token:${principalId}`;
-
 function toReadingHalf(r: Row): ReadingHalf {
   const state = READING_STATES.find((s) => s === r.reading_state) ?? "none";
   const reason = USER_REVOKE_REASONS.find((s) => s === r.user_revoke_reason) ?? null;
@@ -1420,4 +1425,98 @@ export async function installationFactsForSystem(principalId: string, opts?: { s
     typeof row.user_token_enc === "string" && row.user_token_enc.length > 0 && row.user_revoked_at === null &&
     (row.reading_state === "discovering" || row.reading_state === "ready");
   return { schema: true, active, readingActive };
+}
+
+// ---------------------------------------------------------------------------
+// P9 F13 (EXEC_TOKEN_KEY rotation) and F16 (the system DM purge): Area C
+// ---------------------------------------------------------------------------
+
+/** P9 F13: one active installation's two sealed blobs as stored (never opened here), for the re-seal sweep ONLY: the one place a
+ *  sealed blob leaves this module, to slack-token-reseal.ts, which opens and re-seals it in memory and writes it back through
+ *  resealTokenCas. bot / user = the bot and the user (reading) half; null = no blob in that column. */
+export interface SealedTokenRow { installationId: string; principalId: string; bot: string | null; user: string | null }
+
+const blobOf = (v: unknown): string | null => (typeof v === "string" && SEALED_BLOB.test(v) ? v : null);
+
+/** P9 F13: every active installation (revoked_at null) with its sealed blobs, oldest first, ≤ limit (clamped 1..500). P7a's user
+ *  column missing (a P6-only database) → the bot half alone. Schema missing → []. Other errors throw. */
+export async function listSealedTokensForReseal(limit: number, opts?: { signal?: AbortSignal }): Promise<SealedTokenRow[]> {
+  const op = "listSealedTokensForReseal";
+  const signal = opts?.signal;
+  const n = clampInt(limit, 1, MAX_ROWS, 100);
+  const read = (cols: string) => withSignal(db().from(INSTALLATIONS).select(cols).is("revoked_at", null).order("installed_at", { ascending: true }).limit(n), signal);
+  let { data, error } = await read("id,principal_id,bot_token_enc,user_token_enc");
+  if (error && COLUMN_MISSING_CODES.has(pgCodeOf(error) ?? "")) ({ data, error } = await read("id,principal_id,bot_token_enc"));
+  if (error) {
+    signal?.throwIfAborted();
+    if (missing(error)) return [];
+    throw failure(op, error, signal);
+  }
+  const out: SealedTokenRow[] = [];
+  for (const r of Array.isArray(data) ? (data as unknown as Row[]) : []) {
+    const installationId = str(r.id);
+    const principalId = str(r.principal_id);
+    if (!installationId || !SLACK_RE.installationId.test(installationId) || !principalId) continue;
+    out.push({ installationId, principalId, bot: blobOf(r.bot_token_enc), user: blobOf(r.user_token_enc) });
+  }
+  return out;
+}
+
+/** P9 F13: the re-seal's compare-and-set: the column's blob and its key id are replaced only while the row is still active and still
+ *  holds exactly oldBlob (a concurrent reinstall, consent or Disconnect wins; nothing is overwritten). true = this call wrote it.
+ *  Malformed arguments → false with no call. Errors throw (ids and codes only). */
+export async function resealTokenCas(installationId: string, column: "bot" | "user", oldBlob: string, newBlob: string, newKeyId: string): Promise<boolean> {
+  const op = "resealTokenCas";
+  if (!SLACK_RE.installationId.test(String(installationId)) || (column !== "bot" && column !== "user") || blobOf(oldBlob) === null
+      || blobOf(newBlob) === null || !KEY_ID.test(String(newKeyId)) || SEALED_BLOB.exec(newBlob)?.[1] !== newKeyId) {
+    return false;
+  }
+  const patch = column === "bot" ? { bot_token_enc: newBlob, key_id: newKeyId } : { user_token_enc: newBlob, user_key_id: newKeyId };
+  const blobColumn = column === "bot" ? "bot_token_enc" : "user_token_enc";
+  const { data, error } = await db().from(INSTALLATIONS).update(patch).eq("id", installationId).eq(blobColumn, oldBlob).is("revoked_at", null).select("id");
+  if (error) throw failure(op, error);
+  return Array.isArray(data) && data.length > 0;
+}
+
+/** P9 F13 (the System card's "Slack tokens on the previous key" row, seed S3): the key ids inside the principal's active
+ *  installation's stored blobs (the kid a sealed blob names, read without opening it), or null when there is no active
+ *  installation or the P6 schema isn't there. bot / user null = no blob in that column. Errors throw. */
+export async function slackTokenKeyIds(principal: ExecPrincipal, opts?: { signal?: AbortSignal }): Promise<{ bot: string | null; user: string | null } | null> {
+  const op = "slackTokenKeyIds";
+  const pid = requirePrincipal(principal);
+  const signal = opts?.signal;
+  const read = (cols: string) => withSignal(db().from(INSTALLATIONS).select(cols).eq("principal_id", pid).is("revoked_at", null)
+    .order("installed_at", { ascending: false }).limit(1), signal);
+  let { data, error } = await read("id,bot_token_enc,user_token_enc");
+  if (error && COLUMN_MISSING_CODES.has(pgCodeOf(error) ?? "")) ({ data, error } = await read("id,bot_token_enc"));
+  if (error) {
+    signal?.throwIfAborted();
+    if (missing(error)) return null;
+    throw failure(op, error, signal);
+  }
+  const row = Array.isArray(data) ? ((data[0] as unknown as Row | undefined) ?? null) : null;
+  if (row === null) return null;
+  const kid = (v: unknown): string | null => SEALED_BLOB.exec(blobOf(v) ?? "")?.[1] ?? null;
+  return { bot: kid(row.bot_token_enc), user: kid(row.user_token_enc) };
+}
+
+/** P9 F16: every active installation (revoked_at null), its principal enabled or not, oldest first, ≤ limit (clamped 1..500): the
+ *  system DM purge's list. Schema missing → []. Other errors throw. */
+export async function listActiveInstallationsForSystem(limit: number, opts?: { signal?: AbortSignal }): Promise<{ id: string; principalId: string }[]> {
+  const op = "listActiveInstallationsForSystem";
+  const signal = opts?.signal;
+  const { data, error } = await withSignal(db().from(INSTALLATIONS).select("id,principal_id").is("revoked_at", null)
+    .order("installed_at", { ascending: true }).limit(clampInt(limit, 1, MAX_ROWS, 50)), signal);
+  if (error) {
+    signal?.throwIfAborted();
+    if (missing(error)) return [];
+    throw failure(op, error, signal);
+  }
+  const out: { id: string; principalId: string }[] = [];
+  for (const r of Array.isArray(data) ? (data as unknown as Row[]) : []) {
+    const id = str(r.id);
+    const principalId = str(r.principal_id);
+    if (id && SLACK_RE.installationId.test(id) && principalId) out.push({ id, principalId });
+  }
+  return out;
 }

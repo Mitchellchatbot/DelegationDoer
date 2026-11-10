@@ -21,7 +21,8 @@ export const REGENERATE_POLL_MAX_MS = 5 * 60_000;
 
 /**
  * Calls refresh() every intervalMs until maxMs has passed; returns the stop function. Pure apart from the timer
- * functions it is given (tests pass fake ones).
+ * functions it is given (tests pass fake ones). P9 F32: when it stops because maxMs passed (never on a stop() call),
+ * opts.onGiveUp runs once, so the button can stop waiting instead of saying "Regenerating" forever.
  */
 export function startRegeneratePolling(
   refresh: () => void,
@@ -30,7 +31,7 @@ export function startRegeneratePolling(
     clearInterval: (id) => globalThis.clearInterval(id as ReturnType<typeof globalThis.setInterval>),
     now: () => Date.now()
   },
-  opts: { intervalMs?: number; maxMs?: number } = {}
+  opts: { intervalMs?: number; maxMs?: number; onGiveUp?: () => void } = {}
 ): () => void {
   const started = timers.now();
   const max = opts.maxMs ?? REGENERATE_POLL_MAX_MS;
@@ -39,6 +40,7 @@ export function startRegeneratePolling(
     if (stopped) return;
     if (timers.now() - started >= max) {
       stop();
+      opts.onGiveUp?.();
       return;
     }
     refresh();
@@ -142,7 +144,15 @@ export function RegenerateButton({
       sawBusyRef.current = false;
       setWaitingFor(expectedRev);
       stopRef.current?.();
-      stopRef.current = startRegeneratePolling(() => router.refresh());
+      // P9 F32: after REGENERATE_POLL_MAX_MS, stop waiting: Regenerate is offered again with regenerateGaveUp's line.
+      stopRef.current = startRegeneratePolling(() => router.refresh(), undefined, {
+        onGiveUp: () => {
+          stopRef.current = null;
+          sawBusyRef.current = false;
+          setWaitingFor(null);
+          setMessage({ tone: "warn", text: BRIEF_COPY.regenerateGaveUp });
+        }
+      });
     }
   }
 
@@ -159,7 +169,7 @@ export function RegenerateButton({
             setConfirming(true);
           }}
           disabled={pending}
-          className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 shadow-soft hover:border-slate-300 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex min-h-10 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 shadow-soft hover:border-slate-300 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0"
         >
           <RefreshCw className="h-3.5 w-3.5" aria-hidden />
           {BRIEF_COPY.regenerate}
@@ -174,7 +184,7 @@ export function RegenerateButton({
             type="button"
             onClick={() => void regenerate()}
             disabled={pending}
-            className="rounded-lg bg-indigo-600 px-3 py-1 text-[12px] font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex min-h-10 items-center rounded-lg bg-indigo-600 px-3 py-1 text-[12px] font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0"
           >
             {BRIEF_COPY.regenerate}
           </button>
@@ -182,7 +192,7 @@ export function RegenerateButton({
             type="button"
             onClick={() => setConfirming(false)}
             disabled={pending}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-[12px] font-semibold text-slate-700 hover:border-slate-300 disabled:opacity-50"
+            className="inline-flex min-h-10 items-center rounded-lg border border-slate-200 bg-white px-3 py-1 text-[12px] font-semibold text-slate-700 hover:border-slate-300 disabled:opacity-50 sm:min-h-0"
           >
             {BRIEF_COPY.settings.cancel}
           </button>

@@ -33,7 +33,8 @@ export function ExecHeader({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-bold leading-tight text-slate-900">Executive AI Assistant</h1>
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+            {/* P9 F5: text-slate-600 (slate-500 on slate-100 was 4.34:1). */}
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600">
               Private
             </span>
             {brief && <BriefPill pill={brief} />}

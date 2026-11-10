@@ -207,6 +207,8 @@ beforeEach(() => {
     return (v ?? null) as never;
   });
   vi.stubEnv("NEXT_PUBLIC_APP_URL", "");
+  // The process that draws the card holds the EA token (L1: the one serving service); P9 fixer correctness-2 reads it.
+  vi.stubEnv("MISSIVE_EA_TOKEN", "header.payload.signature");
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -254,6 +256,19 @@ describe("PX12: the System card's drafts fields (getOverview)", () => {
     expect(data(o.sections.attention).draftsEnabled).toBe(true);
     // Codes, counts and times only: nothing but exec_jobs goes through the admin client here.
     expect(new Set(tablesRead)).toEqual(new Set(["exec_jobs"]));
+  });
+
+  it("P9 fixer correctness-2: this process has no EA token → the Draft token row says token_missing (rose), whatever the stored row says", async () => {
+    vi.stubEnv("MISSIVE_EA_TOKEN", "");
+    const d = await draftsOf(await getOverview(principal, NOW));
+    expect(d?.eaToken).toEqual({ ok: false, reason: "token_missing", checkedAt: null, expiresAt: null });
+    const html = renderToStaticMarkup(createElement(DraftsRows, { drafts: d ?? null, now: NOW.toISOString(), tz: "America/New_York" }));
+    const row = html.match(/<li data-drafts-row="draft-token"[^>]*>(.*?)<\/li>/)?.[1] ?? "";
+    expect(row).toContain("the drafting key isn&#x27;t set");
+    expect(row).not.toContain("ok, expires");
+    // With the token the stored verdict shows, as before.
+    vi.stubEnv("MISSIVE_EA_TOKEN", "header.payload.signature");
+    expect((await draftsOf(await getOverview(principal, NOW)))?.eaToken).toMatchObject({ ok: true, reason: null });
   });
 
   it("drafts installed but switched off: the rows say off; email items offer no Draft reply", async () => {

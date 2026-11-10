@@ -122,7 +122,9 @@ describe("P6 seed: slack-copy.ts (§3.14)", () => {
 // P6's nineteen. P6's final value before them: 0ea2f1cc6c0c1780c0ead58faeb11db9bd66720fa6d7cbe53cd1e96039627ec7.
 // P8 (Area D, AM-P8-15): homeBrief became "Morning brief: couldn't load its status here. It's in Executive AI in DD." (the null
 // case of the App Home's brief line). P7a's value before it: 9535d534ec69e337c33974fab29235e2cdd3338caf5ccac9a6cd54e51585b435.
-const SLACK_COPY_SHA256 = "2f43473a257d6f13b2092cf4d734e54fe976c3120ba8bec8d9eec8c09c7be7d7";
+// P9 fixer ui-3 (lead copy, contract appendix "P9 fixer amendments" F.2): settingsPasswordNote and connectResult.session_unbound
+// say "password and code" (the step-up since P9 F1/F2). P8's value before it: 2f43473a257d6f13b2092cf4d734e54fe976c3120ba8bec8d9eec8c09c7be7d7.
+const SLACK_COPY_SHA256 = "40a453252e8bdf1c3fca5262442ef23e0ab7b843095488cc7e751aad991bd09b";
 
 interface RoutingRow {
   name: string;

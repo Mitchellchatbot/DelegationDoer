@@ -23,14 +23,21 @@ export function slackTileShown(slack: OverviewSections["slack"] | null | undefin
   return slack !== null && slack !== undefined && slack.ok && slack.data.state === "ok";
 }
 
+/** P9 F30: a count read from a full page of rows is a floor: "200+" (slack-digests.ts slackCatchUpCounts' truncated). */
+export function slackCountValue(n: number, counts: unknown): number | string {
+  const truncated = typeof counts === "object" && counts !== null && (counts as { truncated?: unknown }).truncated === true;
+  return truncated ? `${formatCount(n)}+` : n;
+}
+
 function SlackTile({ slack }: { slack: NonNullable<OverviewSections["slack"]> }) {
   const counts = slack.ok ? slack.data.counts : null;
   if (counts === null) return <Unavailable label={SLACK_INTEL_COPY.overviewTileLabel} tint="amber" />;
+  // P9 F28: "unanswered" is the model's needs-a-response reading, so the count is AI-assessed, like email's.
   return (
     <StatTile
       label={SLACK_INTEL_COPY.overviewTileLabel}
-      value={counts.unanswered}
-      basis="derived"
+      value={slackCountValue(counts.unanswered, counts)}
+      basis="ai"
       sub={SLACK_INTEL_COPY.overviewTileSub}
       tint="amber"
       href="/executive/slack"

@@ -74,8 +74,9 @@ export function BucketTabs({
               onClick={() => setActive(t.key)}
               className={
                 selected
-                  ? "-mb-px shrink-0 border-b-2 border-indigo-600 px-2.5 pb-2 pt-1 text-[12.5px] font-semibold text-indigo-700"
-                  : "-mb-px shrink-0 border-b-2 border-transparent px-2.5 pb-2 pt-1 text-[12.5px] font-medium text-muted hover:text-ink"
+                  ? // P9 F25: 40 px tall below sm.
+                    "-mb-px min-h-10 shrink-0 border-b-2 border-indigo-600 px-2.5 pb-2 pt-1 text-[12.5px] font-semibold text-indigo-700 sm:min-h-0"
+                  : "-mb-px min-h-10 shrink-0 border-b-2 border-transparent px-2.5 pb-2 pt-1 text-[12.5px] font-medium text-muted hover:text-ink sm:min-h-0"
               }
             >
               {t.label}

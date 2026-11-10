@@ -14,7 +14,9 @@ vi.mock("@/lib/exec/audit", async (orig) => ({
 vi.mock("@/lib/exec/principal", async (orig) => ({
   ...(await orig<typeof import("@/lib/exec/principal")>()),
   loadSettings: vi.fn(),
-  countEnabledMailPinnedPrincipals: vi.fn(async () => 1)
+  countEnabledMailPinnedPrincipals: vi.fn(async () => 1),
+  // P9 (F1, F2): the real-gate cases below hand the gate its principal; nothing else in the send path loads one.
+  loadPrincipalForUser: vi.fn()
 }));
 vi.mock("@/lib/exec/sync-state", async (orig) => ({
   ...(await orig<typeof import("@/lib/exec/sync-state")>()),
@@ -44,8 +46,21 @@ vi.mock("@/lib/exec/sources/mail", async (orig) => ({
   listReplyArtifacts: vi.fn()
 }));
 
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { POST as SEND } from "@/app/api/exec/drafts/[id]/send/route";
 import { requireExecPrincipal } from "@/lib/exec/access";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { getSupabaseServer } from "@/lib/supabase-server";
+import { loadPrincipalForUser } from "@/lib/exec/principal";
+import {
+  OWNER_AUTH_ID,
+  fakeFactorAdmin,
+  linkWithOwnFactorToken,
+  passwordOnlyToken,
+  pinFactors,
+  settle,
+  strongToken
+} from "./__tests__/step-up-fixtures";
 import { auditFinish, auditStart } from "@/lib/exec/audit";
 import { enqueueJob } from "@/lib/exec/jobs";
 import { notifyOps } from "@/lib/exec/ops";
@@ -405,6 +420,79 @@ describe("RS13 what an answer may carry", () => {
     const body = JSON.parse(text) as Record<string, unknown>;
     expect(Object.keys(body).every((k) => ["status", "code", "retryAfterSec"].includes(k))).toBe(true);
     for (const secret of [CLIENT, DRAFT_TOKEN, SEND_TOKEN, "bodyHtml", "Thanks, we're on it", "detail", "<sent.1@outlook.com>"]) expect(text).not.toContain(secret);
+  });
+});
+
+// P9 F1, F2: the route's own gate call, run for real (vi.importActual) over a faked session, in front of a reviewed,
+// sendable draft. A leader-minted link session that enrolled its own authenticator (aal2, amr [totp, otp]) or set a new
+// password (aal1, amr [password]) must get the gate's 404: no audit row, no CAS, and no /send to the clone.
+describe("P9 F1, F2: the real step-up in front of POST /send", () => {
+  async function realGate(token: string) {
+    const real = await vi.importActual<typeof import("@/lib/exec/access")>("@/lib/exec/access");
+    vi.mocked(requireExecPrincipal).mockImplementation(real.requireExecPrincipal);
+    vi.stubEnv("EXEC_ENABLED", "true");
+    pinFactors();
+    const auth = {
+      getUser: vi.fn(async () => ({ data: { user: { id: OWNER_AUTH_ID } }, error: null })),
+      getSession: vi.fn(async () => ({ data: { session: { access_token: token } }, error: null }))
+    };
+    vi.mocked(getSupabaseServer).mockReturnValue({ auth } as unknown as ReturnType<typeof getSupabaseServer>);
+    const drafts = env.db.client as { from(table: string): unknown; rpc(name: string, args?: unknown): unknown };
+    const logRows: Record<string, unknown>[] = [];
+    const factors = fakeFactorAdmin();
+    vi.mocked(getSupabaseAdmin).mockReturnValue({
+      auth: factors.auth,
+      from(table: string) {
+        if (table === "users") {
+          const b = { select: () => b, eq: () => b, maybeSingle: async () => ({ data: { id: "u_ep_owner", email: "mitchell@scaledai.org" }, error: null }) };
+          return b;
+        }
+        if (table === "exec_access_log") return { insert: async (row: Record<string, unknown>) => (logRows.push(row), { error: null }) };
+        return drafts.from(table);
+      },
+      rpc: (name: string, args?: unknown) => drafts.rpc(name, args)
+    } as unknown as SupabaseClient);
+    const { PRINCIPAL } = await import("./__tests__/drafts-harness");
+    vi.mocked(loadPrincipalForUser).mockResolvedValue(PRINCIPAL);
+    return { logRows, listFactors: factors.listFactors };
+  }
+
+  it("F1: a link session with its own second factor (aal2, amr [totp, otp]) → 404; no audit row, no CAS, no /send", async () => {
+    const gate = await realGate(linkWithOwnFactorToken("sess-link-mfa", OWNER_AUTH_ID));
+    env.fake.defaultAnswer("send", accepted);
+    const res = await send();
+    expect(res.status).toBe(404);
+    expect(await bodyOf(res)).toEqual({ error: "not found" });
+    expect(vi.mocked(auditStart)).not.toHaveBeenCalled();
+    expect(env.fake.of("send")).toHaveLength(0);
+    expect(env.db.log.filter((l) => l === "update exec_drafts")).toHaveLength(0);
+    expect(rowOf(env.db).status).toBe("saved");
+    expect(gate.listFactors).not.toHaveBeenCalled();
+    await settle();
+    expect(gate.logRows).toEqual([expect.objectContaining({ route: "POST /api/exec/drafts/:id/send step_up_refused", session_id: "sess-link-mfa" })]);
+  });
+
+  it("F2: a password sign-in without his code (aal1) → 404; no audit row, no /send", async () => {
+    const gate = await realGate(passwordOnlyToken("sess-new-password", OWNER_AUTH_ID));
+    env.fake.defaultAnswer("send", accepted);
+    const res = await send();
+    expect(res.status).toBe(404);
+    expect(vi.mocked(auditStart)).not.toHaveBeenCalled();
+    expect(env.fake.of("send")).toHaveLength(0);
+    expect(rowOf(env.db).status).toBe("saved");
+    // Refused at the aal check, before any factor read (P9 fixer: the time binding would refuse this token too, so the read
+    // is what shows the aal2 requirement itself still holds).
+    expect(gate.listFactors).not.toHaveBeenCalled();
+  });
+
+  it("control: his password plus his pinned code passes the same gate, and the one /send goes out (202)", async () => {
+    const gate = await realGate(strongToken("sess-his", OWNER_AUTH_ID));
+    env.fake.answer("send", accepted);
+    const res = await send();
+    expect(res.status).toBe(202);
+    expect(env.fake.of("send")).toHaveLength(1);
+    expect(gate.listFactors).toHaveBeenCalledWith({ userId: OWNER_AUTH_ID });
+    expect(gate.logRows).toEqual([expect.objectContaining({ route: "POST /api/exec/drafts/:id/send", session_id: "sess-his" })]);
   });
 });
 

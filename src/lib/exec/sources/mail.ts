@@ -1684,6 +1684,15 @@ function readEaToken(): string | null {
   return token.length > 0 ? token : null;
 }
 
+/**
+ * P9 F18 (lead decision L1): whether THIS process holds an EA (draft) token. The two draft job handlers use it as their
+ * `claimable`, so a process without the token (a second service that somehow runs the exec loops) leaves exec.draft-generate
+ * and exec.draft-reconcile queued for the one that has it. Says nothing about the token's validity (getEaReadiness does).
+ */
+export function eaTokenConfigured(): boolean {
+  return readEaToken() !== null;
+}
+
 /** First 12 hex of sha256(token): what logs, verdicts and the cache key carry instead of the token. */
 const tokenFingerprint = (token: string): string => createHash("sha256").update(token, "utf8").digest("hex").slice(0, 12);
 const hasOwn = (o: object, key: string): boolean => Object.prototype.hasOwnProperty.call(o, key);
@@ -1813,6 +1822,10 @@ export interface EaReadiness {
  * alert clone-ea-readiness:<reason> (the reason only). A failed DB read of the
  * principal count throws (nothing is cached): the caller's operation fails
  * closed instead of reporting a verdict that wasn't computed.
+ *
+ * P9 F18: a verdict computed WITHOUT a token (this process has no MISSIVE_EA_TOKEN) is never written to the shared
+ * clone-ea/ea-token row: another process that does hold the token owns that verdict, and a token-less process must not
+ * overwrite its "ok". The local cache and the alert stay as they were.
  */
 export async function getEaReadiness(principal: ExecPrincipal, opts: { fresh?: boolean } = {}): Promise<EaReadiness> {
   const token = readEaToken();
@@ -1825,17 +1838,25 @@ export async function getEaReadiness(principal: ExecPrincipal, opts: { fresh?: b
   }
   const verdict = await computeEaReadiness(principal, token, tokenFp, nowMs);
   readinessCache.set(key, { verdict, until: nowMs + (verdict.ok ? EA_OK_TTL_MS : EA_FAIL_TTL_MS) });
-  await persistEaVerdict(principal, verdict);
+  if (token !== null) await persistEaVerdict(principal, verdict);
   if (!verdict.ok && verdict.reason !== null) {
     void notifyOps({ key: `clone-ea-readiness:${verdict.reason}`, title: `EA drafting unavailable: ${verdict.reason}` });
   }
   return verdict;
 }
-/** The cached verdict (expired or not), else the persisted clone-ea/ea-token verdict; never a network call (C19). */
+/**
+ * The cached verdict (expired or not), else the persisted clone-ea/ea-token verdict; never a network call (C19).
+ *
+ * P9 fixer correctness-2: a process without MISSIVE_EA_TOKEN never reads the persisted verdict. Since F18 it never writes
+ * one either, so that row is another process's (or an old) "ok", while every draft request here answers token_missing.
+ * It answers what getEaReadiness would compute here instead (no_pin, multiple_principals or token_missing: every check
+ * before the token's, then the token's; no clone call is reached without a token), not persisted, not alerted.
+ */
 export async function peekEaReadiness(principal: ExecPrincipal): Promise<EaReadiness | null> {
   const token = readEaToken();
   const hit = readinessCache.get(readinessKey(principal, token === null ? null : tokenFingerprint(token)));
   if (hit !== undefined) return hit.verdict;
+  if (token === null) return computeEaReadiness(principal, null, null, Date.now());
   const stored = await getSyncState(principal, EA_SOURCE, EA_TOKEN_KEY, parseEaTokenState);
   return stored === null ? null : readinessFromState(stored.value);
 }

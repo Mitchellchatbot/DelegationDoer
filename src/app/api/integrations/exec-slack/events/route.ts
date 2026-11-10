@@ -25,7 +25,10 @@ import { readRawBody, verifySlackSignature } from "@/lib/exec/slack-verify";
 //   4b. a reading event (a message, or a channel lifecycle event): its facts,
 //      derived in memory by deriveIngestFacts (refs and flags, never text);
 //      P6's own events (Home, uninstall, token revokes, anything else) have none
-//   5. the app and team pins, 6. the feature flag: a 200 drop each
+//   5. the app and team pins, 6. the feature flag: a 200 drop each (P9 F14, lead decision L2: while the flag is off a
+//      deletion-type event still goes on to step 7, since it only removes data and Slack never redelivers a 2xx: a
+//      message deletion, a tombstone, a conversation deleted or left, P6's app_uninstalled / tokens_revoked; the jobs
+//      the ack RPC enqueues wait for re-enable, and kickInteractive does nothing while the flag is off)
 //   6b. the pre-DB filter (C3): noise, hidden, bot posts that mention nobody,
 //      no-op edits: a 200 drop with no database call
 //   6c. a fresh gate snapshot (slack-gate-cache.ts, loaded off the ack path)
@@ -110,6 +113,24 @@ async function withAckTimeout<T>(run: (signal: AbortSignal) => Promise<T>): Prom
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** P9 F14: the lifecycle events that only remove data (the conversation is gone, or the bot left it). */
+const DELETION_LIFECYCLES: ReadonlySet<string> = new Set(["deleted", "left"]);
+/** P9 F14: P6's events that revoke the installation (its uninstall check and purge follow). */
+const P6_DELETION_EVENTS: ReadonlySet<string> = new Set(["app_uninstalled", "tokens_revoked"]);
+
+/**
+ * P9 F14 (lead decision L2): whether an event only removes data, so it goes to the ack RPC even while EXEC_ENABLED is off: a
+ * message deletion (derived kind "delete": message_deleted, and a thread parent's tombstone, a message_changed whose message is
+ * Slack's tombstone), a conversation deleted or left (lifecycle), and P6's app_uninstalled / tokens_revoked. Reads only the
+ * event type and the derived facts.
+ */
+function isDeletionEvent(derived: ReturnType<typeof deriveIngestFacts>, eventType: string): boolean {
+  if (P6_DELETION_EVENTS.has(eventType)) return true;
+  if (derived === null) return false;
+  if (derived.facts.kind === "delete") return true;
+  return derived.facts.kind === "lifecycle" && derived.facts.lc !== null && DELETION_LIFECYCLES.has(derived.facts.lc);
 }
 
 function fromV1(r: AcceptEventResult): AckAnswer {
@@ -240,8 +261,8 @@ export async function POST(req: Request): Promise<Response> {
     return respond(200);
   }
 
-  // 6. The feature flag: off is a 200 drop here (Slack needs a 2xx), not the exec gates' 404.
-  if (!isExecEnabled()) {
+  // 6. The feature flag: off is a 200 drop here (Slack needs a 2xx), not the exec gates' 404. P9 F14: a deletion-type event goes on.
+  if (!isExecEnabled() && !isDeletionEvent(derived, parsed.facts.eventType)) {
     log("info", "dropped", "disabled");
     return respond(200);
   }

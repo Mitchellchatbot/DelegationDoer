@@ -79,10 +79,114 @@ export function usageRow(input: UsageRecordInput): UsageRow {
   };
 }
 
-/** Insert one usage row. Never throws: a failure is logged and alerted instead. */
-export async function recordUsage(input: UsageRecordInput): Promise<void> {
+// ---------------------------------------------------------------------------
+// P9 F22 (contract §1, §5.1): the per-process spend memo
+// ---------------------------------------------------------------------------
+//
+// Every model call re-scanned all of today's exec_ai_usage rows for the daily cap (spentTodayUsd), and every Slack
+// triage or digest call scanned again for the Slack sub-cap (featureSpentTodayUsd). A read's total is now kept for 30 s
+// per (principal, local day, feature filter), and recordUsage adds each row this process writes to every kept total
+// (and every read still in flight) that counts it, so a burst of calls here sees its own spend at once. The caps stay
+// soft under concurrency, as before: spend from another process shows up within 30 s. Keyed by the admin client (one in
+// production: getSupabaseAdmin caches it; a test's fresh fake client starts empty), on globalThis so every copy of this
+// module shares it. chatSpentTodayUsd (agent/budget.ts) is NOT memoized: P5b C17 reads chat spend fresh after every
+// tool round, failing closed.
+
+/** P9 F22: how long a spend read is trusted (plus this process's own recorded spend) before the table is read again. */
+export const SPEND_MEMO_TTL_MS = 30_000;
+const SPEND_MEMO_KEY = "__ddExecSpendMemo";
+
+interface SpendScope {
+  principalId: string;
+  /** null: every feature counts. */
+  features: ReadonlySet<string> | null;
+  /** The local day's start (UTC ms) the total counts from. */
+  sinceMs: number;
+}
+interface SpendEntry extends SpendScope {
+  total: number;
+  /** Date.now() when the read behind it started. */
+  readAtMs: number;
+}
+interface OpenRead extends SpendScope {
+  /** Spend recorded here while the read was in flight (it may or may not see those rows; counting them errs high). */
+  extra: number;
+}
+interface SpendMemo {
+  entries: Map<string, SpendEntry>;
+  open: Set<OpenRead>;
+}
+
+function spendMemos(): WeakMap<object, SpendMemo> {
+  const existing: unknown = Reflect.get(globalThis, SPEND_MEMO_KEY);
+  if (existing instanceof WeakMap) return existing as WeakMap<object, SpendMemo>;
+  const fresh = new WeakMap<object, SpendMemo>();
+  Reflect.set(globalThis, SPEND_MEMO_KEY, fresh);
+  return fresh;
+}
+
+function spendMemoFor(client: object): SpendMemo {
+  const memos = spendMemos();
+  let m = memos.get(client);
+  if (!m) {
+    m = { entries: new Map(), open: new Set() };
+    memos.set(client, m);
+  }
+  return m;
+}
+
+/** Test seam: forget every kept spend total. */
+export function __resetSpendMemoForTests(): void {
+  Reflect.set(globalThis, SPEND_MEMO_KEY, new WeakMap<object, SpendMemo>());
+}
+
+/** Whether a row this process records at `atMs` is one the scope's read counts (created_at >= since, no upper bound). */
+function counts(scope: SpendScope, principalId: string | null, feature: string, atMs: number): boolean {
+  return scope.principalId === principalId && (scope.features === null || scope.features.has(feature)) && atMs >= scope.sinceMs;
+}
+
+/** recordUsage's half: this process's spend joins every kept total and open read that counts it. */
+function addToSpendMemo(client: object, row: UsageRow, atMs: number): void {
+  if (row.principal_id === null || !(row.cost_usd > 0)) return;
+  const m = spendMemos().get(client);
+  if (!m) return;
+  for (const e of m.entries.values()) if (counts(e, row.principal_id, row.feature, atMs)) e.total += row.cost_usd;
+  for (const o of m.open) if (counts(o, row.principal_id, row.feature, atMs)) o.extra += row.cost_usd;
+}
+
+/** The kept total for this scope while it is under SPEND_MEMO_TTL_MS old; else `read()`, kept. A failed read keeps nothing. */
+async function memoizedSpend(principalId: string, sinceMs: number, features: readonly string[] | null, read: () => Promise<number>): Promise<number> {
+  const client: unknown = getSupabaseAdmin();
+  if (typeof client !== "object" || client === null) return read();
+  const m = spendMemoFor(client);
+  const set = features === null ? null : new Set(features);
+  const key = `${principalId}|${sinceMs}|${set === null ? "*" : [...set].sort().join(",")}`;
+  const nowMs = Date.now();
+  const hit = m.entries.get(key);
+  if (hit !== undefined && nowMs >= hit.readAtMs && nowMs - hit.readAtMs < SPEND_MEMO_TTL_MS) return hit.total;
+  const open: OpenRead = { principalId, features: set, sinceMs, extra: 0 };
+  m.open.add(open);
   try {
-    const { error } = await getSupabaseAdmin().from("exec_ai_usage").insert(usageRow(input));
+    const total = (await read()) + open.extra;
+    m.entries.set(key, { principalId, features: set, sinceMs, total, readAtMs: nowMs });
+    return total;
+  } finally {
+    m.open.delete(open);
+  }
+}
+
+/**
+ * Insert one usage row. Never throws: a failure is logged and alerted instead. P9 F22: the row's cost also joins this
+ * process's spend memo (written or not: the spend happened, and the memo errs on the side of the cap).
+ */
+export async function recordUsage(input: UsageRecordInput): Promise<void> {
+  let client: object | null = null;
+  let row: UsageRow | null = null;
+  try {
+    row = usageRow(input);
+    const admin = getSupabaseAdmin();
+    client = admin;
+    const { error } = await admin.from("exec_ai_usage").insert(row);
     if (error) throw new Error(error.message);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -94,6 +198,8 @@ export async function recordUsage(input: UsageRecordInput): Promise<void> {
       title: "exec_ai_usage insert failed, so the daily cost cap can't see this spend",
       detail: `${input.feature} on ${input.model}: ${reason}`
     });
+  } finally {
+    if (client !== null && row !== null) addToSpendMemo(client, row, Date.now());
   }
 }
 
@@ -114,6 +220,9 @@ function dollars(v: unknown): number {
  * opts.feature (P5a C29) counts one feature's rows only (the DD text
  * triage's daily ceiling; P5b's chat sub-cap): the query gains
  * .eq("feature", feature). Without it the query is unchanged.
+ *
+ * P9 F22: served from the 30 s spend memo (plus this process's own recorded spend) when it holds this principal, day and
+ * filter; a read only otherwise.
  */
 export async function spentTodayUsd(
   principalId: string,
@@ -121,8 +230,15 @@ export async function spentTodayUsd(
   now: Date = new Date(),
   opts: { feature?: ExecLlmFeature } = {}
 ): Promise<number> {
-  const since = startOfLocalDayUtc(now, tz).toISOString();
+  const since = startOfLocalDayUtc(now, tz);
   const feature = opts.feature;
+  return memoizedSpend(principalId, since.getTime(), feature === undefined ? null : [feature], () =>
+    readSpentToday(principalId, since.toISOString(), feature)
+  );
+}
+
+/** spentTodayUsd's read: keyset pages over the principal's rows since `since` (one feature's when given). */
+async function readSpentToday(principalId: string, since: string, feature: ExecLlmFeature | undefined): Promise<number> {
   let total = 0;
   let afterId = 0;
   // Keyset pages on id: stable while rows are being inserted, unlike offsets.
@@ -147,7 +263,8 @@ export async function spentTodayUsd(
  * P7a (§3.20.1, C17): USD spent today (principal-local day, P2a's day rule) by the features in `features` (the Slack
  * sub-cap sums SLACK_CAP_FEATURES): spentTodayUsd's keyset loop with .in("feature", features), on opts.signal. An empty
  * list spends nothing (no query). Throws on a read error (callers fail closed); the error names the table only, never
- * the database's text, the principal or a value.
+ * the database's text, the principal or a value. P9 F22: served from the 30 s spend memo like spentTodayUsd (an already
+ * aborted signal still throws first).
  */
 export async function featureSpentTodayUsd(
   principalId: string,
@@ -158,8 +275,13 @@ export async function featureSpentTodayUsd(
 ): Promise<number> {
   const list = Array.isArray(features) ? [...new Set(features.filter((f): f is ExecLlmFeature => typeof f === "string" && f.length > 0))] : [];
   if (list.length === 0) return 0;
-  const since = startOfLocalDayUtc(now, tz).toISOString();
-  const signal = opts.signal;
+  opts.signal?.throwIfAborted();
+  const since = startOfLocalDayUtc(now, tz);
+  return memoizedSpend(principalId, since.getTime(), list, () => readFeatureSpent(principalId, since.toISOString(), list, opts.signal));
+}
+
+/** featureSpentTodayUsd's read: keyset pages over the principal's rows of `list` since `since`. */
+async function readFeatureSpent(principalId: string, since: string, list: readonly ExecLlmFeature[], signal: AbortSignal | undefined): Promise<number> {
   let total = 0;
   let afterId = 0;
   for (let page = 0; page < MAX_PAGES; page++) {

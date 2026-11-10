@@ -26,6 +26,7 @@ import {
   createNewDraft,
   createReplyDraft,
   deleteOutlookDraft,
+  eaTokenConfigured,
   EaUnavailableError,
   findSentCopy,
   getEaReadiness,
@@ -470,6 +471,39 @@ describe("MA07 the persisted ea-token verdict", () => {
     expect(vi.mocked(notifyOps).mock.calls.map((c) => c[0].key)).toEqual(["clone-ea-readiness:cl2_not_ready"]);
     expect(JSON.stringify(vi.mocked(notifyOps).mock.calls)).not.toContain(DRAFT_TOKEN);
   });
+
+  // P9 F18 (lead decision L1): a process without the EA token must not overwrite the shared verdict another process owns.
+  it("P9 F18: a verdict computed without a token writes no ea-token row; it is still cached and alerted; with the token it is written", async () => {
+    delete process.env.MISSIVE_EA_TOKEN;
+    const verdict = await getEaReadiness(principal);
+    expect([verdict.ok, verdict.reason]).toEqual([false, "token_missing"]);
+    expect(putSyncState).not.toHaveBeenCalled();
+    expect(vi.mocked(notifyOps).mock.calls.map((c) => c[0].key)).toEqual(["clone-ea-readiness:token_missing"]);
+    // The local cache still holds it (the peek answers it without reading the persisted row).
+    vi.mocked(getSyncState).mockClear();
+    expect(await peekEaReadiness(principal)).toMatchObject({ ok: false, reason: "token_missing" });
+    expect(getSyncState).not.toHaveBeenCalled();
+    // A fresh check without the token: still no write. "token === null" covers a blank value too.
+    process.env.MISSIVE_EA_TOKEN = "   ";
+    await getEaReadiness(principal, { fresh: true });
+    expect(putSyncState).not.toHaveBeenCalled();
+    // The token back: the verdict is written as before.
+    process.env.MISSIVE_EA_TOKEN = DRAFT_TOKEN;
+    await getEaReadiness(principal, { fresh: true });
+    expect(putSyncState).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(putSyncState).mock.calls[0].slice(1, 3)).toEqual(["clone-ea", "ea-token"]);
+  });
+
+  it("P9 F18: eaTokenConfigured is whether this process holds the EA token (trimmed), never a network call", () => {
+    expect(eaTokenConfigured()).toBe(true);
+    process.env.MISSIVE_EA_TOKEN = "  ";
+    expect(eaTokenConfigured()).toBe(false);
+    delete process.env.MISSIVE_EA_TOKEN;
+    expect(eaTokenConfigured()).toBe(false);
+    process.env.MISSIVE_EA_TOKEN = "x";
+    expect(eaTokenConfigured()).toBe(true);
+    expect(fake.requests).toHaveLength(0);
+  });
 });
 
 describe("MA08 peekEaReadiness", () => {
@@ -496,6 +530,30 @@ describe("MA08 peekEaReadiness", () => {
     expect(await peekEaReadiness(principal)).toEqual(live);
     expect(getSyncState).not.toHaveBeenCalled();
     expect(fake.requests.map((r) => r.route)).toEqual(["status", "auth_me"]);
+  });
+});
+
+describe("MA08b (P9 fixer correctness-2) peekEaReadiness in a process without the EA token", () => {
+  it("answers token_missing (never the stored ok another process wrote), not written, not alerted, no clone call; with the token, the stored verdict", async () => {
+    const storedOk = {
+      value: { ok: true, reason: null, checkedAt: "2026-11-05T12:00:00.000Z", cl2Ready: true, cl2Send: "all", sendEnabled: true, expiresAt: null, tokenFp: "0123456789ab" },
+      rev: 4
+    };
+    vi.mocked(getSyncState).mockResolvedValue(storedOk as never);
+    delete process.env.MISSIVE_EA_TOKEN;
+    invalidateEaReadiness();
+    expect(await peekEaReadiness(principal)).toMatchObject({ ok: false, reason: "token_missing", cl2Ready: null, sendEnabled: false, tokenFp: null });
+    expect(vi.mocked(getSyncState).mock.calls.filter((c) => c[2] === "ea-token")).toEqual([]);
+    expect(putSyncState).not.toHaveBeenCalled();
+    expect(notifyOps).not.toHaveBeenCalled();
+    expect(fake.requests).toHaveLength(0);
+    // The checks before the token's still come first: no pinned account → no_pin.
+    expect(await peekEaReadiness(mint([]))).toMatchObject({ ok: false, reason: "no_pin" });
+    // The token back: the persisted verdict, as MA08.
+    process.env.MISSIVE_EA_TOKEN = DRAFT_TOKEN;
+    invalidateEaReadiness();
+    expect(await peekEaReadiness(principal)).toMatchObject({ ok: true, reason: null, cl2Send: "all" });
+    expect(fake.requests).toHaveLength(0);
   });
 });
 

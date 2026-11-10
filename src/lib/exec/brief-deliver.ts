@@ -24,7 +24,7 @@ import { notifyOps } from "@/lib/exec/ops";
 import { loadSettings } from "@/lib/exec/principal";
 import { appOrigin } from "@/lib/exec/refs";
 import { asSlackApiError, dmPost, dmRead, errLabel } from "@/lib/exec/slack-dm";
-import { openActiveInstallation } from "@/lib/exec/slack-install";
+import { openActiveInstallation, recordSlackPost } from "@/lib/exec/slack-install";
 import type { OpenInstallation, SlackMessageParts } from "@/lib/exec/slack-types";
 import { listUsers } from "@/lib/exec/sources/dd";
 import { findDmMessageByMetadata, SlackChannelRefusedError } from "@/lib/exec/sources/slack";
@@ -40,7 +40,9 @@ import { NonRetryableError, type ExecPrincipal } from "@/lib/exec/types";
 //   * The DM is rendered from the row catchUpBriefScrubs re-read after the post-write scrubs, through its screen (C31); a
 //     failed screen keeps the brief in DD. The render happens before the CAS (it is pure), so a render failure never counts
 //     a post.
-//   * Every assistant-bot DM is a P6 ledger row of kind "note" (p8-bindings.md AM-P8-2).
+//   * Every assistant-bot DM is a P6 ledger row of kind "note" (p8-bindings.md AM-P8-2). P9 F12 (a): a post the metadata
+//     lookup proves landed (an ambiguous post, or a stale delivering row) gets its ledger row here, since dmPost threw before
+//     it could write one (best-effort: recordSlackPost never throws and logs codes only).
 //   * Results and logs carry ids, codes and counts only (§0.3 rule 4).
 
 export type BriefDeliverResult =
@@ -224,6 +226,14 @@ async function markDelivered(row: Pick<BriefRow, "id">, inst: OpenInstallation, 
   return moved;
 }
 
+/** P9 F12 (a): the ledger row (P6 C43, kind "note") of a brief DM the metadata lookup found: the post's own write never ran (dmPost
+ *  threw first). Written whatever the CAS then answers (the DM is in Slack either way), so the DM purge deletes it at chat retention
+ *  and RPC 7 v2 keeps its brief's refs while it is there. Never throws (recordSlackPost logs ids and codes on a failure). */
+async function recordFoundPost(principal: ExecPrincipal, inst: OpenInstallation, ts: string): Promise<void> {
+  await recordSlackPost(principal, { installationId: inst.row.id, channelId: inst.row.dmChannelId, ts, threadTs: null, kind: "note", messageId: null,
+    refId: null });
+}
+
 async function enqueueLate(principal: ExecPrincipal, row: Pick<BriefRow, "id" | "localDate" | "rev">): Promise<void> {
   try {
     await enqueueJob({
@@ -341,7 +351,9 @@ async function postLoop(principal: ExecPrincipal, inst: OpenInstallation, row: B
     }
   };
   let counted = row.postAttempts + 1;
-  const delivered = async (ts: string): Promise<BriefDeliverResult> => {
+  /** found: the ts came from the metadata lookup (P9 F12 (a): its ledger row is written here). */
+  const delivered = async (ts: string, found = false): Promise<BriefDeliverResult> => {
+    if (found) await recordFoundPost(principal, inst, ts);
     const moved = await markDelivered(row, inst, ts);
     // P8 fixer security-4: the DM was rendered from this row, after its catch-up's scrubs; those are already in the DM, so they
     // need no C15 follow-up. Only a scrub later than the render (a newer scrubbed_at) replaces the DM.
@@ -357,6 +369,16 @@ async function postLoop(principal: ExecPrincipal, inst: OpenInstallation, row: B
   };
   const unknown = async (reason: BriefUnknownReason): Promise<BriefDeliverResult> => {
     const moved = await markUnknown(principal, row, reason);
+    // P9 fixer correctness-1 (as `delivered` above, P8 fixer security-4): any copy of this DM that did land was rendered from
+    // this row, after its catch-up's scrubs, so those scrubs need no F12 (b) follow-up; a later scrub (a newer scrubbed_at)
+    // still gets one. resolveDelivering is different: its row's scrub may postdate the render, so it records nothing.
+    if (moved && row.scrubbedAt !== null) {
+      try {
+        await markDmFollowed(row.id, row.scrubbedAt);
+      } catch (err) {
+        console.warn(`[exec-brief] rendered scrub not recorded (brief ${row.id}): ${codeOf(err)}`);
+      }
+    }
     return result("delivery_unknown", moved ? "delivery_unknown" : null, reason, counted, "none");
   };
   const pageOnly = async (reason: BriefPageOnlyReason, code: string): Promise<BriefDeliverResult> => {
@@ -389,14 +411,14 @@ async function postLoop(principal: ExecPrincipal, inst: OpenInstallation, row: B
     await wait(BRIEF_LIMITS.ambiguityRecheckDelayMs, signal);
     const hit = await lookupBriefMessage(inst, row, startedAtMs);
     if ("failed" in hit) return unknown("lookup_failed");
-    if (hit.found) return delivered(hit.ts);
+    if (hit.found) return delivered(hit.ts, true);
     // Proven absent: one more post, only if RPC 3 still counts one (never a third).
     if (!(await countAnother())) return unknown("ambiguous_twice");
     outcome = await post();
     if (outcome.kind === "ambiguous") {
       await wait(BRIEF_LIMITS.ambiguityRecheckDelayMs, signal);
       const again = await lookupBriefMessage(inst, row, startedAtMs);
-      if ("found" in again && again.found) return delivered(again.ts);
+      if ("found" in again && again.found) return delivered(again.ts, true);
       return unknown("failed" in again ? "lookup_failed" : "ambiguous_twice");
     }
   }
@@ -456,6 +478,7 @@ async function resolveDelivering(principal: ExecPrincipal, row: BriefRow): Promi
     const startedMs = row.deliveryStartedAt !== null && Number.isFinite(Date.parse(row.deliveryStartedAt)) ? Date.parse(row.deliveryStartedAt) : Date.parse(row.updatedAt);
     const hit = await lookupBriefMessage(inst, row, Number.isFinite(startedMs) ? startedMs : Date.now());
     if ("found" in hit && hit.found) {
+      await recordFoundPost(principal, inst, hit.ts);
       await markDelivered(row, inst, hit.ts);
       return;
     }

@@ -155,7 +155,7 @@ export function ChatMessage({
     const seconds = (Date.parse(nowIso) - Date.parse(message.createdAt)) / 1000;
     body = (
       <p className="inline-flex items-center gap-1.5 text-[12.5px] text-muted">
-        <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" aria-hidden />
+        <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin text-indigo-500" aria-hidden />
         {/* ui-4: the counter ticks every second; a screen reader gets the static line instead. */}
         <span aria-hidden>{stillWorkingText(Number.isFinite(seconds) ? seconds : 0)}</span>
         <span className="sr-only">{STILL_WORKING_SR}</span>

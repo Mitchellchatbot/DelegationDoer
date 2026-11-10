@@ -67,7 +67,9 @@ import type { ExecPrincipal, JobContext, JobHandler } from "@/lib/exec/types";
 //      finance mute since step 1 → nothing is sent), the model.
 //   8  The writer (the marker race, the opt-out, the class, the excerpt rule).
 //   9  Permalinks for up to 10 surfacing messages (C32).
-// Returns counts and codes only.
+// Returns counts and codes only. P9 §3.2 (owner question Q5, deferred): the result counts his own commitments the model
+// found (direction mitchell_owes) and how many carried a due date (ownCommitments / ownCommitmentsDue), so the team can
+// decide whether to store them; the writer still refuses them (refused_missing: his own messages have no message row, N7).
 
 const KIND = SLACK_READ_JOB_KINDS.triage;
 const DM_OR_MENTION = REASON.dm | REASON.mention;
@@ -82,7 +84,9 @@ export type SlackTriageResult =
   | { skipped: string; written?: number }
   | { degraded: "budget"; written: number; unassessed: number; refusedDeleted: number }
   | { retriage: "unchanged"; written: number }
-  | { written: number; assessed: number; unassessed: number; refusedDeleted: number; model: string; deleted: number; skipped: number };
+  | { written: number; assessed: number; unassessed: number; refusedDeleted: number; model: string; deleted: number; skipped: number;
+      /** P9 §3.2: his own commitments the model found (mitchell_owes), and how many of those carried a due date (counts only). */
+      ownCommitments: number; ownCommitmentsDue: number };
 
 interface TriagePayload { installationId: string; channel: string; root: string; mode: "window" | "retriage"; ts?: string }
 
@@ -394,7 +398,8 @@ async function runTriage(ctx: JobContext): Promise<SlackTriageResult> {
   // 9.
   if (w.written > 0) await fetchPermalinks(principal, ri, channel, rows, signal);
 
-  // 10.
+  // 10. (P9 §3.2: his own commitments, counted only.)
+  const own = rows.filter((r) => r.kind === "commitment" && r.direction === "mitchell_owes");
   return {
     written: w.written,
     assessed,
@@ -402,7 +407,9 @@ async function runTriage(ctx: JobContext): Promise<SlackTriageResult> {
     refusedDeleted: w.refusedDeleted,
     model: outcome.kind,
     deleted,
-    skipped: outcomes.filter((o) => o.state === "skipped").length
+    skipped: outcomes.filter((o) => o.state === "skipped").length,
+    ownCommitments: own.length,
+    ownCommitmentsDue: own.filter((r) => r.due_at !== null).length
   };
 }
 

@@ -118,7 +118,7 @@ export function ProjectSlackSection({
         {s.mentions.length > 0 && (
           <details data-project-slack-group="mentions" className="group border-t border-slate-100 first:border-t-0">
             <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 px-4 py-3 text-[12.5px] font-semibold text-ink">
-              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform group-open:rotate-180" aria-hidden />
+              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform motion-reduce:transition-none group-open:rotate-180" aria-hidden />
               <span>{SLACK_INTEL_COPY.projectMentions}</span>
               <span className="tabular-nums text-muted">{formatCount(s.mentions.length)}</span>
               <BasisLabel basis="ai" />

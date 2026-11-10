@@ -69,11 +69,12 @@ export function rowButtons(item: Pick<AttentionFeedItem, "status" | "snoozeUntil
   }
 }
 
+// P9 F25: below sm every row control is a 40 px tap target (they were about 29 px); unchanged from sm up.
 const BUTTON =
-  "inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[12px] font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex min-h-10 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1 text-[12px] font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:px-2.5";
 const MENU_SUMMARY = cn(BUTTON, "cursor-pointer list-none [&::-webkit-details-marker]:hidden");
 const MENU_ITEM =
-  "rounded-md border border-slate-200 bg-white px-2 py-1 text-[11.5px] font-medium text-slate-700 hover:border-indigo-200 hover:text-indigo-800 disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex min-h-10 items-center rounded-md border border-slate-200 bg-white px-3 py-1 text-[11.5px] font-medium text-slate-700 hover:border-indigo-200 hover:text-indigo-800 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:px-2";
 const SAVING = "Saving…";
 
 /** The row's aria-live line: the message, and Undo on an out-of-view stub. */
@@ -87,7 +88,7 @@ export function FeedMessageLine({ message, onUndo, pending }: { message: FeedMes
           data-undo
           onClick={onUndo}
           disabled={pending}
-          className="ml-2 inline-flex items-center gap-1 font-semibold text-indigo-700 underline-offset-2 hover:underline disabled:opacity-50"
+          className="ml-2 inline-flex min-h-10 items-center gap-1 px-1 font-semibold text-indigo-700 underline-offset-2 hover:underline disabled:opacity-50 sm:min-h-0 sm:px-0"
         >
           <Undo2 className="h-3 w-3" aria-hidden />
           {pending ? SAVING : "Undo"}
@@ -151,7 +152,7 @@ export function FeedRowActions({
               <details key="snooze" data-snooze-menu className="group max-w-full">
                 <summary data-action="snooze" aria-disabled={busy || undefined} className={cn(MENU_SUMMARY, busy && "pointer-events-none opacity-50")}>
                   Snooze
-                  <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" aria-hidden />
+                  <ChevronDown className="h-3 w-3 transition-transform motion-reduce:transition-none group-open:rotate-180" aria-hidden />
                 </summary>
                 <div role="group" aria-label="Snooze until" className="flex flex-wrap gap-1.5 pt-1.5">
                   {presets.map((p) => (
@@ -172,7 +173,7 @@ export function FeedRowActions({
           <a
             href={askAiHref}
             data-exec-ask-ai={item.id}
-            className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-white px-2.5 py-1 text-[12px] font-semibold text-indigo-700 hover:border-indigo-300"
+            className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-indigo-200 bg-white px-3 py-1 text-[12px] font-semibold text-indigo-700 hover:border-indigo-300 sm:min-h-0 sm:px-2.5"
           >
             <Sparkles className="h-3 w-3" aria-hidden />
             Ask AI
@@ -189,7 +190,7 @@ export function FeedRowActions({
           <summary data-feedback="down" aria-disabled={busy || undefined} className={cn(MENU_SUMMARY, "font-medium", busy && "pointer-events-none opacity-50")}>
             <ThumbsDown className="h-3 w-3" aria-hidden />
             Not useful
-            <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" aria-hidden />
+            <ChevronDown className="h-3 w-3 transition-transform motion-reduce:transition-none group-open:rotate-180" aria-hidden />
           </summary>
           <div role="group" aria-label="Why not useful" className="flex flex-wrap gap-1.5 pt-1.5">
             {NOT_USEFUL_REASONS.map((reason) => (

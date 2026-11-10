@@ -133,11 +133,38 @@ function daysBetween(fromYmd: string, toYmd: string): number {
   return Number.isFinite(a) && Number.isFinite(b) ? Math.round((b - a) / DAY_MS) : 0;
 }
 
+/** opts.signal linked to a deadline of its own, built by hand (no AbortSignal.any: P3 §0). timedOut() tells the two apart. */
+function linkedDeadline(parent: AbortSignal, ms: number): { signal: AbortSignal; timedOut: () => boolean; dispose: () => void } {
+  const controller = new AbortController();
+  let fired = false;
+  const onParent = () => controller.abort(parent.reason);
+  if (parent.aborted) controller.abort(parent.reason);
+  else parent.addEventListener("abort", onParent, { once: true });
+  const timer = setTimeout(() => {
+    if (controller.signal.aborted) return;
+    fired = true;
+    const err = new Error("the check-in lookups' deadline passed");
+    err.name = "TimeoutError";
+    controller.abort(err);
+  }, Math.max(0, ms));
+  return {
+    signal: controller.signal,
+    timedOut: () => fired,
+    dispose: () => {
+      clearTimeout(timer);
+      parent.removeEventListener("abort", onParent);
+    }
+  };
+}
+
 /** C8, C9. Reads listUsers, listDepartments, listOpenTasks (P2b), listRecentCheckinRecipients / listLegacyCheckinRecipients
  *  (5 local days), then lookupUserByEmail(botToken, users.email) in ranked order until 3 resolve or 8 lookups were made.
- *  opts.teamId (additive): the installation's team; a Slack account on another team is skipped (C8). */
+ *  opts.teamId (additive): the installation's team; a Slack account on another team is skipped (C8).
+ *  P9 F20: the lookups run under their own bound, opts.lookupsMs (default BRIEF_LIMITS.checkinLookupsMs, 10 s, from the
+ *  first lookup): when it passes, the loop stops and keeps the people resolved so far, so slow Slack lookups never eat
+ *  the model call's time. opts.signal (the caller's abort) still ends the whole selection. */
 export async function selectCheckinRecipients(principal: ExecPrincipal, botToken: string,
-  opts: { now: Date; localDate: string; tz: string; signal: AbortSignal; teamId?: string | null }): Promise<CheckinSelection> {
+  opts: { now: Date; localDate: string; tz: string; signal: AbortSignal; teamId?: string | null; lookupsMs?: number }): Promise<CheckinSelection> {
   const { localDate, tz, signal } = opts;
   if (typeof localDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(localDate)) throw new RangeError("selectCheckinRecipients: localDate must be YYYY-MM-DD");
   const skipped = { leaders: 0, owner: 0, noWork: 0, recent: 0, noSlack: 0, guest: 0 };
@@ -209,38 +236,48 @@ export async function selectCheckinRecipients(principal: ExecPrincipal, botToken
 
   const candidates: CheckinCandidate[] = [];
   let lookups = 0;
-  for (const e of eligible) {
-    if (candidates.length >= BRIEF_LIMITS.checkinsPerBrief || lookups >= BRIEF_LIMITS.checkinLookupsMax) break;
-    lookups += 1;
-    let found: Awaited<ReturnType<typeof lookupUserByEmail>>;
-    try {
-      // C8: the exec bot's token and the DD users.email only (never a slack_email override).
-      found = await lookupUserByEmail(botToken, e.user.email.trim(), { signal });
-    } catch (err) {
-      if (isAbort(err, signal)) throw err;
-      if (err instanceof SlackApiError && err.errorClass === "auth") throw err;
-      skipped.noSlack += 1;
-      continue;
+  const lookupsMs = typeof opts.lookupsMs === "number" && Number.isFinite(opts.lookupsMs) && opts.lookupsMs >= 0 ? opts.lookupsMs : BRIEF_LIMITS.checkinLookupsMs;
+  const bound = eligible.length > 0 ? linkedDeadline(signal, lookupsMs) : null;
+  try {
+    for (const e of eligible) {
+      if (candidates.length >= BRIEF_LIMITS.checkinsPerBrief || lookups >= BRIEF_LIMITS.checkinLookupsMax) break;
+      // P9 F20: the lookups' own bound passed: keep who resolved so far.
+      if (bound !== null && bound.timedOut()) break;
+      lookups += 1;
+      let found: Awaited<ReturnType<typeof lookupUserByEmail>>;
+      try {
+        // C8: the exec bot's token and the DD users.email only (never a slack_email override).
+        found = await lookupUserByEmail(botToken, e.user.email.trim(), { signal: bound?.signal ?? signal });
+      } catch (err) {
+        if (signal.aborted) throw err;
+        if (bound !== null && bound.timedOut()) break;
+        if (isAbort(err, signal)) throw err;
+        if (err instanceof SlackApiError && err.errorClass === "auth") throw err;
+        skipped.noSlack += 1;
+        continue;
+      }
+      if (found === null || found.deleted || found.isBot || (typeof opts.teamId === "string" && found.teamId !== opts.teamId)) {
+        skipped.noSlack += 1;
+        continue;
+      }
+      if (found.isRestricted === true || found.isUltraRestricted === true) {
+        skipped.guest += 1;
+        continue;
+      }
+      const departmentsOf = e.user.departmentIds.map((id) => deptName.get(id)).filter((n): n is string => typeof n === "string")
+        .map((n) => cleanLabel(n, DEPARTMENT_NAME_MAX)).filter((n) => n.length > 0).slice(0, DEPARTMENTS_MAX);
+      candidates.push({
+        userId: e.user.id,
+        firstName: firstNameOf(e.user.name),
+        departments: departmentsOf,
+        role: e.user.role === "department_head" || heads.has(e.user.id) ? "department_head" : "worker",
+        daysSinceLast: e.daysSinceLast,
+        openTasks: e.openTasks,
+        slackUserId: found.id
+      });
     }
-    if (found === null || found.deleted || found.isBot || (typeof opts.teamId === "string" && found.teamId !== opts.teamId)) {
-      skipped.noSlack += 1;
-      continue;
-    }
-    if (found.isRestricted === true || found.isUltraRestricted === true) {
-      skipped.guest += 1;
-      continue;
-    }
-    const departmentsOf = e.user.departmentIds.map((id) => deptName.get(id)).filter((n): n is string => typeof n === "string")
-      .map((n) => cleanLabel(n, DEPARTMENT_NAME_MAX)).filter((n) => n.length > 0).slice(0, DEPARTMENTS_MAX);
-    candidates.push({
-      userId: e.user.id,
-      firstName: firstNameOf(e.user.name),
-      departments: departmentsOf,
-      role: e.user.role === "department_head" || heads.has(e.user.id) ? "department_head" : "worker",
-      daysSinceLast: e.daysSinceLast,
-      openTasks: e.openTasks,
-      slackUserId: found.id
-    });
+  } finally {
+    bound?.dispose();
   }
   return { candidates, skipped };
 }
@@ -323,8 +360,9 @@ function outputText(message: { content: readonly { type: string; text?: unknown 
   return out;
 }
 
-/** One non-streamed callModel({ feature: "checkin" }) (B-P8-8: the only one); null on a refusal, a cut-off answer or any error
- *  but the caller's abort. */
+/** One callModel({ feature: "checkin" }) (B-P8-8: the only one); null on a refusal, a cut-off answer or any error but the
+ *  caller's abort. P9 F20: streamed, so a call its deadline aborts still records the tokens it was billed (exec_ai_usage,
+ *  stop reason "aborted"); a non-streamed abort recorded nothing. */
 async function callCheckinModel(principal: ExecPrincipal, text: string, signal: AbortSignal): Promise<string | null> {
   const request = buildExecRequest({
     feature: "checkin",
@@ -334,7 +372,7 @@ async function callCheckinModel(principal: ExecPrincipal, text: string, signal: 
     outputSchema: structuredClone(CHECKIN_OUTPUT_SCHEMA) as Record<string, unknown>
   });
   try {
-    const result = await callModel({ principal, feature: "checkin", request, signal, stream: false });
+    const result = await callModel({ principal, feature: "checkin", request, signal, stream: true });
     if (result.refused || result.truncated) return null;
     return outputText(result.message as unknown as { content: { type: string; text?: unknown }[] });
   } catch (err) {
@@ -344,7 +382,7 @@ async function callCheckinModel(principal: ExecPrincipal, text: string, signal: 
   }
 }
 
-/** One callModel({ feature: "checkin" }) (Opus 5.5, effort medium, non-streamed) over the candidates (C10); [] on any failure. */
+/** One callModel({ feature: "checkin" }) (Opus 5.5, effort medium, streamed since P9 F20) over the candidates (C10); [] on any failure. */
 export async function generateCheckins(principal: ExecPrincipal, input: { briefId: string; briefRev: number; localDate: string;
   candidates: readonly CheckinCandidate[]; now: Date }, opts: { signal: AbortSignal }): Promise<NewCheckin[]> {
   const signal = opts?.signal;

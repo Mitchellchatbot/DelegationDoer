@@ -1,6 +1,8 @@
 // P8 Area B test support: a chainable stand-in for the service-role client's READS of exec_jobs and exec_access_log
 // (select / eq / in / gte / lt / like / order / limit / abortSignal, awaited directly), with SQL semantics on the rows
 // (a comparison with NULL is never true; LIKE with a trailing % is a prefix match). Every query is recorded.
+// P9 (AM-P9-13, additive): not(column, "like", pattern) is SQL's NOT LIKE (% any run, _ any one character): a NULL cell
+// never passes (SQL); a column the fixture row doesn't carry at all (undefined) passes, since the fixture doesn't model it.
 // Wire it up with vi.mocked(getSupabaseAdmin).mockReturnValue(db.client as SupabaseClient).
 
 export type ReadRow = Record<string, unknown>;
@@ -8,7 +10,7 @@ export type ReadRow = Record<string, unknown>;
 export interface ReadQuery {
   table: string;
   columns: string | null;
-  filters: { op: "eq" | "in" | "gte" | "lt" | "like"; column: string; value: unknown }[];
+  filters: { op: "eq" | "in" | "gte" | "lt" | "like" | "notLike"; column: string; value: unknown }[];
   order: { column: string; ascending: boolean } | null;
   limit: number | null;
   signal: AbortSignal | null;
@@ -27,6 +29,14 @@ function likeMatches(value: unknown, pattern: string): boolean {
   return value.startsWith(pattern.slice(0, -1));
 }
 
+/** SQL's NOT LIKE: % is any run of characters, _ any one character, everything else literal. */
+function notLikeMatches(value: unknown, pattern: string): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== "string") return false;
+  const source = Array.from(pattern, (ch) => (ch === "%" ? "[^]*" : ch === "_" ? "[^]" : /[A-Za-z0-9 ]/.test(ch) ? ch : `[${ch === "]" || ch === "^" || ch === "\\" ? `\\${ch}` : ch}]`)).join("");
+  return !new RegExp(`^${source}$`).test(value);
+}
+
 function passes(row: ReadRow, f: ReadQuery["filters"][number]): boolean {
   const cell = row[f.column];
   switch (f.op) {
@@ -40,6 +50,8 @@ function passes(row: ReadRow, f: ReadQuery["filters"][number]): boolean {
       return typeof cell === "string" && Date.parse(cell) < Date.parse(String(f.value));
     case "like":
       return likeMatches(cell, String(f.value));
+    case "notLike":
+      return notLikeMatches(cell, String(f.value));
   }
 }
 
@@ -73,6 +85,11 @@ export function createFakeJobsRead(tables: Record<string, ReadRow[]>): FakeJobsR
         gte(column: string, value: unknown) { q.filters.push({ op: "gte", column, value }); return b; },
         lt(column: string, value: unknown) { q.filters.push({ op: "lt", column, value }); return b; },
         like(column: string, value: string) { q.filters.push({ op: "like", column, value }); return b; },
+        not(column: string, operator: string, value: string) {
+          if (operator !== "like") throw new Error(`fake: unsupported not(${operator})`);
+          q.filters.push({ op: "notLike", column, value });
+          return b;
+        },
         order(column: string, opts?: { ascending?: boolean }) { q.order = { column, ascending: opts?.ascending !== false }; return b; },
         limit(n: number) { q.limit = n; return b; },
         abortSignal(signal: AbortSignal) { q.signal = signal; return b; },

@@ -25,7 +25,7 @@ import * as eventsRoute from "@/app/api/integrations/exec-slack/events/route";
 import { createFakeSlackDb, type FakeSlackDb, type Row } from "@/lib/exec/__tests__/fake-slack-db";
 import { createFakeSlackReadDb, type FakeSlackReadDb, type FakeSlackReadDbSeed } from "@/lib/exec/__tests__/fake-slack-read-db";
 import { SLACK_TEXT_SENTINELS, assertNoSlackText, captureConsole } from "@/lib/exec/__tests__/slack-read-assert";
-import { installationRow, routingRows, signedSlackRequest, slackEnv, testPrincipal } from "@/lib/exec/__tests__/slack-route-helpers";
+import { installationRow, routingRow, routingRows, signedSlackRequest, slackEnv, testPrincipal } from "@/lib/exec/__tests__/slack-route-helpers";
 import { kickInteractive } from "@/lib/exec/jobs";
 import { notifyOps } from "@/lib/exec/ops";
 import { ensureExecRuntime } from "@/lib/exec/runtime";
@@ -811,5 +811,75 @@ describe("V222 (integrator) the triage bucket is the receipt minute (G21)", () =
     expect(minute).toBeGreaterThanOrEqual(before);
     expect(minute).toBeLessThanOrEqual(after);
     expect(minute).not.toBe(Math.floor(Number(ts.split(".")[0]) / 60));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 F14 (Area C; lead decision L2): while EXEC_ENABLED is off, an event that only removes data still reaches the ack RPC
+// (Slack never redelivers a 2xx): kind "delete" (message_deleted, a thread parent's tombstone), lifecycle deleted / left,
+// and P6's app_uninstalled / tokens_revoked. Every other event keeps the 200 drop with no database call.
+
+describe("P9 F14 deletion-type events reach the ack RPC while EXEC_ENABLED is off (L2)", () => {
+  const gateRow = (name: string): GateRow => {
+    const r = GATE.rows.find((x) => x.name === name);
+    if (!r) throw new Error(`no slack-gate row ${name}`);
+    return structuredClone(r);
+  };
+  // Each one's own row of the decision table: the flag off leaves exactly the rows the flag on leaves.
+  const DELETIONS = [
+    "V214 a delete in a watched channel: marker, rows, attention, one purge-log row, a kick",
+    "V243 a tombstone: only the parent's rows purged, the replies stay",
+    "V226 channel_deleted: purged, the row deleted",
+    "V226 / PG11 group_left: purged, left_at, unwatched, owner flag cleared",
+    "V203 app_uninstalled: v1 revokes, one read-purge job",
+    "V204 tokens_revoked naming him: a user check, then v1's user_tokens_only"
+  ];
+  for (const value of ["false", undefined]) {
+    for (const name of DELETIONS) {
+      it(`F14 EXEC_ENABLED=${String(value)}: ${name}`, async () => {
+        vi.stubEnv("EXEC_ENABLED", value);
+        const row = gateRow(name);
+        expect(row.send ?? "once").toBe("once");
+        const db = useDb(seedFor(row));
+        const before = effects(db);
+        const res = await post(ingestRow(row.ingest).envelope, row.retry ?? 0);
+        expect(res.status).toBe(200);
+        expect(await res.text()).toBe("");
+        expect(rpcCalls()).toEqual(["exec_slack_accept_event_v2"]);
+        const want = { ...row.expect };
+        delete want.answer;
+        expect(diffEffects(before, effects(db))).toEqual(want);
+        expect(await lastV2Answer()).toEqual(storeAnswer(row.expect.answer as Json));
+        expect(lines().some((l) => l.includes("reason=disabled"))).toBe(false);
+        assertNoSlackText({ calls: db.calls.map((c) => c.payload) }, { label: name });
+      });
+    }
+  }
+
+  it("F14 the flag off, v2 absent (a P6-only database): app_uninstalled still reaches v1, which revokes the installation", async () => {
+    vi.stubEnv("EXEC_ENABLED", "false");
+    const db = useDb(createFakeSlackDb({ tables: { exec_slack_installations: [installationRow()] } }));
+    const res = await post(routingRow(24).envelope, 2);
+    expect(res.status).toBe(200);
+    expect(db.calls.map((c) => [c.kind, c.target])).toEqual([["rpc", "exec_slack_accept_event_v2"], ["rpc", "exec_slack_accept_event"]]);
+    expect(db.tables.exec_slack_installations[0]).toMatchObject({ revoke_reason: "app_uninstalled" });
+    expect(db.tables.exec_slack_installations[0].revoked_at).not.toBeNull();
+    expect(db.tables.exec_slack_events.map((e) => e.decision)).toEqual(["revoke"]);
+  });
+
+  it("F14 every other event keeps the 200 drop with no database call while the flag is off (a message, an edit, a rename, an archive, his DM, P6's Home)", async () => {
+    vi.stubEnv("EXEC_ENABLED", "false");
+    const db = useDb(seedFor({}));
+    const envs = [envelopeOf("V221 a DM to him (len 2)"), envelopeOf("IG07 message_changed"), envelopeOf("IG19 / V226 channel_rename: a plain rename"),
+      envelopeOf("IG19 channel_archive"), envelopeOf("IG19 channel_unarchive"), envelopeOf("V201 his DM to the assistant"), routingRow(21).envelope];
+    for (const env of envs) {
+      const res = await post(env);
+      expect(res.status).toBe(200);
+    }
+    expect(db.calls).toEqual([]);
+    expect(lines().map((l) => l.replace(/ event=\S+ type=\S+/, ""))).toEqual(envs.map(() => "[exec-slack] events dropped reason=disabled retry=0 path=-"));
+    expect(acceptEventV2).not.toHaveBeenCalled();
+    expect(acceptEvent).not.toHaveBeenCalled();
+    expect(kickInteractive).not.toHaveBeenCalled();
   });
 });

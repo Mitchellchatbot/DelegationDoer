@@ -38,7 +38,9 @@ import {
   mergeEdits,
   outcomeOf,
   outlookOpenedRequest,
+  draftFocusTarget,
   requestFor,
+  sendProbeAnswer,
   sendProbeRequest,
   sendRequest,
   viewRequest,
@@ -171,6 +173,14 @@ const BUTTON_PRIMARY =
   "rounded-lg bg-indigo-600 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50";
 const BUTTON_SECONDARY =
   "rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:border-slate-300 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50";
+
+/**
+ * P9 F25 (§2.7): DD's shared email editor draws its two format buttons (Formatting options, Insert link) at 28x28 px with a
+ * 4 px gap. Below sm this wrapper makes each a 40x40 px tap target with an 8 px gap; from sm they keep the editor's own
+ * size. Tailwind's child variant (`*:` = "> *", emitted after the buttons' own h-7 / w-7) sizes the wrapper's direct
+ * children, the two buttons. The shared editor itself is unchanged (DD's other composers use it).
+ */
+export const FORMAT_BUTTONS_WRAP = "inline-flex items-center gap-2 sm:gap-1 *:h-10 *:w-10 sm:*:h-7 sm:*:w-7";
 
 // ---------------------------------------------------------------------------
 // Before the draft exists (/executive/email/drafts/new)
@@ -431,11 +441,17 @@ function ExistingDraft({
   const [review, setReview] = useState<ReviewResult | null>(null);
   const [sending, setSending] = useState(false);
   const [sendReady, setSendReady] = useState<boolean | null>(null);
+  // P9 F24: the probe's reason when it says no, so the hint names it (it was dropped, and every "no" read "isn't switched on").
+  const [sendReason, setSendReason] = useState<string | null>(null);
   const [openBlocked, setOpenBlocked] = useState(false);
   const [subject, setSubject] = useState(initial.subject ?? "");
   const body = useEmailBody();
   const [toolbarOpen, toggleToolbar] = useFormattingBar();
   const pendingEdit = useRef<DraftEdit | undefined>(undefined);
+  // P9 F27: the banner's headline (a persistent status line) takes focus when the pressed button unmounted or the send
+  // dialog closed, so focus never falls to <body> and the new state is read out.
+  const headlineRef = useRef<HTMLParagraphElement>(null);
+  const focusWatch = useRef<{ busy: boolean; sending: boolean }>({ busy: false, sending: false });
   const lastOutcome = useRef<PanelOutcome | null>(null);
   const visible = useTabVisible();
   const inFlight = view.status === "generating" || view.status === "saving" || view.status === "sending" || view.status === "discarding";
@@ -584,11 +600,15 @@ function ExistingDraft({
     let live = true;
     call(sendProbeRequest(viewRef.current.id))
       .then((a) => {
-        const o = typeof a.json === "object" && a.json !== null ? (a.json as Record<string, unknown>) : {};
-        if (live) setSendReady(a.status === 200 && typeof o.sendReady === "boolean" ? o.sendReady : null);
+        if (!live) return;
+        const answer = sendProbeAnswer(a.status, a.json);
+        setSendReady(answer.sendReady);
+        setSendReason(answer.reason);
       })
       .catch(() => {
-        if (live) setSendReady(null);
+        if (!live) return;
+        setSendReady(null);
+        setSendReason(null);
       });
     return () => {
       live = false;
@@ -615,6 +635,15 @@ function ExistingDraft({
   useEffect(() => {
     if (recheckKey !== null) void recheckReadiness();
   }, [recheckKey, recheckReadiness]);
+
+  useEffect(() => {
+    const prev = focusWatch.current;
+    const next = { busy: busy !== null, sending };
+    focusWatch.current = next;
+    if (typeof document === "undefined") return;
+    const lost = document.activeElement === null || document.activeElement === document.body;
+    if (draftFocusTarget(prev, next, lost) === "headline") headlineRef.current?.focus();
+  }, [busy, sending]);
 
   // --- actions -----------------------------------------------------------------
   const runAction = async (action: DraftUiAction) => {
@@ -717,6 +746,7 @@ function ExistingDraft({
         clientName={clientName ?? view.clientName ?? null}
         onRecheck={isTop ? () => void recheckReadiness() : undefined}
         rechecking={rechecking}
+        headlineRef={headlineRef}
       />
       <ClientUpdateNote view={view} tz={tz} />
 
@@ -781,7 +811,7 @@ function ExistingDraft({
               <Paperclip className="h-3 w-3" aria-hidden />
               {COPY.noAttachments}
             </p>
-            <span className="inline-flex items-center gap-1">
+            <span className={FORMAT_BUTTONS_WRAP}>
               <EmailFormatButtons toolbarOpen={toolbarOpen} onToggleToolbar={toggleToolbar} onInsertLink={() => body.apiRef.current?.openLinkDialog()} disabled={!editable} />
             </span>
           </div>
@@ -811,6 +841,7 @@ function ExistingDraft({
         isTop={isTop}
         busy={busy}
         sendReady={sendReady}
+        sendReason={sendReason}
         onAction={(a) => void runAction(a)}
         checkedOutlook={checkedOutlook}
         onCheckedOutlook={setCheckedOutlook}

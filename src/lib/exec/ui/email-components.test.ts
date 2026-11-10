@@ -7,7 +7,7 @@ vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
 import { AssessButton, assessMessage, assessPath, errorCode } from "@/components/exec/email/AssessButton";
 import { BucketTabs } from "@/components/exec/email/BucketTabs";
 import { CommitmentList } from "@/components/exec/email/CommitmentList";
-import { EmailRowItem } from "@/components/exec/email/EmailRowItem";
+import { EmailRowItem, clientChipText } from "@/components/exec/email/EmailRowItem";
 import { EMAIL_FRAME_SANDBOX, EmailFrame, hardenFrameLinks } from "@/components/exec/email/EmailFrame";
 import { EmailTabView } from "@/components/exec/email/EmailTabView";
 import { EmailThreadView } from "@/components/exec/email/EmailThreadView";
@@ -203,6 +203,18 @@ describe("EmailTabView: on", () => {
       expect(t, s).toContain(s);
     }
     expect(hrefs(panel)).toContain("/executive/email/t1");
+  });
+
+  it("P9 F36: a client match below high confidence says so in the chip's visible text, not only in its title", () => {
+    const rowHtml = (confidence: "high" | "medium" | "low" | null) =>
+      html(createElement(EmailRowItem, { row: row({ client: { id: "c1", name: "Acme", via: "domain", confidence } }), tz: "America/New_York", now: NOW }));
+    const chipText = (markup: string) => textOf(markup.replace(/\s(?:title|class|aria-[a-z]+|data-[a-z-]+)="[^"]*"/g, ""));
+    expect(chipText(rowHtml("low"))).toContain("Client: Acme (low confidence)");
+    expect(chipText(rowHtml("medium"))).toContain("Client: Acme (medium confidence)");
+    expect(chipText(rowHtml("high"))).toContain("Client: Acme");
+    expect(chipText(rowHtml("high"))).not.toContain("confidence)");
+    expect(chipText(rowHtml(null))).not.toContain("confidence)");
+    expect(clientChipText({ name: "Acme", confidence: "low" })).toBe("Client: Acme (low confidence)");
   });
 
   it("offers Assess on filtered rows only, with the reason they weren't assessed", () => {

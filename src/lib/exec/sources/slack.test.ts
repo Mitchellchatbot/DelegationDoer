@@ -12,6 +12,7 @@ import {
   classifySlackCode,
   deleteInDm,
   exchangeOAuthCode,
+  findDmMessagesByMetadata,
   listDmItems,
   lookupUserByEmail,
   openDm,
@@ -612,5 +613,71 @@ describe("fake-slack-api (§5.11)", () => {
     expect(slack.calls).toHaveLength(0);
     // Once reported, the finish hook has nothing more to fail on.
     expect(() => slack.restore()).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 F12 (b; Area C, AM-P9-19): findDmMessagesByMetadata, the every-match sibling of P8's findDmMessageByMetadata (unchanged)
+
+describe("findDmMessagesByMetadata (P9 F12 b)", () => {
+  const OLDEST = "1794229260.000000";
+  const LATEST = "1794230220.000000";
+  const meta = (briefId: string, rev: number | string, eventType = "exec_brief") => ({ event_type: eventType, event_payload: { brief_id: briefId, rev } });
+  const q = (over: Record<string, unknown> = {}) => ({ channel: DM, oldest: OLDEST, latest: LATEST, eventType: "exec_brief", match: { brief_id: "eb_1" }, ...over });
+
+  it("every match in the window, deduplicated, in the order read; latest and include_all_metadata in the form; complete once the window is read to its end", async () => {
+    let page = 0;
+    const slack = installFakeSlack({
+      "conversations.history": () => (++page === 1
+        ? { ok: true, has_more: true, response_metadata: { next_cursor: "bmV4dA==" }, messages: [
+          { ts: "1794229325.000100", bot_id: "B0BOT", text: SENTINELS.text, metadata: meta("eb_1", 1) },
+          { ts: "1794229326.000100", bot_id: "B0BOT", text: SENTINELS.text, metadata: meta("eb_2", 1) },
+          { ts: "1794229327.000100", user: "U0MITCH", text: SENTINELS.text },
+          { ts: "1794229328.000100", bot_id: "B0BOT", metadata: meta("eb_1", 1, "exec_checkin") },
+          { ts: "1794229329.000100", bot_id: "B0BOT", metadata: { event_type: "exec_brief", event_payload: "eb_1" } }
+        ] }
+        : { ok: true, has_more: false, response_metadata: { next_cursor: "" }, messages: [
+          { ts: "1794229390.000200", bot_id: "B0BOT", text: SENTINELS.text, metadata: meta("eb_1", "2") },
+          { ts: "1794229325.000100", bot_id: "B0BOT", metadata: meta("eb_1", 1) }
+        ] })
+    });
+    const out = await findDmMessagesByMetadata(TARGET, q());
+    expect(out).toEqual({ matches: [{ ts: "1794229325.000100" }, { ts: "1794229390.000200" }], complete: true });
+    expect(findSentinel(out)).toBeNull();
+    expect(slack.calls.map((c) => [c.method, c.body])).toEqual([
+      ["conversations.history", { channel: DM, oldest: OLDEST, latest: LATEST, inclusive: "true", limit: "50", include_all_metadata: "true" }],
+      ["conversations.history", { channel: DM, oldest: OLDEST, latest: LATEST, inclusive: "true", limit: "50", include_all_metadata: "true", cursor: "bmV4dA==" }]
+    ]);
+    expect(slack.calls[0].headers.authorization).toBe(`Bearer ${TOKEN}`);
+    // A number in match also matches its string form (Slack may hand payload numbers back as strings); no latest → none sent.
+    page = 1;
+    const rev2 = await findDmMessagesByMetadata(TARGET, q({ latest: undefined, match: { brief_id: "eb_1", rev: 2 } }));
+    expect(rev2).toEqual({ matches: [{ ts: "1794229390.000200" }], complete: true });
+    expect(slack.calls[2].body).toEqual({ channel: DM, oldest: OLDEST, inclusive: "true", limit: "50", include_all_metadata: "true" });
+  });
+
+  it("two full pages with more left → complete false (no match proves nothing); one page with nothing left → complete true, no matches", async () => {
+    const more = { ok: true, has_more: true, response_metadata: { next_cursor: "bW9yZQ==" }, messages: [{ ts: "1794229330.000100", bot_id: "B0BOT", metadata: meta("eb_9", 1) }] };
+    let slack = installFakeSlack({ "conversations.history": () => more });
+    expect(await findDmMessagesByMetadata(TARGET, q())).toEqual({ matches: [], complete: false });
+    expect(slack.calls).toHaveLength(2);
+    slack.restore();
+    slack = installFakeSlack({ "conversations.history": () => ({ ok: true, has_more: false, messages: [] }) });
+    expect(await findDmMessagesByMetadata(TARGET, q())).toEqual({ matches: [], complete: true });
+    expect(slack.calls).toHaveLength(1);
+  });
+
+  it("refuses another channel before any call (K11); malformed arguments are fatal invalid_arguments; Slack's errors propagate", async () => {
+    let slack = installFakeSlack({});
+    for (const channel of ["C123", "D0OTHER", "", `${DM} `]) {
+      expect(await caught(findDmMessagesByMetadata(TARGET, q({ channel })))).toBeInstanceOf(SlackChannelRefusedError);
+    }
+    for (const bad of [{ oldest: "yesterday" }, { latest: "soon" }, { eventType: "" }, { match: {} }, { match: null }]) {
+      expect(await caught(findDmMessagesByMetadata(TARGET, q(bad)))).toMatchObject({ name: "SlackApiError", code: "invalid_arguments", errorClass: "fatal" });
+    }
+    expect(slack.calls).toHaveLength(0);
+    slack.restore();
+    slack = installFakeSlack({ "conversations.history": () => SLACK_RECORDED.error("channel_not_found") });
+    expect(await caught(findDmMessagesByMetadata(TARGET, q()))).toMatchObject({ code: "channel_not_found", errorClass: "fatal" });
   });
 });

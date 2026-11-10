@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AttentionRow } from "@/components/exec/AttentionRow";
+import { AI_KINDS, AttentionRow } from "@/components/exec/AttentionRow";
 import { EXEC_TABS, ExecTabs } from "@/components/exec/ExecTabs";
 import type { AttentionFeedItem } from "@/lib/exec/attention-types";
 import { NOW, TZ, ddtextItem, emailItem, feedItem, textOf } from "../__tests__/p5a-ui-fixtures";
@@ -72,6 +72,29 @@ describe("AttentionRow additions (test 70)", () => {
 
   it("other kinds don't get the title label", () => {
     expect(textOf(withoutAttributes(row(feedItem({ facts: [] }))))).not.toContain("AI-assessed");
+  });
+
+  // P9 F29: a Slack decision or commitment is the model's reading of a message, so it carries the label; a request
+  // (asked of him by the message itself) doesn't.
+  const slackItemOf = (kind: "slack_decision" | "slack_commitment" | "slack_request") =>
+    feedItem({ kind, source: "slack", title: `Slack ${kind} title`, facts: [] } as Partial<AttentionFeedItem>);
+
+  for (const kind of ["slack_decision", "slack_commitment"] as const) {
+    it(`P9 F29 ${kind}: a visible "AI-assessed" label right after the title`, () => {
+      const html = row(slackItemOf(kind));
+      expect(textOf(withoutAttributes(html))).toContain("AI-assessed");
+      const title = html.indexOf(`Slack ${kind} title`);
+      const label = html.indexOf(">AI-assessed<");
+      expect(title).toBeGreaterThan(-1);
+      expect(label).toBeGreaterThan(title);
+      expect(html.slice(title, label)).not.toContain("<p");
+      expect(AI_KINDS.has(kind)).toBe(true);
+    });
+  }
+
+  it("P9 F29 slack_request carries no AI-assessed title label", () => {
+    expect(textOf(withoutAttributes(row(slackItemOf("slack_request"))))).not.toContain("AI-assessed");
+    expect(AI_KINDS.has("slack_request")).toBe(false);
   });
 });
 

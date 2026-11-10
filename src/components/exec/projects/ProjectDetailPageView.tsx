@@ -12,7 +12,7 @@ import { ago } from "../overview/labels";
 import { SectionCard } from "../SectionCard";
 import { SourceLinks } from "../SourceLinks";
 import { ProjectSlackSection } from "../slack/ProjectSlackSection";
-import { ProjectStatusBadge, RefLink, STAGE_STATUS_LABEL, TASK_STATUS_LABEL, stuckText } from "./labels";
+import { NEUTRAL_BADGE, ProjectStatusBadge, RefLink, STAGE_STATUS_LABEL, TASK_STATUS_LABEL, stuckText } from "./labels";
 
 // /executive/projects/[id] (P5a contract §3.13.2, A4, C16, K25, K26): one
 // project's stages, delays, blockers, updates, meeting-brief risks and
@@ -130,7 +130,7 @@ function StageItem({ stage, now }: { stage: StageView; now: string }) {
         {/* DD's stage positions start at 0; its own UI shows position + 1 (review ui-1). */}
         <span data-stage-number className="text-[11px] tabular-nums text-muted">{formatCount(stage.position + 1)}.</span>
         <span className="min-w-0 break-words text-[13px] font-semibold text-ink">{stage.name}</span>
-        <span className={cn("badge", active ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "badge-low")}>{STAGE_STATUS_LABEL[stage.status] ?? stage.status}</span>
+        <span className={cn("badge", active ? "border-indigo-200 bg-indigo-50 text-indigo-700" : NEUTRAL_BADGE)}>{STAGE_STATUS_LABEL[stage.status] ?? stage.status}</span>
         <span className="text-[11.5px] tabular-nums text-muted">{`${formatCount(stage.work.done)} of ${pluralize(stage.work.total, "task")} done`}</span>
       </div>
       {active && (
@@ -144,7 +144,7 @@ function StageItem({ stage, now }: { stage: StageView; now: string }) {
           <div className="text-[10.5px] font-semibold uppercase tracking-wide text-muted">
             {stage.currentBatch.group === null ? "Current batch" : `Current batch (group ${formatCount(stage.currentBatch.group)})`}
           </div>
-          <ul className="mt-1 space-y-1">
+          <ul className="mt-1 space-y-2.5 sm:space-y-1">
             {stage.currentBatch.tasks.map((t) => (
               <li key={t.taskId} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px]">
                 <RefLink url={t.ref.url} className={cn("min-w-0 break-words font-medium text-ink", t.deleted && "line-through decoration-slate-400")}>
@@ -189,7 +189,7 @@ function Delays({ view }: { view: ProjectDetailView }) {
         {overdue.length > 0 && (
           <div>
             <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted">Overdue</h3>
-            <ul className="mt-1 space-y-1">
+            <ul className="mt-1 space-y-2.5 sm:space-y-1">
               {overdue.map((o) => (
                 <li key={o.taskId} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12.5px]">
                   <RefLink url={o.ref.url} className="min-w-0 break-words font-medium text-ink">
@@ -197,7 +197,7 @@ function Delays({ view }: { view: ProjectDetailView }) {
                   </RefLink>
                   <span className="text-muted">{o.assigneeName ?? "Unassigned"}</span>
                   <span className="font-medium text-rose-700">{`${pluralize(o.overdueDays, "day")} overdue`}</span>
-                  {o.autoArchived && <span className="badge badge-low">Auto-archived</span>}
+                  {o.autoArchived && <span className={cn("badge", NEUTRAL_BADGE)}>Auto-archived</span>}
                 </li>
               ))}
             </ul>
@@ -206,7 +206,7 @@ function Delays({ view }: { view: ProjectDetailView }) {
         {extensions.length > 0 && (
           <div>
             <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted">Extensions</h3>
-            <ul className="mt-1 space-y-1">
+            <ul className="mt-1 space-y-2.5 sm:space-y-1">
               {extensions.map((e) => (
                 <li key={e.taskId} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12.5px]">
                   <RefLink url={e.ref.url} className="min-w-0 break-words font-medium text-ink">

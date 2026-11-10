@@ -26,7 +26,7 @@ import { useIsTopWindow } from "@/components/exec/drafts/frame-guard";
 import { EXEC_TABS, ExecTabs } from "@/components/exec/ExecTabs";
 import { ExecHeader } from "@/components/exec/ExecHeader";
 import { OverviewView } from "@/components/exec/overview/OverviewView";
-import { SystemSection, aiLines, briefSystemLines, userTokenLine } from "@/components/exec/overview/SystemSection";
+import { BRIEF_NONE_LATE_TEXT, SystemSection, aiLines, briefSystemLines, tokenKeysLine, userTokenLine } from "@/components/exec/overview/SystemSection";
 import BriefLoading from "@/app/(main)/executive/brief/loading";
 import * as briefPage from "@/app/(main)/executive/brief/page";
 import * as latestRoute from "@/app/api/exec/briefs/latest/route";
@@ -35,7 +35,7 @@ import * as settingsRoute from "@/app/api/exec/briefs/settings/route";
 import * as overviewPage from "@/app/(main)/executive/page";
 import { requireExecPrincipalForPage } from "@/lib/exec/access";
 import { BRIEF_COPY, fillBrief } from "@/lib/exec/brief-copy";
-import { getBriefPageView, getBriefPill, type BriefContentView, type BriefPageView } from "@/lib/exec/brief-view";
+import { BRIEF_LATE_AFTER_MS, briefIsLate, briefTodayPill, getBriefPageView, getBriefPill, type BriefContentView, type BriefPageView } from "@/lib/exec/brief-view";
 import type { ExecOverview, OverviewBriefSystem, OverviewSection, OverviewSystem } from "@/lib/exec/overview";
 import { loadSettings } from "@/lib/exec/principal";
 import { regenerateBrief, regenerateMessageFor } from "@/lib/exec/ui/settings-api";
@@ -382,6 +382,64 @@ describe("UI09: Regenerate", () => {
   });
 });
 
+describe("P9 F32: Regenerate stops waiting after five minutes", () => {
+  it("past REGENERATE_POLL_MAX_MS onGiveUp fires once (never after a stop()); the copy says to reload later", () => {
+    let t = 0;
+    const box: { tick: (() => void) | null } = { tick: null };
+    const onGiveUp = vi.fn();
+    const refresh = vi.fn();
+    startRegeneratePolling(refresh, { setInterval: (fn) => ((box.tick = fn), 7), clearInterval: () => {}, now: () => t }, { onGiveUp });
+    for (t = 10_000; t < REGENERATE_POLL_MAX_MS; t += 10_000) box.tick?.();
+    expect(onGiveUp).not.toHaveBeenCalled();
+    box.tick?.();
+    box.tick?.();
+    expect(onGiveUp).toHaveBeenCalledTimes(1);
+    // A stop before the limit (a new rev arrived) gives up nothing.
+    const quiet = vi.fn();
+    let u = 0;
+    const tick2: { fn: (() => void) | null } = { fn: null };
+    const stop = startRegeneratePolling(refresh, { setInterval: (fn) => ((tick2.fn = fn), 8), clearInterval: () => {}, now: () => u }, { onGiveUp: quiet });
+    stop();
+    u = REGENERATE_POLL_MAX_MS + 1;
+    tick2.fn?.();
+    expect(quiet).not.toHaveBeenCalled();
+    expect(BRIEF_COPY.regenerateGaveUp).toBe("Still building. Reload in a few minutes to see it.");
+  });
+});
+
+describe("P9 F31: a brief that hasn't started 45 minutes after its time", () => {
+  const due = SCHEDULED_AT;
+  const dueMs = Date.parse(due);
+  const at = (ms: number) => new Date(dueMs + ms);
+
+  it("briefIsLate: more than 45 minutes past dueAt; never for an unreadable time", () => {
+    expect(BRIEF_LATE_AFTER_MS).toBe(45 * 60_000);
+    expect(briefIsLate(due, at(2 * 3_600_000))).toBe(true);
+    expect(briefIsLate(due, at(46 * 60_000))).toBe(true);
+    expect(briefIsLate(due, at(45 * 60_000))).toBe(false);
+    expect(briefIsLate(due, at(-3_600_000))).toBe(false);
+    expect(briefIsLate(null, at(2 * 3_600_000))).toBe(false);
+    expect(briefIsLate("not a date", at(2 * 3_600_000))).toBe(false);
+  });
+
+  it("none at dueAt + 2 h → the late copy in amber and the pill 'late'; before dueAt → today's copy and 'not yet'", () => {
+    const late = html(createElement(BriefView, { view: pageView({ state: "none", brief: null, generatedAt: at(2 * 3_600_000).toISOString(), dueAt: due, late: true }) }));
+    expect(late).toContain('data-brief-state-copy="none-late"');
+    expect(textOf(late)).toContain(fillBrief(BRIEF_COPY.noneLate, { time: "8:00 AM EST" }));
+    expect(late).toMatch(/data-brief-notice="true" class="[^"]*border-amber-200 bg-amber-50/);
+    const early = html(createElement(BriefView, { view: pageView({ state: "none", brief: null, generatedAt: at(-3_600_000).toISOString(), dueAt: due }) }));
+    expect(early).toContain('data-brief-state-copy="none"');
+    expect(textOf(early)).toContain(fillBrief(BRIEF_COPY.none, { time: "8:00 AM EST" }));
+    expect(early).not.toContain("border-amber-200");
+    const base = { installed: true, enabled: true, row: null, dueAt: due, tz: TZ };
+    expect(briefTodayPill({ ...base, now: at(2 * 3_600_000) })).toEqual({ state: "late", label: "Brief 8:00 AM EST · late" });
+    expect(briefTodayPill({ ...base, now: at(-3_600_000) })).toEqual({ state: "none", label: "Brief 8:00 AM EST · not yet" });
+    expect(briefTodayPill({ ...base, enabled: false, now: at(2 * 3_600_000) }).state).toBe("off");
+    expect(briefTodayPill({ ...base, installed: false, now: at(2 * 3_600_000) }).state).toBe("not_installed");
+    expect(html(createElement(BriefPill, { pill: briefTodayPill({ ...base, now: at(2 * 3_600_000) }) }))).toContain("border-amber-200 bg-amber-50 text-amber-800");
+  });
+});
+
 describe("UI09: waiting for a queued regenerate", () => {
   it("a newer rev → done; withheld → busy; the same rev offered again after busy → failed; else wait", () => {
     expect(regenerateWaitStep(1, false, { expectedRev: 2, canRegenerate: false })).toBe("done");
@@ -431,6 +489,28 @@ describe("UI19: the System card's brief rows", () => {
     const failed = rows({ brief: null, userToken: null, ai: null });
     expect(failed).toEqual({ brief: `${BRIEF_COPY.system.brief} couldn't load`, token: `${BRIEF_COPY.system.token} couldn't load`, ai: "Couldn't load today's AI spend." });
     expect(html(createElement(SystemSection, { system: ok(base), now: NOW_ISO, tz: TZ }))).not.toContain("data-brief-system");
+  });
+
+  it("P9 F31: a not-built day past its time reads late, in amber; on time it stays neutral", () => {
+    const none = brief({ status: "none", channel: "none", mode: null, builtAt: null, deliveredAt: null });
+    expect(briefSystemLines(none, NOW_ISO, TZ, true)).toMatchObject({ value: `Assistant · ${BRIEF_NONE_LATE_TEXT} · Not sent`, tone: "amber" });
+    expect(briefSystemLines(none, NOW_ISO, TZ, false).tone).toBe("ok");
+    // late only touches a day with no brief: a delivered day stays as it was.
+    expect(briefSystemLines(brief(), NOW_ISO, TZ, true).tone).toBe("ok");
+    const late = html(createElement(SystemSection, { system: ok({ ...base, brief: none }), now: NOW_ISO, tz: TZ, briefLate: true }));
+    expect(late).toMatch(/data-brief-system-row="brief"[^]*?font-medium text-amber-700[^>]*>[^<]*late/);
+  });
+
+  it("P9 F13: the Slack token-key row: none without an installation; amber on the previous key, rose on an unknown key", () => {
+    const keyRow = (tokenKeys: OverviewSystem["tokenKeys"]) => html(createElement(SystemSection, { system: ok({ ...base, tokenKeys }), now: NOW_ISO, tz: TZ }));
+    expect(keyRow(undefined)).not.toContain("data-token-keys-system");
+    expect(textOf(keyRow({ previousKey: 0, unknownKey: 0 }))).toContain("Slack tokens on the previous key: 0");
+    expect(tokenKeysLine({ previousKey: 0, unknownKey: 0 }).tone).toBe("ok");
+    expect(tokenKeysLine({ previousKey: 2, unknownKey: 0 })).toEqual({ value: "Slack tokens on the previous key: 2", tone: "amber" });
+    expect(tokenKeysLine({ previousKey: 1, unknownKey: 1 })).toEqual({ value: "Slack tokens on the previous key: 1 · on a key this server doesn't have: 1", tone: "rose" });
+    expect(tokenKeysLine(null)).toEqual({ value: "Slack token keys: couldn't load", tone: "amber" });
+    expect(keyRow({ previousKey: 2, unknownKey: 0 })).toMatch(/data-token-keys-row="amber" class="[^"]*text-amber-700/);
+    expect(keyRow(null)).toContain('data-token-keys-row="unavailable"');
   });
 
   it("the line helpers' tones", () => {

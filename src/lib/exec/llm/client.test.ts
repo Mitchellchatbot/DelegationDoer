@@ -3,9 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/anthropic-client", () => ({ getAnthropic: vi.fn(), resetAnthropic: vi.fn() }));
 vi.mock("@/lib/exec/llm/usage", () => ({ recordUsage: vi.fn(), assertWithinDailyCap: vi.fn() }));
+// P9 F22: the one case that runs the real cap check (vi.importActual) reads settings and spend through these.
+vi.mock("@/lib/exec/principal", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/principal")>()), loadSettings: vi.fn() }));
+vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
 
 import { getAnthropic, resetAnthropic } from "@/lib/anthropic-client";
-import { principalFromRows } from "@/lib/exec/principal";
+import { loadSettings, principalFromRows, settingsFromRow } from "@/lib/exec/principal";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { BudgetExceededError, NonRetryableError, type ExecPrincipal } from "@/lib/exec/types";
 import { LlmCallError, callModel, classifyLlmError, type CallModelInput } from "@/lib/exec/llm/client";
 import { costUsd } from "@/lib/exec/llm/models";
@@ -916,5 +920,89 @@ describe("callModel through the real SDK", () => {
     expect(err).toMatchObject({ name: "LlmCallError", errorClass: "retryable", status: null, requestId: "req_real" });
     expect((err as LlmCallError).cause).toBeInstanceOf(LlmProtocolError);
     expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ stopReason: "error" }));
+  });
+
+  // P9 F20: the check-in call streams now, so a call its deadline aborts still puts what it was billed on the books.
+  it("P9 F20 an aborted streamed checkin call records one exec_ai_usage row with stop reason aborted", async () => {
+    const controller = new AbortController();
+    const firstFrames = new TextEncoder().encode(
+      sseText([
+        messageStart(),
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "{\"checkins\":[" } },
+        { type: "ping" }
+      ])
+    );
+    const seen: FetchArgs[] = [];
+    const client = sdkClient(async (_url, init) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(streamController) {
+          streamController.enqueue(firstFrames);
+          init.signal?.addEventListener("abort", () => streamController.error(new DOMException("The operation was aborted.", "AbortError")));
+        }
+      });
+      return new Response(body, { status: 200, headers: sseHeaders });
+    }, seen);
+    useClients(client);
+    const checkinRequest = buildExecRequest({
+      feature: "checkin",
+      system: "Write the notes.",
+      messages: [{ role: "user", content: "People: p1" }],
+      outputSchema: { type: "object", additionalProperties: false, required: ["checkins"], properties: { checkins: { type: "array", items: { type: "string" } } } }
+    });
+    const onTextDelta = vi.fn(() => controller.abort());
+    const err = await callModel(input({ feature: "checkin", request: checkinRequest, signal: controller.signal, stream: true, onTextDelta })).catch((e: unknown) => e);
+    expect(err).toBe(controller.signal.reason);
+    expect(JSON.parse(String(seen[0].init.body))).toMatchObject({ stream: true });
+    expect(recordUsage).toHaveBeenCalledTimes(1);
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ feature: "checkin", stopReason: "aborted", usage: START_USAGE, principalId: "ep_1" }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 F22: callModel takes the caller's settings, so the cap check doesn't load them again.
+// ---------------------------------------------------------------------------
+
+describe("P9 F22 callModel and the caller's settings", () => {
+  /** exec_ai_usage reads only: today's spend is one row of $1.50. */
+  function spendClient() {
+    const q = {
+      eq: () => q,
+      gte: () => q,
+      gt: () => q,
+      order: () => q,
+      limit: () => Promise.resolve({ data: [{ id: 1, cost_usd: 1.5 }], error: null })
+    };
+    return { from: () => ({ select: () => q }) };
+  }
+
+  it("passes the settings it is given to the cap check, and the absent case stays the one-argument call", async () => {
+    const s = { ...settingsFromRow(null, "ep_1"), dailyCostCapUsd: 20 };
+    useClients(fakeClient(() => withResponse(iterate(textEvents()))).client, fakeClient(() => withResponse(iterate(textEvents()))).client);
+    await callModel(input({ settings: s }));
+    expect(vi.mocked(assertWithinDailyCap).mock.calls[0]).toEqual([principal, s]);
+    await callModel(input());
+    expect(vi.mocked(assertWithinDailyCap).mock.calls[1]).toEqual([principal]);
+  });
+
+  it("a call given settings never calls loadSettings (the real cap check, its spend read faked); without them it loads once", async () => {
+    const actual = await vi.importActual<typeof import("@/lib/exec/llm/usage")>("@/lib/exec/llm/usage");
+    actual.__resetSpendMemoForTests();
+    vi.mocked(assertWithinDailyCap).mockImplementation(actual.assertWithinDailyCap);
+    vi.mocked(getSupabaseAdmin).mockReturnValue(spendClient() as unknown as ReturnType<typeof getSupabaseAdmin>);
+    vi.mocked(loadSettings).mockReset().mockResolvedValue(settingsFromRow(null, "ep_1"));
+    const s = { ...settingsFromRow(null, "ep_1"), dailyCostCapUsd: 20 };
+    useClients(fakeClient(() => withResponse(iterate(textEvents()))).client, fakeClient(() => withResponse(iterate(textEvents()))).client);
+    await callModel(input({ settings: s }));
+    expect(loadSettings).not.toHaveBeenCalled();
+    await callModel(input());
+    expect(loadSettings).toHaveBeenCalledTimes(1);
+    expect(loadSettings).toHaveBeenCalledWith("ep_1");
+    // A cap below today's $1.50 in the caller's settings stops the call before any API traffic (the cap alert is logged).
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const create = vi.fn();
+    vi.mocked(getAnthropic).mockResolvedValueOnce({ messages: { create } } as unknown as Anthropic);
+    await expect(callModel(input({ settings: { ...s, dailyCostCapUsd: 1 } }))).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(create).not.toHaveBeenCalled();
   });
 });

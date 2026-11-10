@@ -7,6 +7,7 @@ import { EXEC_TABS, ExecTabs, SETTINGS_HREF } from "../ExecTabs";
 import { ExecHeader } from "../ExecHeader";
 import { SectionCard } from "../SectionCard";
 import { StatTile } from "../StatTile";
+import { slackCountValue } from "../overview/OverviewTileRow";
 import { CatchUpList } from "./CatchUpList";
 import { DigestCard } from "./DigestCard";
 import { DigestDayNav } from "./DigestDayNav";
@@ -36,9 +37,11 @@ function Counts({ counts }: { counts: SlackPageModel["counts"] }) {
   const c = counts.data;
   return (
     <div data-slack-counts className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-      <StatTile label={COUNT_LABELS.unanswered} value={c.unanswered} basis="derived" sub={SLACK_INTEL_COPY.overviewTileSub} tint="amber" />
-      <StatTile label={COUNT_LABELS.decisionsPending} value={c.decisionsPending} basis="derived" tint="violet" />
-      <StatTile label={COUNT_LABELS.notAssessed} value={c.notAssessed} basis="derived" tint="slate" />
+      {/* P9 F28: unanswered and decisions pending count the model's readings (AI-assessed); "not assessed" is a fact (Derived).
+          P9 F30: each is a floor ("200+") when the read hit its row limit. */}
+      <StatTile label={COUNT_LABELS.unanswered} value={slackCountValue(c.unanswered, c)} basis="ai" sub={SLACK_INTEL_COPY.overviewTileSub} tint="amber" />
+      <StatTile label={COUNT_LABELS.decisionsPending} value={slackCountValue(c.decisionsPending, c)} basis="ai" tint="violet" />
+      <StatTile label={COUNT_LABELS.notAssessed} value={slackCountValue(c.notAssessed, c)} basis="derived" tint="slate" />
     </div>
   );
 }

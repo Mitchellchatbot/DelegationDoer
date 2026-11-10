@@ -9,6 +9,9 @@ import { AttentionFeed } from "@/components/exec/AttentionFeed";
 import { AttentionRow } from "@/components/exec/AttentionRow";
 import { COPY } from "@/components/exec/drafts/copy";
 import { DraftsBucket, orderDraftItems } from "@/components/exec/drafts/DraftsBucket";
+import { DraftStatusBanner } from "@/components/exec/drafts/DraftStatusBanner";
+import { draftFocusTarget } from "@/components/exec/drafts/panel-logic";
+import { AssessButton } from "@/components/exec/email/AssessButton";
 import { EmailRowItem } from "@/components/exec/email/EmailRowItem";
 import { EmailTabView, execDraftCountLabel } from "@/components/exec/email/EmailTabView";
 import { draftChecksOverdue, DraftsRows, SystemSection } from "@/components/exec/overview/SystemSection";
@@ -16,7 +19,7 @@ import type { AttentionItem } from "@/lib/exec/attention-types";
 import { draftPageHref, draftReplyHrefFor } from "@/lib/exec/drafts-links";
 import type { EmailRowView, EmailTabView as EmailTabData } from "@/lib/exec/email-view";
 import type { OverviewDraftsSystem, OverviewSystem } from "@/lib/exec/overview";
-import { listItem, NOW_ISO, textOf, TZ } from "../__tests__/drafts-ui-fixtures";
+import { draftView, listItem, NOW_ISO, textOf, TZ, WEB_LINK } from "../__tests__/drafts-ui-fixtures";
 
 // UI05, UI06, UI07, UI09, UI10 and the island list of components/exec/drafts
 // (P4 contract §5.11, §3.13.5, Y7-Y9, X7; bindings AM2).
@@ -361,5 +364,44 @@ describe("X7: the list row's chip", () => {
   it("the reply_sent_pending overlay reads 'Reply sent, syncing'", () => {
     expect(textOf(render(rowView({ answered: "reply_sent_pending" })))).toContain("Reply sent, syncing");
     expect(COPY.restrictedRow).toBe("Draft for a restricted thread");
+  });
+});
+
+// P9 F27: after Save, Send or Discard the draft's new state is announced by a region that was already there, and focus
+// lands on it (never <body>) when the pressed button is gone or the send dialog closed.
+describe("P9 F27: draft actions announce their outcome and keep focus", () => {
+  const banner = (view: ReturnType<typeof draftView>) => renderToStaticMarkup(createElement(DraftStatusBanner, { view, tz: TZ, nowIso: NOW_ISO }));
+  const headline = (markup: string) => /<p tabindex="-1" role="status" aria-live="polite" data-banner-headline="true" class="[^"]*">([^<]*)<\/p>/.exec(markup)?.[1] ?? null;
+  const LINKED = { linked: true, webLink: WEB_LINK };
+
+  it("the headline is one persistent status region, focusable by script, in every state; its text follows the state", () => {
+    const draft = headline(banner(draftView({ status: "draft" })));
+    const saved = headline(banner(draftView({ status: "saved", savedVersion: 3, outlook: LINKED })));
+    const sending = headline(banner(draftView({ status: "sending", savedVersion: 3, outlook: LINKED })));
+    const discarded = headline(banner(draftView({ status: "discarded" })));
+    for (const h of [draft, saved, sending, discarded]) expect(h).not.toBeNull();
+    expect(new Set([draft, saved, sending, discarded]).size).toBe(4);
+    expect(saved).toBe("Saved in your Outlook Drafts. People with access to your mailbox can see it.");
+  });
+
+  it("draftFocusTarget: the send dialog closing, or an action ending with focus lost, puts focus on the headline", () => {
+    const idle = { busy: false, sending: false };
+    expect(draftFocusTarget({ busy: false, sending: true }, idle, false)).toBe("headline");
+    expect(draftFocusTarget({ busy: true, sending: false }, idle, true)).toBe("headline");
+    expect(draftFocusTarget({ busy: true, sending: false }, idle, false)).toBeNull();
+    expect(draftFocusTarget(idle, { busy: true, sending: false }, true)).toBeNull();
+    expect(draftFocusTarget(idle, idle, true)).toBeNull();
+  });
+
+  it("DraftPanel wires it: the banner gets the headline ref, and the effect focuses it from draftFocusTarget", () => {
+    const src = readFileSync(path.join(SRC, "components", "exec", "drafts", "DraftPanel.tsx"), "utf8");
+    expect(src).toMatch(/headlineRef=\{headlineRef\}/);
+    expect(src).toMatch(/draftFocusTarget\(prev, next, lost\) === "headline"\) headlineRef\.current\?\.focus\(\)/);
+    expect(src).toMatch(/\}, \[busy, sending\]\);/);
+  });
+
+  it("AssessButton's status region is mounted (empty) before any click", () => {
+    const idle = renderToStaticMarkup(createElement(AssessButton, { threadId: "t_1" }));
+    expect(idle).toMatch(/<span role="status" aria-live="polite" data-assess-status="true" class="sr-only"><\/span>/);
   });
 });

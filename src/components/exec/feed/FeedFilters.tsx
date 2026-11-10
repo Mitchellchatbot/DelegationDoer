@@ -91,7 +91,8 @@ export function FeedFilters({ filters }: { filters: AttentionFilters }) {
                   prefetch={false}
                   aria-current={active ? "true" : undefined}
                   className={cn(
-                    "rounded-full border px-2.5 py-0.5 text-[12px] font-semibold transition-colors",
+                    // P9 F25: a 40 px tap target below sm.
+                    "inline-flex min-h-10 items-center rounded-full border px-3 py-0.5 text-[12px] font-semibold transition-colors sm:min-h-0 sm:px-2.5",
                     active ? "border-indigo-600 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:text-ink"
                   )}
                 >

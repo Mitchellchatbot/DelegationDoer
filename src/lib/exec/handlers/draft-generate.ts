@@ -2,6 +2,7 @@ import "server-only";
 
 import { runDraftGeneration, type GenerationResult } from "@/lib/exec/drafts-generate";
 import { DRAFT_JOB_KINDS, DRAFT_LIMITS } from "@/lib/exec/drafts-types";
+import { eaTokenConfigured } from "@/lib/exec/sources/mail";
 import { NonRetryableError, type EnqueueJobInput, type ExecPrincipal, type JobContext, type JobHandler } from "@/lib/exec/types";
 
 // exec.draft-generate (P4 contract §3.11; Area C): interactive lane, 150 s
@@ -40,7 +41,9 @@ export const draftGenerateJobHandler: JobHandler = {
   kind: KIND,
   lane: "interactive",
   timeoutMs: DRAFT_GENERATE_TIMEOUT_MS,
-  run: (ctx: JobContext) => runGenerate(ctx)
+  run: (ctx: JobContext) => runGenerate(ctx),
+  // P9 F18: only a process holding the EA (draft) token claims this kind; elsewhere it stays queued for the one that does.
+  claimable: () => eaTokenConfigured()
 };
 
 /** The enqueue input for one generation request (T01, T04, T10-T12): references only. */

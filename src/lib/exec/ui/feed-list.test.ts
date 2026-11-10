@@ -6,7 +6,7 @@ vi.mock("@/components/exec/drafts/frame-guard", () => ({ useIsTopWindow: vi.fn()
 
 import { useIsTopWindow } from "@/components/exec/drafts/frame-guard";
 import { AttentionPageView } from "@/components/exec/feed/AttentionPageView";
-import { FeedList, feedEmptyKind, type FeedListProps } from "@/components/exec/feed/FeedList";
+import { FeedList, feedEmptyKind, latestRowMessage, type FeedListProps } from "@/components/exec/feed/FeedList";
 import { FeedMessageLine, FeedRowActions } from "@/components/exec/feed/FeedRowActions";
 import { feedFocusSelectors, focusFirst, focusLost } from "@/lib/exec/ui/focus";
 import { AttentionSection } from "@/components/exec/overview/AttentionSection";
@@ -326,5 +326,28 @@ describe("AttentionSection: the Overview card on FeedList (§3.13.3)", () => {
     const text = textOf(renderToStaticMarkup(createElement(AttentionSection, { attention: { ok: false, error: "unavailable" }, tz: TZ, now: NOW })));
     expect(text).toContain("Couldn't load this section right now.");
     expect(text).not.toContain("Nothing needs you");
+  });
+});
+
+// P9 F27: a row's outcome is read out by one live region the list always has (the row's own line remounts with its
+// controls, or arrives in a new stub, already holding its text).
+describe("P9 F27: one persistent list-level live region for row outcomes", () => {
+  it("the region is there, empty, before any action, in a top-level list, a framed one and an empty one", () => {
+    const region = /<p aria-live="polite" role="status" data-feed-announce="true" class="sr-only"><\/p>/;
+    expect(render()).toMatch(region);
+    vi.mocked(useIsTopWindow).mockReturnValue(false);
+    expect(render()).toMatch(region);
+    vi.mocked(useIsTopWindow).mockReturnValue(true);
+    expect(render({ initialItems: [] })).toMatch(region);
+  });
+
+  it("latestRowMessage: the newest row message that is new since the last render; none when nothing changed", () => {
+    const dismissed = { tone: "ok" as const, text: "Dismissed.", undo: true };
+    const failed = { tone: "error" as const, text: "Couldn't save that. Try again." };
+    const before = new Map<string, typeof dismissed | null>([[dd.id, null], [mail.id, null]]);
+    expect(latestRowMessage(before, [{ item: dd, message: dismissed }, { item: mail, message: null }])).toBe("Dismissed.");
+    expect(latestRowMessage(new Map([[dd.id, dismissed]]), [{ item: dd, message: dismissed }])).toBeNull();
+    expect(latestRowMessage(new Map([[dd.id, dismissed]]), [{ item: dd, message: dismissed }, { item: mail, message: failed }])).toBe(failed.text);
+    expect(latestRowMessage(new Map(), [])).toBeNull();
   });
 });

@@ -31,12 +31,16 @@ export const CATEGORY_META: Readonly<Record<AttentionCategory, { label: string; 
   on_track: {
     label: "On track",
     title: "Explicitly fine",
-    className: "text-ok border-ok/30 bg-ok/10"
+    // P9 F5: text-ok on ok/10 was 2.96:1.
+    className: "text-emerald-700 border-emerald-200 bg-emerald-50"
   }
 };
 
+/** P9 F5: an unknown category's tone (text-muted on surface2 was 4.34:1). */
+export const CATEGORY_FALLBACK_CLASS = "text-slate-600 border-slate-200 bg-slate-100";
+
 export function CategoryBadge({ category }: { category: AttentionCategory }) {
-  const meta = CATEGORY_META[category] ?? { label: String(category), title: "", className: "text-muted border-border bg-surface2" };
+  const meta = CATEGORY_META[category] ?? { label: String(category), title: "", className: CATEGORY_FALLBACK_CLASS };
   return (
     <span className={cn("badge", meta.className)} title={meta.title || undefined}>
       {meta.label}

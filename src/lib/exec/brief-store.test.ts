@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
+vi.mock("@/lib/exec/ops", () => ({ notifyOps: vi.fn() }));
 
 import { BRIEF_TEXT_SENTINELS, assertNoBriefText } from "@/lib/exec/__tests__/brief-assert";
 import { createFakeBriefDb, type FakeBriefDb, type FakeBriefDbSeed } from "@/lib/exec/__tests__/fake-brief-db";
 import type { Row } from "@/lib/exec/__tests__/fake-slack-db";
 import * as store from "@/lib/exec/brief-store";
 import type { BriefContent, NewCheckin } from "@/lib/exec/brief-types";
+import { notifyOps } from "@/lib/exec/ops";
 import { parseSlackScrubCursor, parseTokenHealthState } from "@/lib/exec/sync-state";
 import type { ExecPrincipal } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -37,6 +39,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
   store.__resetBriefStoreForTests();
+  vi.mocked(notifyOps).mockReset().mockResolvedValue(true);
   use();
 });
 afterEach(() => {
@@ -168,14 +171,20 @@ describe("ST01 the schema probe and the not-installed mapping", () => {
     expect((fin as store.BriefStoreError).op).toBe("not_installed");
     miss("exec_brief_delivery_step");
     expect(await store.deliveryStep(String(b.id), { from: ["built"], to: "delivering", countPost: true })).toBe(false);
-    miss("exec_brief_scrub_threads");
+    // P9 (§3.1): v2 first; a function code falls back to v1 (so both answer it), a table code is v2's own answer.
+    const missBoth = (v1: string) => {
+      store.__resetBriefStoreForTests();
+      miss(`${v1}_v2`);
+      if (code === "42883" || code === "PGRST202") miss(v1);
+    };
+    missBoth("exec_brief_scrub_threads");
     expect(await store.scrubBriefsForThreads(P, ["t_1"])).toBeNull();
-    miss("exec_brief_scrub_slack");
+    missBoth("exec_brief_scrub_slack");
     expect(await store.scrubBriefsForSlack(P, { slackKeys: ["m:C0X:1.000001"], channels: [], all: false })).toBeNull();
-    miss("exec_brief_scrub_slack");
+    missBoth("exec_brief_scrub_slack");
     expect(await store.scrubBriefsForSlackSystem("ep_1")).toBeNull();
-    miss("exec_brief_purge_expired");
-    expect(await store.purgeExpiredBriefs(NOW)).toEqual({ contentPurged: 0, briefsDeleted: 0, checkinsDeleted: 0, mentionsDeleted: 0 });
+    missBoth("exec_brief_purge_expired");
+    expect(await store.purgeExpiredBriefs(NOW)).toEqual({ contentPurged: 0, refsReleased: 0, briefsDeleted: 0, checkinsDeleted: 0, mentionsDeleted: 0 });
     for (const [op, run, expected] of [
       ["exec_briefs", () => store.getBriefByDate(P, String(b.local_date)), null],
       ["exec_briefs", () => store.getBriefById(P, String(b.id)), null],
@@ -190,6 +199,7 @@ describe("ST01 the schema probe and the not-installed mapping", () => {
       ["exec_briefs", () => store.listStaleDelivering(P, NOW), []],
       ["exec_briefs", () => store.oldestBuildInFlight(P), null],
       ["exec_briefs", () => store.listPrincipalIdsWithSlackLines(10), []],
+      ["exec_briefs", () => store.listBriefDigestKeys(P), []],
       ["exec_brief_mentions", () => store.getMentions(P, ["f"]), new Map()],
       ["exec_brief_checkins", () => store.listCheckinsForBrief(P, String(b.id)), []],
       ["exec_brief_checkins", () => store.getCheckin(P, `ebc_${hex(1)}`), null],
@@ -655,13 +665,14 @@ describe("ST08 the fake mirrors RPCs 1-7 (SQ05-SQ12's cases, through the store)"
   it("ST08 / SQ11: more than 500 keys are split into calls of ≤ 500; all is one call with no keys", async () => {
     const keys = Array.from({ length: 1100 }, (_, i) => `m:C0X:${i}.000001`);
     await store.scrubBriefsForSlack(P, { slackKeys: keys, channels: ["C0A", "C0B"], all: false });
-    const calls = db.calls.filter((c) => c.target === "exec_brief_scrub_slack").map((c) => c.payload as Row);
+    const calls = db.calls.filter((c) => c.target === "exec_brief_scrub_slack_v2").map((c) => c.payload as Row);
     expect(calls.map((c) => [(c.p_slack_keys as string[]).length, (c.p_channels as string[]).length, c.p_all])).toEqual([[500, 2, false], [500, 0, false], [100, 0, false]]);
     await store.scrubBriefsForSlack(P, { slackKeys: keys, channels: [], all: true });
     expect(db.calls.at(-1)?.payload).toEqual({ p_principal: "ep_1", p_slack_keys: [], p_channels: [], p_all: true });
     const threads = Array.from({ length: 700 }, (_, i) => `t_${i}`);
     await store.scrubBriefsForThreads(P, threads);
-    expect(db.calls.filter((c) => c.target === "exec_brief_scrub_threads").map((c) => ((c.payload as Row).p_thread_ids as string[]).length)).toEqual([500, 200]);
+    expect(db.calls.filter((c) => c.target === "exec_brief_scrub_threads_v2").map((c) => ((c.payload as Row).p_thread_ids as string[]).length)).toEqual([500, 200]);
+    expect(db.calls.filter((c) => c.target === "exec_brief_scrub_threads" || c.target === "exec_brief_scrub_slack")).toEqual([]);
   });
 
   it("ST08 / SQ12: purge: content past its expiry nulled (status kept), rows past expires_at deleted with their check-ins, mentions before the cutoff", async () => {
@@ -671,12 +682,13 @@ describe("ST08 the fake mirrors RPCs 1-7 (SQ05-SQ12's cases, through the store)"
     db.tables.exec_brief_mentions.push({ principal_id: "ep_1", fingerprint: "old", last_state_hash: "s", last_band: "high", last_mentioned_on: "2026-08-01" },
       { principal_id: "ep_1", fingerprint: "new", last_state_hash: "s", last_band: "high", last_mentioned_on: "2026-11-01" });
     const r = await store.purgeExpiredBriefs(NOW);
-    expect(r).toEqual({ contentPurged: 2, briefsDeleted: 1, checkinsDeleted: 0, mentionsDeleted: 1 });
+    expect(r).toEqual({ contentPurged: 2, refsReleased: 0, briefsDeleted: 1, checkinsDeleted: 0, mentionsDeleted: 1 });
+    // P9 (§3.1): RPC 7 v2 (this row cites no thread; ST-P9-5 covers the refs it keeps while the DM may exist).
     expect(row(stale.id)).toMatchObject({ status: "delivered", content: null, content_purged_at: NOW.toISOString(), ref_thread_ids: [] });
     expect(row(gone.id)).toBeUndefined();
     expect(db.tables.exec_brief_checkins).toEqual([]);
     expect(db.tables.exec_brief_mentions.map((m) => m.fingerprint)).toEqual(["new"]);
-    expect((db.calls.find((c) => c.target === "exec_brief_purge_expired")?.payload as Row).p_mention_cutoff).toBe("2026-08-11");
+    expect((db.calls.find((c) => c.target === "exec_brief_purge_expired_v2")?.payload as Row).p_mention_cutoff).toBe("2026-08-11");
   });
 });
 
@@ -868,13 +880,13 @@ describe("the other reads and writes", () => {
     expect(await store.checkinPostKeys(P, [])).toEqual(new Set());
   });
 
-  it("listPrincipalIdsWithSlackLines: distinct principals whose briefs still hold content citing Slack", async () => {
+  it("listPrincipalIdsWithSlackLines: distinct principals whose briefs still cite Slack (P9 §3.1: a purged row's kept refs count)", async () => {
     await addBrief("built", { ref_slack_channels: ["C0X"] });
     await addBrief("built", { ref_slack_channels: ["C0Y"] });
     await addBrief("built", { ref_slack_channels: ["C0Z"] }, P2);
     await addBrief("built", {}, { id: "ep_3" } as unknown as ExecPrincipal);
     await addBrief("page_only", { content: null, content_purged_at: at(-1000), ref_slack_channels: ["C0W"] }, { id: "ep_4" } as unknown as ExecPrincipal);
-    expect(await store.listPrincipalIdsWithSlackLines(10)).toEqual(["ep_1", "ep_2"]);
+    expect(await store.listPrincipalIdsWithSlackLines(10)).toEqual(["ep_1", "ep_2", "ep_4"]);
     expect(await store.listPrincipalIdsWithSlackLines(1)).toEqual(["ep_1"]);
   });
 
@@ -970,5 +982,131 @@ describe("the fake itself (§5.19: the seams areas B-E rely on)", () => {
     await addCheckin(b);
     await client.from("exec_briefs").delete().eq("id", b.id);
     expect(db.tables.exec_brief_checkins).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 (Area C): §3.1 the _v2 RPCs and their v1 fallback; F4 the digest keys; F12 the delivery_unknown follow-ups
+// ---------------------------------------------------------------------------
+
+describe("P9 §3.1 the _v2 RPCs first, P8's v1 while they are missing (C43's pattern)", () => {
+  const purged = (over: Row = {}) => ({ content: null, content_purged_at: at(-86_400_000), content_expires_at: at(-86_400_000), ...over });
+
+  it("ST-P9-1 every scrub and the purge call the _v2 RPC (same payload as v1); v2 reaches a purged delivered row v1 never could", async () => {
+    const b = await addBrief("delivered", purged({ ref_thread_ids: ["t_1"], ref_slack_keys: ["d:C0OPS:2026-11-08"], ref_slack_channels: ["C0OPS"] }));
+    expect(await store.scrubBriefsForThreads(P, ["t_1"])).toBe(1);
+    const call = db.calls.find((c) => c.kind === "rpc" && c.target === "exec_brief_scrub_threads_v2");
+    expect(call?.payload).toEqual({ p_principal: "ep_1", p_thread_ids: ["t_1"] });
+    expect(row(b.id)).toMatchObject({ content: null, ref_thread_ids: [], ref_slack_keys: [], ref_slack_channels: [], scrubbed_at: NOW.toISOString() });
+    await store.scrubBriefsForSlack(P, { slackKeys: ["m:C0X:1.000001"], channels: [], all: false });
+    await store.scrubBriefsForSlackSystem("ep_1");
+    await store.purgeExpiredBriefs(NOW);
+    expect(db.calls.filter((c) => c.kind === "rpc").map((c) => c.target)).toEqual(["exec_brief_scrub_threads_v2", "exec_brief_scrub_slack_v2",
+      "exec_brief_scrub_slack_v2", "exec_brief_purge_expired_v2"]);
+    expect(notifyOps).not.toHaveBeenCalled();
+  });
+
+  it("ST-P9-2 v2 missing (42883 / PGRST202) → v1 answers the same call, one ops alert (function and code only), v1 directly for 5 minutes, then v2 is tried again", async () => {
+    use({ missing: ["exec_brief_scrub_threads_v2", "exec_brief_scrub_slack_v2", "exec_brief_purge_expired_v2"] });
+    const b = await addBrief("delivered", { content: content([item("b1", { threadIds: ["t_1"] })]), ref_thread_ids: ["t_1"] });
+    expect(await store.scrubBriefsForThreads(P, ["t_1"])).toBe(1);
+    expect(db.calls.filter((c) => c.kind === "rpc").map((c) => c.target)).toEqual(["exec_brief_scrub_threads_v2", "exec_brief_scrub_threads"]);
+    expect((((row(b.id).content as Row).sections as Row[])[0].items as Row[])[0].text).toBe("[Removed: restricted sender]");
+    expect(vi.mocked(notifyOps).mock.calls).toHaveLength(1);
+    const alert = vi.mocked(notifyOps).mock.calls[0][0];
+    expect(alert).toMatchObject({ key: store.BRIEF_V2_MISSING_OPS_KEY, detail: "exec_brief_scrub_threads_v2: PGRST202" });
+    expect(alert.title).toMatch(/20261111200000_exec_brief_dm_refs\.sql/);
+    assertNoBriefText(alert);
+    // While marked absent: v1 directly, for every function of the file, no second alert.
+    db.calls.length = 0;
+    expect(await store.scrubBriefsForSlack(P, { slackKeys: ["m:C0X:1.000001"], channels: [], all: false })).toBe(0);
+    expect(await store.purgeExpiredBriefs(NOW)).toMatchObject({ refsReleased: 0 });
+    expect(db.calls.filter((c) => c.kind === "rpc").map((c) => c.target)).toEqual(["exec_brief_scrub_slack", "exec_brief_purge_expired"]);
+    expect(vi.mocked(notifyOps).mock.calls).toHaveLength(1);
+    // Five minutes later v2 is tried again (and here, still missing, falls back again).
+    vi.setSystemTime(new Date(NOW.getTime() + 5 * 60_000 + 1));
+    db.calls.length = 0;
+    await store.scrubBriefsForThreads(P, ["t_2"]);
+    expect(db.calls.filter((c) => c.kind === "rpc").map((c) => c.target)).toEqual(["exec_brief_scrub_threads_v2", "exec_brief_scrub_threads"]);
+  });
+
+  it("ST-P9-3 another error of v2 is v2's own (no fallback, no alert); the BriefStoreError names the v2 function and the code only", async () => {
+    await addBrief("delivered");
+    db.failNext("exec_brief_scrub_threads_v2", "55P03", `lock timeout ${BRIEF_TEXT_SENTINELS.briefLine}`);
+    const err = await store.scrubBriefsForThreads(P, ["t_1"]).catch((e: unknown) => e);
+    expect(err).toMatchObject({ name: "BriefStoreError", op: "exec_brief_scrub_threads_v2", pgCode: "55P03" });
+    assertNoBriefText(err);
+    expect(db.calls.filter((c) => c.kind === "rpc").map((c) => c.target)).toEqual(["exec_brief_scrub_threads_v2"]);
+    db.failNext("exec_brief_purge_expired_v2", "57014");
+    await expect(store.purgeExpiredBriefs(NOW)).rejects.toMatchObject({ op: "exec_brief_purge_expired_v2", pgCode: "57014" });
+    expect(notifyOps).not.toHaveBeenCalled();
+  });
+
+  it("ST-P9-4 purgeExpiredBriefs totals refsReleased over rounds (another round while any count, refsReleased included, equals the batch); a malformed v2 answer throws", async () => {
+    const rpc = db.client as { rpc: (fn: string, args: Row) => unknown };
+    const real = rpc.rpc.bind(rpc);
+    const answers = [
+      { contentPurged: 3, refsReleased: 1000, briefsDeleted: 0, checkinsDeleted: 0, mentionsDeleted: 0 },
+      { contentPurged: 0, refsReleased: 7, briefsDeleted: 2, checkinsDeleted: 1, mentionsDeleted: 4 }
+    ];
+    rpc.rpc = (fn: string, args: Row) => {
+      if (fn !== "exec_brief_purge_expired_v2") return real(fn, args);
+      const data = answers.shift();
+      return { abortSignal: () => ({ then: (ok: (v: unknown) => unknown) => Promise.resolve({ data, error: null }).then(ok) }),
+        then: (ok: (v: unknown) => unknown) => Promise.resolve({ data, error: null }).then(ok) };
+    };
+    expect(await store.purgeExpiredBriefs(NOW)).toEqual({ contentPurged: 3, refsReleased: 1007, briefsDeleted: 2, checkinsDeleted: 1, mentionsDeleted: 4 });
+    answers.push({ contentPurged: 0, briefsDeleted: 0, checkinsDeleted: 0, mentionsDeleted: 0 } as never);
+    await expect(store.purgeExpiredBriefs(NOW)).rejects.toMatchObject({ op: "exec_brief_purge_expired_v2: malformed answer" });
+  });
+
+  it("ST-P9-5 RPC 7 v2 (the fake mirrors the SQL): a delivered row with its P6 ledger row keeps its refs past content expiry; a page_only row's refs go; with the ledger row gone and retention + 2 days passed the refs are released", async () => {
+    db.tables.exec_settings.push({ principal_id: "ep_1", retention_days_chat: 30 });
+    const kept = await addBrief("delivered", { delivered_at: at(-100 * 86_400_000), delivery_started_at: at(-100 * 86_400_000), content_expires_at: at(-86_400_000),
+      ref_thread_ids: ["t_1"] });
+    db.tables.exec_slack_posts.push({ principal_id: "ep_1", channel_id: "D0MITCH", ts: kept.slack_ts, installation_id: "esi_x", kind: "note" });
+    const page = await addBrief("page_only", { content_expires_at: at(-86_400_000), ref_thread_ids: ["t_2"] });
+    expect(await store.purgeExpiredBriefs(NOW)).toMatchObject({ contentPurged: 2, refsReleased: 0 });
+    expect(row(kept.id)).toMatchObject({ content: null, ref_thread_ids: ["t_1"] });
+    expect(row(page.id)).toMatchObject({ content: null, ref_thread_ids: [] });
+    db.tables.exec_slack_posts.length = 0;
+    expect(await store.purgeExpiredBriefs(NOW)).toMatchObject({ contentPurged: 0, refsReleased: 1 });
+    expect(row(kept.id).ref_thread_ids).toEqual([]);
+  });
+
+  it("ST-P9-6 FOLLOWUP_SCAN is at least 1000 (rows now live while their DM may exist, up to the local date + 740 days)", () => {
+    expect(store.FOLLOWUP_SCAN).toBeGreaterThanOrEqual(1000);
+  });
+});
+
+describe("P9 F4 listBriefDigestKeys and F12 listFollowups' delivery_unknown arm", () => {
+  it("ST-P9-7 listBriefDigestKeys: the distinct d: keys of every row still holding refs (a purged row's kept refs included), sorted; never an m: key or another principal's", async () => {
+    await addBrief("delivered", { ref_slack_keys: ["d:C0OPS:2026-11-05", "m:C0OPS:1.000100"], ref_slack_channels: ["C0OPS"] });
+    await addBrief("delivered", { content: null, content_purged_at: at(-1000), content_expires_at: at(-1000), ref_slack_keys: ["d:C0A:2026-10-01", "d:C0OPS:2026-11-05"],
+      ref_slack_channels: ["C0A", "C0OPS"] });
+    await addBrief("page_only", { content: null, content_purged_at: at(-1000), content_expires_at: at(-1000) });
+    await addBrief("built", { ref_slack_keys: ["d:C0OTHER:2026-11-01"], ref_slack_channels: ["C0OTHER"] }, P2);
+    expect(await store.listBriefDigestKeys(P)).toEqual(["d:C0A:2026-10-01", "d:C0OPS:2026-11-05"]);
+    expect(await store.listBriefDigestKeys(P2)).toEqual(["d:C0OTHER:2026-11-01"]);
+    const read = db.calls.filter((c) => c.kind === "select" && c.target === "exec_briefs").at(-1);
+    expect(read?.columns).toBe("ref_slack_keys");
+  });
+
+  it("ST-P9-8 listFollowups: a scrubbed delivery_unknown row (ts null, its delivery_started_at) next to a delivered one, oldest scrub first; followed rows drop out", async () => {
+    const delivered = await addBrief("delivered", { scrubbed_at: at(-60_000) });
+    const unknown = await addBrief("delivery_unknown", { scrubbed_at: at(-120_000) });
+    const unscrubbed = await addBrief("delivery_unknown");
+    const purgedDelivered = await addBrief("delivered", { content: null, content_purged_at: at(-1000), content_expires_at: at(-1000), scrubbed_at: at(-30_000) });
+    const f = await store.listFollowups(P, 10);
+    expect(f).toEqual([
+      { id: unknown.id, channel: null, ts: null, scrubbedAt: at(-120_000), deliveryStartedAt: "2026-11-09T13:02:00.000Z" },
+      { id: delivered.id, channel: "D0MITCH", ts: T(1), scrubbedAt: at(-60_000) },
+      { id: purgedDelivered.id, channel: "D0MITCH", ts: T(1), scrubbedAt: at(-30_000) }
+    ]);
+    expect(f.map((x) => x.id)).not.toContain(unscrubbed.id);
+    await store.markDmFollowed(String(unknown.id), at(-120_000));
+    expect((await store.listFollowups(P, 10)).map((x) => x.id)).toEqual([delivered.id, purgedDelivered.id]);
+    expect((await store.listFollowups(P, 1)).map((x) => x.id)).toEqual([delivered.id]);
+    expect(await store.listFollowups(P2, 10)).toEqual([]);
   });
 });

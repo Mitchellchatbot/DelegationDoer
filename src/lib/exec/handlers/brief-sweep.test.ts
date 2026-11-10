@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
 vi.mock("@/lib/exec/ops", () => ({ notifyOps: vi.fn() }));
-vi.mock("@/lib/exec/slack-reading", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/slack-reading")>()), listPurgeLog: vi.fn() }));
+vi.mock("@/lib/exec/slack-reading", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/slack-reading")>()), listPurgeLog: vi.fn(),
+  listAuthorOptouts: vi.fn() }));
 vi.mock("@/lib/exec/brief-screen", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/brief-screen")>()), purgeLogScrubQuery: vi.fn() }));
 vi.mock("@/lib/exec/sync-state", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/sync-state")>()), getSyncState: vi.fn(), putSyncState: vi.fn() }));
 vi.mock("@/lib/exec/slack-install", async (orig) => ({
@@ -23,14 +24,15 @@ import type { Row } from "@/lib/exec/__tests__/fake-slack-db";
 import { BRIEF_COPY, BRIEF_OPS } from "@/lib/exec/brief-copy";
 import { purgeLogScrubQuery, type BriefScreen } from "@/lib/exec/brief-screen";
 import { briefDmToView, renderBriefDm } from "@/lib/exec/brief-slack-ui";
-import { __resetBriefStoreForTests, claimBuild } from "@/lib/exec/brief-store";
+import { __resetBriefStoreForTests, claimBuild, listFollowups } from "@/lib/exec/brief-store";
 import type { BriefContent } from "@/lib/exec/brief-types";
 import { BRIEF_SWEEP_JOB_KIND, briefSweepJobHandler, briefSweepScheduledWork, type BriefSweepResult } from "@/lib/exec/handlers/brief-sweep";
 import { enqueueJob, isJobLive } from "@/lib/exec/jobs";
 import { notifyOps } from "@/lib/exec/ops";
 import { openActiveInstallation } from "@/lib/exec/slack-install";
 import { localDateOfTs } from "@/lib/exec/slack-intel-types";
-import { listPurgeLog } from "@/lib/exec/slack-reading";
+import { listAuthorOptouts, listPurgeLog } from "@/lib/exec/slack-reading";
+import { optoutFingerprint } from "@/lib/exec/slack-redact";
 import { listUsers } from "@/lib/exec/sources/dd";
 import { getSyncState, putSyncState } from "@/lib/exec/sync-state";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -55,7 +57,7 @@ function useDb(rows: Row[], checkins: Row[] = []): FakeBriefDb {
   return db;
 }
 const brief = () => db.tables.exec_briefs[0];
-const scrubCalls = () => db.calls.filter((c) => c.kind === "rpc" && c.target === "exec_brief_scrub_slack").map((c) => c.payload as Row);
+const scrubCalls = () => db.calls.filter((c) => c.kind === "rpc" && c.target === "exec_brief_scrub_slack_v2").map((c) => c.payload as Row);
 const storedAfterId = () => (cursor.get("slack-scrub") as { afterId: number } | undefined)?.afterId ?? 0;
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 const msg = (id: number, ts: string, createdAt: string, reason = "deleted_event", channelId = "C0SALES"): LogRow =>
@@ -77,7 +79,8 @@ beforeEach(() => {
   cursor = new Map();
   ws = fakeSlackWorkspace({ tokens: { [BOT_TOKEN]: { userId: "U0BOT", teamId: TEAM, botId: "B0BOT" } } });
   slack = installFakeSlack(ws.handlers);
-  for (const m of [notifyOps, listPurgeLog, purgeLogScrubQuery, getSyncState, putSyncState, openActiveInstallation, enqueueJob, isJobLive, listUsers]) {
+  for (const m of [notifyOps, listPurgeLog, listAuthorOptouts, purgeLogScrubQuery, getSyncState, putSyncState, openActiveInstallation, enqueueJob, isJobLive,
+    listUsers]) {
     vi.mocked(m as (...a: unknown[]) => unknown).mockReset();
   }
   vi.mocked(notifyOps).mockResolvedValue(true);
@@ -109,6 +112,8 @@ beforeEach(() => {
   vi.mocked(enqueueJob).mockResolvedValue({ enqueued: true, id: 1 });
   vi.mocked(isJobLive).mockResolvedValue(false);
   vi.mocked(listUsers).mockResolvedValue([]);
+  // P9 F4: no author has opted out unless a test says so.
+  vi.mocked(listAuthorOptouts).mockResolvedValue([]);
 });
 afterEach(() => {
   assertNoBriefText(out.calls(), { label: "console" });
@@ -134,7 +139,7 @@ describe("SW01, SW02, SW12 the purge-log feed (C16)", () => {
 
   it("SW01 the cursor never moves past a scrub that failed", async () => {
     log = [msg(1, SALES_TS, ago(3_600_000))];
-    db.failNext("exec_brief_scrub_slack", "53300");
+    db.failNext("exec_brief_scrub_slack_v2", "53300");
     const r = await sweep();
     expect(r.failedSteps).toEqual(["slackScrub"]);
     expect(storedAfterId()).toBe(0);
@@ -349,5 +354,156 @@ describe("SW07, SW08, SW10 results and what a scrub leaves", () => {
     expect(view.sections[1].lines).toEqual([{ text: BRIEF_COPY.removedSlack, kind: "fact", href: null }]);
     expect(view.headline).toBeNull();
     expect(BRIEF_ID.startsWith("eb_")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 (Area C): F4 (author opt-outs vs digest lines), F12 (delivery_unknown follow-ups), §3.1 (purged rows, old DMs)
+// ---------------------------------------------------------------------------
+
+/** A content whose Slack line is a digest line of #ops for 2026-11-05 (key d:C0OPS:2026-11-05). */
+function digestContent(): BriefContent {
+  const c = briefContent();
+  c.sections[1].items[0] = { ...c.sections[1].items[0], slackKeys: ["d:C0OPS:2026-11-05"], slackChannels: ["C0OPS"] };
+  return c;
+}
+const digestRow = (status: string, over: Row = {}) =>
+  briefRowSeed(status, { content: digestContent(), ref_slack_keys: ["d:C0OPS:2026-11-05"], ref_slack_channels: ["C0OPS"], ...over });
+const DELIVERED_TS = "1794000001.000100";
+const dmMessage = (ts: string, metadata: Row | null = null) =>
+  ws.messages.push({ channel: DM, ts, token: BOT_TOKEN, text: "x", blocks: [], metadata, deleted: false, updates: 0 });
+const slackLine = () => (brief().content as BriefContent).sections[1].items[0];
+
+describe("SW-P9-1..4 author opt-outs vs digest-derived lines (F4)", () => {
+  it("SW-P9-1 an opt-out of an author with zero stored messages: after one sweep the d: line reads removedSlack, scrubbed_at is set and listFollowups returns the brief; the next sweep replaces the DM with the note", async () => {
+    useDb([digestRow("delivered")]);
+    dmMessage(DELIVERED_TS);
+    vi.mocked(listAuthorOptouts).mockResolvedValue(["U0ALICE"]);
+    // No installation in the first sweep, so the follow-up waits (with one, the same sweep replaces the DM: the step runs first).
+    vi.mocked(openActiveInstallation).mockResolvedValueOnce(null);
+    const r = await sweep();
+    expect(r).toMatchObject({ optoutScrubbed: 1, followupsUpdated: 0, followupsPending: 1, failedSteps: [] });
+    expect(slackLine()).toMatchObject({ text: BRIEF_COPY.removedSlack, scrubbed: true, slackKeys: [], refs: [] });
+    expect(brief().scrubbed_at).toBe(NOW.toISOString());
+    expect((await listFollowups(PRINCIPAL, 10)).map((x) => x.id)).toEqual([BRIEF_ID]);
+    expect(cursor.get("optouts")).toEqual({ ...optoutFingerprint(["U0ALICE"]), changedAt: NOW.toISOString() });
+    // The next sweep: the DM becomes the note.
+    expect(await sweep()).toMatchObject({ followupsUpdated: 1, followupsPending: 0 });
+    expect(slack.calls.filter((c) => c.method === "chat.update").map((c) => c.body.ts)).toEqual([DELIVERED_TS]);
+    expect(JSON.stringify(ws.messages[0].blocks)).toContain(BRIEF_COPY.dmScrubbedNote);
+    expect(brief().dm_followed_at).toBe(NOW.toISOString());
+    assertNoBriefText(cursor.get("optouts"));
+  });
+
+  it("SW-P9-2 a shrinking opt-out set stores its fingerprint and scrubs nothing", async () => {
+    useDb([digestRow("delivered")]);
+    cursor.set("optouts", { ...optoutFingerprint(["U0ALICE", "U0BOB"]), changedAt: "2026-11-01T00:00:00.000Z" });
+    vi.mocked(listAuthorOptouts).mockResolvedValue(["U0ALICE"]);
+    expect(await sweep()).toMatchObject({ optoutScrubbed: 0, failedSteps: [] });
+    expect(scrubCalls()).toEqual([]);
+    expect(slackLine().text).toContain("Sales asked about pricing");
+    expect(cursor.get("optouts")).toEqual({ ...optoutFingerprint(["U0ALICE"]), changedAt: "2026-11-01T00:00:00.000Z" });
+  });
+
+  it("SW-P9-3 a failing scrub stores no state (the optouts step fails alone) and the next sweep retries", async () => {
+    useDb([digestRow("delivered")]);
+    vi.mocked(listAuthorOptouts).mockResolvedValue(["U0ALICE"]);
+    db.failNext("exec_brief_scrub_slack_v2", "57014");
+    const first = await sweep();
+    expect(first.failedSteps).toEqual(["optouts"]);
+    expect(cursor.has("optouts")).toBe(false);
+    expect(slackLine().text).toContain("Sales asked about pricing");
+    expect(await sweep()).toMatchObject({ optoutScrubbed: 1, failedSteps: [] });
+    expect(slackLine().text).toBe(BRIEF_COPY.removedSlack);
+    expect(cursor.get("optouts")).toMatchObject({ count: 1, changedAt: NOW.toISOString() });
+  });
+
+  it("SW-P9-4 a brief built 5 minutes after the change is scrubbed within the 30-minute window; one built after the window is not", async () => {
+    useDb([]);
+    vi.mocked(listAuthorOptouts).mockResolvedValue(["U0ALICE"]);
+    expect(await sweep()).toMatchObject({ optoutScrubbed: 0 });   // nothing cites a digest yet; the window opens
+    vi.setSystemTime(new Date(NOW.getTime() + 5 * 60_000));
+    useDb([digestRow("built")]);
+    expect(await sweep()).toMatchObject({ optoutScrubbed: 1 });
+    expect(slackLine().text).toBe(BRIEF_COPY.removedSlack);
+    vi.setSystemTime(new Date(NOW.getTime() + 31 * 60_000));
+    useDb([digestRow("built")]);
+    expect(await sweep()).toMatchObject({ optoutScrubbed: 0 });
+    expect(slackLine().text).toContain("Sales asked about pricing");
+  });
+});
+
+describe("SW-P9-F12 a delivery_unknown brief's DM copies (F12 b)", () => {
+  /** delivery_started_at 13:02:00 → the lookup reads from 13:01:00 (ts 1794229260) to 13:17:00. */
+  const COPY_1 = "1794229325.000100";
+  const COPY_2 = "1794229390.000200";
+  const meta = (briefId = BRIEF_ID) => ({ event_type: "exec_brief", event_payload: { brief_id: briefId, rev: 1 } });
+  const scrubbedUnknown = () => useDb([briefRowSeed("delivery_unknown", { scrubbed_at: "2026-11-09T13:10:00.000Z" })]);
+
+  it("SW-P9-F12 one landed copy (found by its metadata) → replaced by the note, then followed; the lookup reads the DM with metadata from the delivery's start", async () => {
+    scrubbedUnknown();
+    dmMessage(COPY_1, meta());
+    dmMessage("1794229330.000100", meta(`eb_${"b".repeat(32)}`));   // another brief's DM: never touched
+    expect(await sweep()).toMatchObject({ followupsUpdated: 1, followupsPending: 0 });
+    expect(slack.calls.filter((c) => c.method === "chat.update").map((c) => c.body.ts)).toEqual([COPY_1]);
+    const hist = slack.calls.find((c) => c.method === "conversations.history")?.body;
+    expect(hist).toMatchObject({ channel: DM, oldest: "1794229260.000000", latest: "1794230220.000000", include_all_metadata: "true", inclusive: "true" });
+    expect(brief().dm_followed_at).toBe("2026-11-09T13:10:00.000Z");
+    expect(await sweep()).toMatchObject({ followupsUpdated: 0, followupsPending: 0 });
+  });
+
+  it("SW-P9-F12 two posts that both landed → both replaced", async () => {
+    scrubbedUnknown();
+    dmMessage(COPY_1, meta());
+    dmMessage(COPY_2, meta());
+    expect(await sweep()).toMatchObject({ followupsUpdated: 1 });
+    expect(slack.calls.filter((c) => c.method === "chat.update").map((c) => c.body.ts).sort()).toEqual([COPY_1, COPY_2]);
+    expect(ws.messages.filter((m) => m.updates === 1)).toHaveLength(2);
+  });
+
+  it("SW-P9-F12 none found (the window read to its end) → followed with no Slack write", async () => {
+    scrubbedUnknown();
+    expect(await sweep()).toMatchObject({ followupsUpdated: 1, followupsPending: 0 });
+    expect(slack.calls.filter((c) => c.method === "chat.update" || c.method === "chat.delete")).toEqual([]);
+    expect(brief().dm_followed_at).toBe("2026-11-09T13:10:00.000Z");
+  });
+
+  it("SW-P9-F12 a lookup error → pending, nothing marked; the next sweep retries and replaces it", async () => {
+    scrubbedUnknown();
+    dmMessage(COPY_1, meta());
+    ws.failNext("conversations.history", { error: "internal_error" });
+    expect(await sweep()).toMatchObject({ followupsUpdated: 0, followupsPending: 1 });
+    expect(brief().dm_followed_at ?? null).toBeNull();
+    expect(await sweep()).toMatchObject({ followupsUpdated: 1, followupsPending: 0 });
+    expect(ws.messages[0].updates).toBe(1);
+  });
+});
+
+describe("SW-P9-3.1 purged rows (§3.1) and DMs chat.update can't edit any more", () => {
+  it("SW-P9-3.1 a purged delivered row (content null, its refs kept by RPC 7 v2) scrubbed later → its DM is replaced by the note", async () => {
+    useDb([briefRowSeed("delivered", { content: null, content_purged_at: "2026-11-09T13:05:00.000Z", content_expires_at: "2026-11-09T13:04:00.000Z",
+      scrubbed_at: "2026-11-09T13:10:00.000Z" })]);
+    dmMessage(DELIVERED_TS);
+    expect(await sweep()).toMatchObject({ followupsUpdated: 1 });
+    expect(JSON.stringify(ws.messages[0].blocks)).toContain(BRIEF_COPY.dmScrubbedNote);
+  });
+
+  it("SW-P9-3.1 cant_update_message / edit_window_closed → the DM is deleted instead, then followed; a failing delete stays pending", async () => {
+    for (const code of ["cant_update_message", "edit_window_closed"]) {
+      useDb([briefRowSeed("delivered", { scrubbed_at: "2026-11-09T13:10:00.000Z" })]);
+      ws.messages.length = 0;
+      dmMessage(DELIVERED_TS);
+      ws.failNext("chat.update", { error: code });
+      expect(await sweep(), code).toMatchObject({ followupsUpdated: 1 });
+      expect(ws.messages[0].deleted, code).toBe(true);
+      expect(brief().dm_followed_at, code).toBe("2026-11-09T13:10:00.000Z");
+    }
+    useDb([briefRowSeed("delivered", { scrubbed_at: "2026-11-09T13:10:00.000Z" })]);
+    ws.messages.length = 0;
+    dmMessage(DELIVERED_TS);
+    ws.failNext("chat.update", { error: "cant_update_message" });
+    ws.failNext("chat.delete", { error: "internal_error" });
+    expect(await sweep()).toMatchObject({ followupsUpdated: 0, followupsPending: 1 });
+    expect(brief().dm_followed_at ?? null).toBeNull();
   });
 });

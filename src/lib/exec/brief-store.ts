@@ -17,6 +17,7 @@ import type {
   CheckinStatus,
   NewCheckin
 } from "@/lib/exec/brief-types";
+import { notifyOps } from "@/lib/exec/ops";
 import type { ExecPrincipal } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
@@ -36,6 +37,10 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //   * Batch writes build every row with the identical key set (§0.3 rule 13); RPC payloads are built here.
 //   * Times compare as epoch ms; timestamps come back as ISO strings; local dates as YYYY-MM-DD.
 //   * Nothing here logs content; releaseRegenLock is the one function that never throws, and it logs the op only.
+//   * P9 (contract §3.1; Area C): RPCs 5, 6 and 7 go to their _v2 versions (20261111200000_exec_brief_dm_refs.sql: a purged
+//     row keeps its refs while its DM may still be in Slack, and the scrubs reach it) first. 42883 / PGRST202 (the P9
+//     migration isn't applied yet) → P8's v1 answers on the same signal, v2 is marked absent for 5 minutes per process
+//     (v1 is then called directly) and one ops alert says so (exec-brief-v2-missing; function names and codes only).
 
 const BRIEFS = "exec_briefs";
 const CHECKINS = "exec_brief_checkins";
@@ -49,6 +54,10 @@ const RPC_CLAIM_FALLBACK = "exec_brief_claim_fallback";
 const RPC_SCRUB_THREADS = "exec_brief_scrub_threads";
 const RPC_SCRUB_SLACK = "exec_brief_scrub_slack";
 const RPC_PURGE_EXPIRED = "exec_brief_purge_expired";
+/** P9 (§3.1): the versioned RPCs 5, 6 and 7, called first (v1 above is the fallback while P9's migration isn't applied). */
+const RPC_SCRUB_THREADS_V2 = "exec_brief_scrub_threads_v2";
+const RPC_SCRUB_SLACK_V2 = "exec_brief_scrub_slack_v2";
+const RPC_PURGE_EXPIRED_V2 = "exec_brief_purge_expired_v2";
 
 /** Every exec_briefs column the app reads (BriefRow). */
 const BRIEF_COLS =
@@ -91,8 +100,16 @@ const STALE_BUILDING_MS = BRIEF_LIMITS.staleBuildingMs;
 const NEVER_BUILT_MS = BRIEF_LIMITS.neverBuiltMs;
 /** The longest regenerate lock RPC 1 grants (C16 hold-back: regen_lock_until - this = the latest the claim could have run). */
 const MAX_REGEN_LOCK_MS = 900_000;
-const FOLLOWUP_SCAN = 500;
+/** P9 (§3.1): rows can now live while their DM may exist (up to the local date + 740 days), so the follow-up scan reads more. */
+export const FOLLOWUP_SCAN = 1000;
 const DAY_MS = 86_400_000;
+/** P9 (§3.1; P6 C43's pattern): how long a process remembers that the _v2 RPCs are missing before it tries them again. */
+const BRIEF_V2_ABSENT_MS = 5 * 60_000;
+const BRIEF_V2_MISSING_CODES: ReadonlySet<string> = new Set(["42883", "PGRST202"]);
+/** P9 (§3.1): the one ops alert while the P9 migration isn't applied (notifyOps keeps it to one per 15 minutes). */
+export const BRIEF_V2_MISSING_OPS_KEY = "exec-brief-v2-missing";
+/** P9 (F4): the opt-out scrub's digest keys, read from at most this many of the principal's rows (newest first). */
+const DIGEST_KEY_SCAN = 1000;
 /** security-3: how long a legacy brief's posting stamp holds the exec DM back, and how far back its row is looked for. */
 const LEGACY_IN_FLIGHT_MS = 10 * 60_000;
 const LEGACY_SCAN_MS = 3 * DAY_MS;
@@ -174,6 +191,36 @@ function withSignal<T extends { abortSignal(signal: AbortSignal): T }>(q: T, sig
 
 async function rpc(fn: string, args: Row, signal?: AbortSignal): Promise<Result> {
   return (await withSignal(db().rpc(fn, args), signal)) as Result;
+}
+
+type BriefV2Global = typeof globalThis & { __ddExecBriefV2AbsentAt?: number };
+
+/** P9 (§3.1): true while this process remembers (5 minutes) that the _v2 RPCs answered "missing". */
+function briefV2AbsentNow(): boolean {
+  const at = (globalThis as BriefV2Global).__ddExecBriefV2AbsentAt;
+  return typeof at === "number" && Number.isFinite(at) && Date.now() - at >= 0 && Date.now() - at < BRIEF_V2_ABSENT_MS;
+}
+
+/**
+ * P9 (§3.1, P6 C43's pattern): the _v2 RPC first. 42883 / PGRST202 (P9's migration isn't applied) → P8's v1 on the same
+ * signal; v2 is marked absent for 5 minutes per process (v1 is then called directly) and one ops alert names the function and
+ * the code. Any other answer of v2 (a result, another error, an abort) is v2's own. Returns the answer and the name of the
+ * function that gave it (a failure names that function).
+ */
+async function rpcV2First(v2: string, v1: string, args: Row, signal?: AbortSignal): Promise<{ result: Result; fn: string }> {
+  if (!briefV2AbsentNow()) {
+    const result = await rpc(v2, args, signal);
+    const code = result.error ? pgCodeOf(result.error) : null;
+    if (!(result.error && code !== null && BRIEF_V2_MISSING_CODES.has(code))) return { result, fn: v2 };
+    signal?.throwIfAborted();
+    (globalThis as BriefV2Global).__ddExecBriefV2AbsentAt = Date.now();
+    await notifyOps({
+      key: BRIEF_V2_MISSING_OPS_KEY,
+      title: "Brief scrubs and the brief purge are on P8's functions: apply 20261111200000_exec_brief_dm_refs.sql",
+      detail: `${v2}: ${code}`
+    });
+  }
+  return { result: await rpc(v1, args, signal), fn: v1 };
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
@@ -850,28 +897,48 @@ export async function recordLateNote(id: string, ts: string): Promise<boolean> {
     .not("fallback_sent_at", "is", null).select("id"));
 }
 
-/** C15: delivered briefs scrubbed since their DM was last followed up (dm_followed_at null or before scrubbed_at), oldest
- *  scrub first; refs only. */
-export async function listFollowups(principal: ExecPrincipal, limit: number): Promise<{ id: string; channel: string; ts: string; scrubbedAt: string }[]> {
+/** A C15 follow-up: a delivered DM by its recorded channel and ts; or (P9 F12) a delivery_unknown brief, whose DM copies (none,
+ *  one, or two that both landed) the sweep finds with the delivery's own metadata lookup from deliveryStartedAt. */
+export type BriefFollowup =
+  | { id: string; channel: string; ts: string; scrubbedAt: string }
+  | { id: string; channel: null; ts: null; scrubbedAt: string; deliveryStartedAt: string };
+
+/** C15: delivered briefs scrubbed since their DM was last followed up (dm_followed_at null or before scrubbed_at), and (P9 F12)
+ *  delivery_unknown briefs the same (ts null, with delivery_started_at), oldest scrub first; refs only. A purged row (content
+ *  null, its refs kept by RPC 7 v2) is listed like any other. */
+export async function listFollowups(principal: ExecPrincipal, limit: number): Promise<BriefFollowup[]> {
   const fn = "listFollowups";
   const pid = requirePrincipal(fn, principal);
   const n = typeof limit === "number" && Number.isSafeInteger(limit) ? Math.min(Math.max(limit, 1), 100) : 10;
   // Served by exec_briefs_followup_idx; the column-to-column comparison (dm_followed_at < scrubbed_at) is done here.
   const rows = await readRows(fn, db().from(BRIEFS).select("id,slack_channel_id,slack_ts,scrubbed_at,dm_followed_at").eq("principal_id", pid)
     .not("scrubbed_at", "is", null).not("delivered_at", "is", null).order("scrubbed_at", { ascending: true }).limit(FOLLOWUP_SCAN));
-  const out: { id: string; channel: string; ts: string; scrubbedAt: string }[] = [];
-  for (const r of rows ?? []) {
+  if (rows === null) return [];
+  const due = (scrubbedAt: string, r: Row) => {
+    const followed = iso(r.dm_followed_at);
+    return followed === null || Date.parse(followed) < Date.parse(scrubbedAt);
+  };
+  const out: BriefFollowup[] = [];
+  for (const r of rows) {
     const id = str(r.id);
     const channel = str(r.slack_channel_id);
     const ts = str(r.slack_ts);
     const scrubbedAt = iso(r.scrubbed_at);
-    const followed = iso(r.dm_followed_at);
-    if (!id || !channel || !isTs(ts) || !scrubbedAt) continue;
-    if (followed !== null && Date.parse(followed) >= Date.parse(scrubbedAt)) continue;
+    if (!id || !channel || !isTs(ts) || !scrubbedAt || !due(scrubbedAt, r)) continue;
     out.push({ id, channel, ts, scrubbedAt });
-    if (out.length >= n) break;
   }
-  return out;
+  // P9 F12 (b): a delivery_unknown brief may be in his DM (an ambiguous post the lookup couldn't confirm, or two posts that both
+  // landed) with no ts recorded.
+  const unknown = await readRows(fn, db().from(BRIEFS).select("id,scrubbed_at,dm_followed_at,delivery_started_at").eq("principal_id", pid)
+    .eq("status", "delivery_unknown").not("scrubbed_at", "is", null).order("scrubbed_at", { ascending: true }).limit(FOLLOWUP_SCAN));
+  for (const r of unknown ?? []) {
+    const id = str(r.id);
+    const scrubbedAt = iso(r.scrubbed_at);
+    const deliveryStartedAt = iso(r.delivery_started_at);
+    if (!id || !BRIEF_ID.test(id) || !scrubbedAt || !deliveryStartedAt || !due(scrubbedAt, r)) continue;
+    out.push({ id, channel: null, ts: null, scrubbedAt, deliveryStartedAt });
+  }
+  return out.sort((a, b) => Date.parse(a.scrubbedAt) - Date.parse(b.scrubbedAt)).slice(0, n);
 }
 
 /** dm_followed_at = scrubbedAt where it is null or earlier (a later scrub needs a new follow-up). */
@@ -945,7 +1012,8 @@ export async function oldestBuildInFlight(principal: ExecPrincipal): Promise<str
 // Scrubs and purge (RPCs 5–7)
 // ---------------------------------------------------------------------------
 
-/** M9: null = not installed (the tombstone procedure continues); other errors throw (retryable). Chunks of 500. */
+/** M9: null = not installed (the tombstone procedure continues); other errors throw (retryable). Chunks of 500. P9 (§3.1): RPC 5
+ *  v2 first (it also reaches a purged row whose DM may still be in Slack), v1 while v2 is missing. */
 export async function scrubBriefsForThreads(principal: ExecPrincipal, threadIds: readonly string[], opts?: ReadOpts): Promise<number | null> {
   const fn = "scrubBriefsForThreads";
   const pid = requirePrincipal(fn, principal);
@@ -955,23 +1023,24 @@ export async function scrubBriefsForThreads(principal: ExecPrincipal, threadIds:
   let n = 0;
   for (const chunk of chunks(ids, SCRUB_CHUNK)) {
     signal?.throwIfAborted();
-    const { data, error } = await rpc(RPC_SCRUB_THREADS, { p_principal: pid, p_thread_ids: chunk }, signal);
+    const { result: { data, error }, fn: called } = await rpcV2First(RPC_SCRUB_THREADS_V2, RPC_SCRUB_THREADS, { p_principal: pid, p_thread_ids: chunk }, signal);
     if (error) {
       if (missing(error)) {
         signal?.throwIfAborted();
         return null;
       }
-      throw failure(RPC_SCRUB_THREADS, error, signal);
+      throw failure(called, error, signal);
     }
     const c = int(data);
-    if (c === null || c < 0) throw malformed(RPC_SCRUB_THREADS);
+    if (c === null || c < 0) throw malformed(called);
     n += c;
   }
   return n;
 }
 
 /** C16: brief lines citing these Slack message / digest keys or conversations, or (all) every Slack-derived line, become
- *  "[Removed: no longer available in Slack]". null = not installed; other errors throw. ≤ 500 keys and 500 channels per call. */
+ *  "[Removed: no longer available in Slack]". null = not installed; other errors throw. ≤ 500 keys and 500 channels per call.
+ *  P9 (§3.1): RPC 6 v2 first (it also reaches a purged row whose DM may still be in Slack), v1 while v2 is missing. */
 export async function scrubBriefsForSlack(principal: ExecPrincipal, q: { slackKeys: readonly string[]; channels: readonly string[]; all: boolean },
   opts?: ReadOpts): Promise<number | null> {
   const fn = "scrubBriefsForSlack";
@@ -992,27 +1061,45 @@ export async function scrubBriefsForSlack(principal: ExecPrincipal, q: { slackKe
   let n = 0;
   for (const call of calls) {
     signal?.throwIfAborted();
-    const { data, error } = await rpc(RPC_SCRUB_SLACK, { p_principal: pid, p_slack_keys: call.keys, p_channels: call.channels, p_all: all }, signal);
+    const { result: { data, error }, fn: called } = await rpcV2First(RPC_SCRUB_SLACK_V2, RPC_SCRUB_SLACK,
+      { p_principal: pid, p_slack_keys: call.keys, p_channels: call.channels, p_all: all }, signal);
     if (error) {
       if (missing(error)) {
         signal?.throwIfAborted();
         return null;
       }
-      throw failure(RPC_SCRUB_SLACK, error, signal);
+      throw failure(called, error, signal);
     }
     const c = int(data);
-    if (c === null || c < 0) throw malformed(RPC_SCRUB_SLACK);
+    if (c === null || c < 0) throw malformed(called);
     n += c;
   }
   return n;
 }
 
-/** System purge (M10): principal ids whose briefs still cite Slack (content present, ref_slack_channels non-empty). */
+/** P9 F4: the distinct d:<channel>:<YYYY-MM-DD> keys the principal's briefs still hold, sorted: the rows whose lines can still be
+ *  shown (content present) or are still held in Slack (refs RPC 7 v2 kept while the DM may exist; v1 empties them with the
+ *  content). What an author opt-out scrubs (an opted-out author's words can be in any digest). Not installed → []. */
+export async function listBriefDigestKeys(principal: ExecPrincipal, opts?: ReadOpts): Promise<string[]> {
+  const fn = "listBriefDigestKeys";
+  const pid = requirePrincipal(fn, principal);
+  const signal = opts?.signal;
+  const rows = await readRows(fn, withSignal(db().from(BRIEFS).select("ref_slack_keys").eq("principal_id", pid).neq("ref_slack_keys", "{}")
+    .order("local_date", { ascending: false }).limit(DIGEST_KEY_SCAN), signal), signal);
+  const out = new Set<string>();
+  for (const r of rows ?? []) {
+    for (const k of strings(r.ref_slack_keys)) if (k.startsWith("d:") && k.length <= 300 && !/["\\]/.test(k)) out.add(k);
+  }
+  return [...out].sort();
+}
+
+/** System purge (M10): principal ids whose briefs still cite Slack (ref_slack_channels non-empty). P9 (§3.1): a purged row
+ *  whose refs RPC 7 v2 kept (its DM may still be in Slack) counts too; under v1 such a row has empty arrays. */
 export async function listPrincipalIdsWithSlackLines(limit: number, opts?: ReadOpts): Promise<string[]> {
   const fn = "listPrincipalIdsWithSlackLines";
   const n = typeof limit === "number" && Number.isSafeInteger(limit) ? Math.min(Math.max(limit, 1), 1000) : 100;
   const signal = opts?.signal;
-  let query = db().from(BRIEFS).select("principal_id").not("content", "is", null).neq("ref_slack_channels", "{}");
+  let query = db().from(BRIEFS).select("principal_id").neq("ref_slack_channels", "{}");
   query = query.order("principal_id", { ascending: true }).limit(5000);
   if (signal) query = query.abortSignal(signal);
   const rows = await readRows(fn, query, signal);
@@ -1030,47 +1117,51 @@ export async function scrubBriefsForSlackSystem(principalId: string, opts?: Read
   const fn = "scrubBriefsForSlackSystem";
   if (typeof principalId !== "string" || principalId.length === 0 || principalId.length > 100) throw bad(fn, "a principal id is required");
   const signal = opts?.signal;
-  const { data, error } = await rpc(RPC_SCRUB_SLACK, { p_principal: principalId, p_slack_keys: [], p_channels: [], p_all: true }, signal);
+  const { result: { data, error }, fn: called } = await rpcV2First(RPC_SCRUB_SLACK_V2, RPC_SCRUB_SLACK,
+    { p_principal: principalId, p_slack_keys: [], p_channels: [], p_all: true }, signal);
   if (error) {
     if (missing(error)) {
       signal?.throwIfAborted();
       return null;
     }
-    throw failure(RPC_SCRUB_SLACK, error, signal);
+    throw failure(called, error, signal);
   }
   const c = int(data);
-  if (c === null || c < 0) throw malformed(RPC_SCRUB_SLACK);
+  if (c === null || c < 0) throw malformed(called);
   return c;
 }
 
 /** RPC 7 (M9, C28) up to 10 times while any count equals the batch (P4's pattern), with p_mention_cutoff = UTC date(now) − 90
- *  days. A missing function → zeros. */
+ *  days. A missing function → zeros. P9 (§3.1): RPC 7 v2 first (refs kept while the DM may exist, then released: refsReleased);
+ *  v1 while v2 is missing (refsReleased stays 0). */
 export async function purgeExpiredBriefs(now: Date, opts?: ReadOpts):
-  Promise<{ contentPurged: number; briefsDeleted: number; checkinsDeleted: number; mentionsDeleted: number }> {
+  Promise<{ contentPurged: number; refsReleased: number; briefsDeleted: number; checkinsDeleted: number; mentionsDeleted: number }> {
   const fn = "purgeExpiredBriefs";
   const at = validDate(fn, now, "now");
   const signal = opts?.signal;
   const cutoff = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()) - MENTION_TTL_DAYS * DAY_MS).toISOString().slice(0, 10);
-  const total = { contentPurged: 0, briefsDeleted: 0, checkinsDeleted: 0, mentionsDeleted: 0 };
+  const total = { contentPurged: 0, refsReleased: 0, briefsDeleted: 0, checkinsDeleted: 0, mentionsDeleted: 0 };
   for (let round = 0; round < PURGE_ROUNDS; round += 1) {
     signal?.throwIfAborted();
-    const { data, error } = await rpc(RPC_PURGE_EXPIRED, { p_now: at.toISOString(), p_limit: PURGE_BATCH, p_mention_cutoff: cutoff }, signal);
+    const { result: { data, error }, fn: called } = await rpcV2First(RPC_PURGE_EXPIRED_V2, RPC_PURGE_EXPIRED,
+      { p_now: at.toISOString(), p_limit: PURGE_BATCH, p_mention_cutoff: cutoff }, signal);
     if (error) {
       if (missing(error)) {
         signal?.throwIfAborted();
         return total;
       }
-      throw failure(RPC_PURGE_EXPIRED, error, signal);
+      throw failure(called, error, signal);
     }
     const r = data !== null && typeof data === "object" && !Array.isArray(data) ? (data as Row) : null;
     const read = (k: keyof typeof total): number => {
       const v = int(r?.[k]);
-      if (v === null || v < 0) throw malformed(RPC_PURGE_EXPIRED);
+      if (v === null || v < 0) throw malformed(called);
       return v;
     };
-    const step = { contentPurged: read("contentPurged"), briefsDeleted: read("briefsDeleted"), checkinsDeleted: read("checkinsDeleted"),
-      mentionsDeleted: read("mentionsDeleted") };
+    const step = { contentPurged: read("contentPurged"), refsReleased: called === RPC_PURGE_EXPIRED_V2 ? read("refsReleased") : 0,
+      briefsDeleted: read("briefsDeleted"), checkinsDeleted: read("checkinsDeleted"), mentionsDeleted: read("mentionsDeleted") };
     total.contentPurged += step.contentPurged;
+    total.refsReleased += step.refsReleased;
     total.briefsDeleted += step.briefsDeleted;
     total.checkinsDeleted += step.checkinsDeleted;
     total.mentionsDeleted += step.mentionsDeleted;
@@ -1314,7 +1405,8 @@ export async function checkinPostKeys(principal: ExecPrincipal, keys: readonly {
   return out;
 }
 
-/** Test seam: forget the per-process schema cache. */
+/** Test seam: forget the per-process schema cache and (P9) that the _v2 RPCs were found missing. */
 export function __resetBriefStoreForTests(): void {
   schemaCache = null;
+  delete (globalThis as BriefV2Global).__ddExecBriefV2AbsentAt;
 }

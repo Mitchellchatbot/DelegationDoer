@@ -154,17 +154,19 @@ describe("ui-5: focus after an action", () => {
 });
 
 describe("ui-6: the five tabs fit a phone", () => {
-  it("below sm the pills drop the gap and tighten (px-2, 12 px); from sm the old sizes", () => {
+  // P9 F25 (flip): below sm the pills no longer shrink to fit (30x29 px targets); each is 40 px tall with a gap, and the
+  // strip scrolls sideways. From sm up the old sizes.
+  it("below sm the pills are 40 px tap targets with a gap and the strip scrolls; from sm the old sizes", () => {
     const html = renderToStaticMarkup(createElement(ExecTabs, { active: "chat", tabs: EXEC_TABS }));
     const strip = html.match(/<div data-exec-tab-strip="true"[^>]*class="([^"]*)"/)?.[1] ?? "";
-    expect(strip.split(" ")).toEqual(expect.arrayContaining(["gap-0", "sm:gap-0.5", "overflow-x-auto"]));
+    expect(strip.split(" ")).toEqual(expect.arrayContaining(["gap-1", "sm:gap-0.5", "overflow-x-auto"]));
     const pills = [...html.matchAll(/<a[^>]*class="([^"]*rounded-full px-[^"]*)"/g)].map((m) => m[1].split(" "));
     // P8 (AM-P8-23, forced): seven tabs with Brief.
     expect(pills).toHaveLength(7);
     for (const c of pills) {
-      // P8 (forced): the seventh tab, Brief, needs px-1 and 11 px below sm to fit a 390 px phone (P8 screenshots, SH01).
-      expect(c).toEqual(expect.arrayContaining(["px-1", "sm:px-3.5", "text-[11px]", "sm:text-[12.5px]"]));
-      expect(c).not.toContain("px-2.5");
+      expect(c).toEqual(expect.arrayContaining(["min-h-10", "sm:min-h-0", "px-3", "sm:px-3.5", "text-[12px]", "sm:text-[12.5px]"]));
+      expect(c).not.toContain("px-1");
+      expect(c).not.toContain("text-[11px]");
     }
   });
 });

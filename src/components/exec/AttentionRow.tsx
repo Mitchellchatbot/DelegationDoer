@@ -37,7 +37,9 @@ const BAND_TILE: Readonly<Record<PriorityBand, string>> = {
   normal: "bg-slate-100 text-slate-600 ring-slate-200/70"
 };
 
-const AI_KINDS: ReadonlySet<string> = new Set<string>(DDTEXT_AI_KINDS);
+// P9 F29: a Slack decision or commitment is the model's reading of a message (P7a triage), so it carries the AI label
+// beside its title too; slack_request stays a record-shaped item (asked of him, by the message itself).
+export const AI_KINDS: ReadonlySet<string> = new Set<string>([...DDTEXT_AI_KINDS, "slack_decision", "slack_commitment"]);
 
 function present(text: string | null | undefined): text is string {
   return typeof text === "string" && text.trim().length > 0;
@@ -68,7 +70,7 @@ function ReasonsDisclosure({ item }: { item: AttentionItem }) {
   const reasons = item.priority.reasons ?? [];
   return (
     <details data-reasons className="text-[11.5px] text-slate-600">
-      <summary className="inline-flex cursor-pointer list-none items-center gap-1 font-medium text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+      <summary className="inline-flex min-h-10 cursor-pointer list-none items-center gap-1 font-medium text-muted hover:text-ink sm:min-h-0 [&::-webkit-details-marker]:hidden">
         {`Why ${label.toLowerCase()}`}
       </summary>
       <ul className="mt-1 space-y-0.5 border-l-2 border-slate-100 pl-2.5">
@@ -155,7 +157,7 @@ export function AttentionRow({
             href={draftReplyHref}
             prefetch={false}
             data-draft-reply
-            className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-white px-2 py-0.5 text-[11.5px] font-semibold text-indigo-700 hover:border-indigo-300 hover:text-indigo-900"
+            className="inline-flex min-h-10 items-center gap-1 rounded-md border border-indigo-200 bg-white px-2 py-0.5 text-[11.5px] font-semibold text-indigo-700 hover:border-indigo-300 hover:text-indigo-900 sm:min-h-0"
           >
             <FilePen className="h-3 w-3" aria-hidden />
             Draft reply

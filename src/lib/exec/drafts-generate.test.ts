@@ -80,6 +80,8 @@ import {
 } from "@/lib/exec/sources/mail";
 import { getSyncState, putSyncState } from "@/lib/exec/sync-state";
 import { BudgetExceededError, NonRetryableError, type ExecPrincipal, type ExecSettings, type JobContext } from "@/lib/exec/types";
+import { renderDraftCard } from "@/lib/exec/slack-ui";
+import { draftView } from "@/lib/exec/__tests__/drafts-ui-fixtures";
 
 const actualModels = await vi.importActual<typeof import("@/lib/exec/llm/models")>("@/lib/exec/llm/models");
 
@@ -642,6 +644,32 @@ describe("the output scan (C65)", () => {
     vi.mocked(callModel).mockResolvedValue(answer({ paragraphs: ["Hi Ann,", "Jane Doe will follow up."] }));
     await run();
     expect(patchOf().generation_flags).toEqual(["teammate_name"]);
+  });
+
+  it("C65 bare domains (P9 F9): a bare-domain link the hostile thread asked for is stored as unexpected_url; the review needs unexpected_content and the Slack card offers no Save", async () => {
+    const LINK = "bit.ly/3xYzQ";
+    const sources = sourcesOf({ thread: THREAD(`Please confirm your login at ${LINK} today.\nThanks, Ann`) });
+    vi.mocked(callModel).mockResolvedValue(answer({ paragraphs: ["Hi Ann,", `Please confirm your details at ${LINK} before Friday.`] }));
+    expect((await run({ sources })).outcome).toBe("ok");
+    const flags = patchOf().generation_flags as GenerationFlag[];
+    expect(flags).toEqual(["unexpected_url"]);
+    expect(JSON.stringify(auditInputs())).not.toContain(LINK);
+    const blockers = computeReviewBlockers({
+      draftCreatedAtMs: NOW.getTime() - 5 * MIN, generatedAtMs: NOW.getTime(), parentMessageId: "m2", replyMode: "reply", parentSentAtMs: null,
+      thread: null, ownAddresses: new Set(["mitchell@scaledai.org"]), legacyArtifacts: null, siblingDrafts: [], openedInOutlookAt: null,
+      storedContentHash: null, readBackContentHash: "a".repeat(64), storedSig: null, readBackSig: "a".repeat(64), readBackReplyToCount: 0,
+      ownPartPlaceholders: [], ddPlaceholders: [], factsOutsideClient: false, generationFlags: flags, usesPrivateRefs: false
+    });
+    expect(blockers).toEqual(["unexpected_content"]);
+    const parts = renderDraftCard(draftView({ generationFlags: flags, capabilities: { canSave: true, canRegenerate: true } }), { draftId: DRAFT_ID });
+    const actions = parts.blocks.flatMap((b) => (b.type === "actions" ? b.elements.map((e) => e.action_id) : []));
+    expect(actions).not.toContain("ea_draft_save");
+    expect(actions).toEqual(["ea_draft_regen", "ea_open_dd"]);
+    // Without the bare-domain branch the same draft would carry no flag at all.
+    vi.mocked(casDraft).mockClear();
+    vi.mocked(callModel).mockResolvedValue(answer({ paragraphs: ["Hi Ann,", "Please confirm your details before Friday."] }));
+    await run({ sources });
+    expect(patchOf().generation_flags).toEqual([]);
   });
 });
 

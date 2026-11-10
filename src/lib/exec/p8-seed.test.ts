@@ -65,8 +65,10 @@ const fixture = <T>(rel: string): T => JSON.parse(read(`__tests__/fixtures/${rel
 /** sha256 of JSON.stringify(BRIEF_COPY) as the contract's §3.2 block evaluates (SCRATCH/p8-stage-1/copy-sha.cjs, stage 0: 4b81e121…),
  *  re-pinned by the P8 fixer (contract appendix "P8 fixer amendments" F.2: settings.checkinsHelp gains "Only when the brief is sent
  *  to Slack." (ui-10), networkDm no longer advises signing out other sessions (ui-12), status.regeneratedAfterSend added (ui-4));
- *  SCRATCH/p8-fix/copy-sha-file.cjs. */
-const BRIEF_COPY_SHA256 = "b46c51ef1a49ebf9c5aae96057f97cd758256234246cc3d414731e52fc50ceaf";
+ *  SCRATCH/p8-fix/copy-sha-file.cjs (b46c51ef...). Re-pinned by the P9 lead (P9 contract section 0.2 step 3, seed S1; p9-bindings.md):
+ *  removedUnavailable, pillState.late, noneLate and regenerateGaveUp added, nothing else changed (73 to 76 top-level keys);
+ *  SCRATCH/p9-stage-1/copy-sha-file.cjs. */
+const BRIEF_COPY_SHA256 = "e004977e72fa4fd0b9f39757f1eb557f571541473197aae50d9576bdd25cd270";
 /** The contract's §3.10.1 and §3.12.1 texts (SCRATCH/p8-stage-1/gen-prompts.cjs). */
 const BRIEF_PROMPT_SHA256 = "57c127a7df5453b75ec4ddfb17691bdf7d290f7c1a792dd6f773e7086c5753dd";
 const BRIEF_SCHEMA_SHA256 = "233feab0395fbd23384343201bce1c7c2525e55ef778feb2f29db2fde7384e24";
@@ -104,9 +106,9 @@ function exportsOf(rel: string): string[] {
 }
 
 describe("P8 seed: brief-copy.ts (§3.2)", () => {
-  it("BRIEF_COPY is the contract's text, exactly (sha256 pin over its JSON, 73 keys), and frozen at every level", () => {
+  it("BRIEF_COPY is the contract's text, exactly (sha256 pin over its JSON, 76 keys: P8's 73 plus P9 seed S1's 3), and frozen at every level", () => {
     expect(sha(JSON.stringify(BRIEF_COPY))).toBe(BRIEF_COPY_SHA256);
-    expect(Object.keys(BRIEF_COPY)).toHaveLength(73);
+    expect(Object.keys(BRIEF_COPY)).toHaveLength(76);
     expect(frozenDeep(BRIEF_COPY)).toBe(true);
     expect(frozenDeep(BRIEF_OPS)).toBe(true);
     expect(BRIEF_COPY.supersedeLose).toHaveLength(5);

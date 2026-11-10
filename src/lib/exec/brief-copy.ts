@@ -1,6 +1,8 @@
 // P8 morning brief: every fixed string (P8 contract §3.2; stage 0, lead seed, frozen). Pure and client-safe: no imports.
 // Exactly the contract's block (a sha256 pin in p8-seed.test.ts); a change goes through the lead. Copy never holds a
 // link or a URL (the renderers build links), nor brief text, names or ids. Placeholders are {name}, filled by fillBrief.
+// P9 stage -1 seed S1 (lead; P9 contract §0.2 step 3): removedUnavailable, pillState.late, noneLate and regenerateGaveUp
+// added (the p8-seed.test.ts pin re-pinned to match; p9-bindings.md).
 
 export const BRIEF_COPY = Object.freeze({
   sectionTitle: {
@@ -33,6 +35,7 @@ export const BRIEF_COPY = Object.freeze({
   },
   removedRestricted: "[Removed: restricted sender]",
   removedSlack: "[Removed: no longer available in Slack]",
+  removedUnavailable: "[Removed: no longer available]",
   suggested: "Suggested",
   basis: { record: "Record", derived: "Derived", ai: "AI-assessed" },
   // DM (C25)
@@ -87,7 +90,8 @@ export const BRIEF_COPY = Object.freeze({
   pill: "Brief {time} {tz} · {state}",
   pillState: {
     delivered: "live", page_only: "page only", building: "building", built: "building", delivering: "sending",
-    delivery_unknown: "check Slack", failed: "failed", none: "not yet", off: "off", not_installed: "not installed"
+    delivery_unknown: "check Slack", failed: "failed", none: "not yet", off: "off", not_installed: "not installed",
+    late: "late"
   },
   status: {
     delivered: "Sent to you in Slack at {time}.", page_only: "In DD only.", building: "Being built.",
@@ -106,6 +110,7 @@ export const BRIEF_COPY = Object.freeze({
   notInstalled: "The morning brief isn't installed yet.",
   off: "The morning brief is off. Turn it on in Settings.",
   none: "Today's brief hasn't been built yet. It's due at {time}.",
+  noneLate: "Today's brief was due at {time} and hasn't started. The System card on the Overview shows whether the assistant's jobs are running.",
   regenerate: "Regenerate",
   regenerateConfirm: "Build a new version of today's brief? It stays in DD and isn't sent to Slack again.",
   regenerateQueued: "Regenerating. This page updates when it's ready.",
@@ -113,6 +118,7 @@ export const BRIEF_COPY = Object.freeze({
   regenerateConflict: "The brief changed while you were looking at it. Reload and try again.",
   regenerateRateLimited: "Too many regenerations. Try again in {n} minutes.",
   regenerateFailed: "Couldn't regenerate the brief.",
+  regenerateGaveUp: "Still building. Reload in a few minutes to see it.",
   checkinsPageTitle: "Check-ins",
   checkinsPageNote: "Send or rewrite them from the brief in your assistant's Slack DM.",
   checkinsNotPosted: "These weren't posted to Slack.",

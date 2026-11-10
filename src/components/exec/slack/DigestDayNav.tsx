@@ -20,7 +20,8 @@ export function DigestDayNav({ date }: { date: SlackPageView["date"] }) {
             aria-current={current ? "page" : undefined}
             data-digest-day={o.value}
             className={cn(
-              "rounded-full border px-2.5 py-1 text-[12px] font-semibold transition-colors",
+              // P9 F25: a 40 px tap target below sm.
+              "inline-flex min-h-10 items-center rounded-full border px-3 py-1 text-[12px] font-semibold transition-colors sm:min-h-0 sm:px-2.5",
               current ? "border-indigo-600 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:text-ink"
             )}
           >

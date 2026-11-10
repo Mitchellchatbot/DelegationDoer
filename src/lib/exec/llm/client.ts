@@ -8,7 +8,8 @@ import {
   NonRetryableError,
   type ErrorClass,
   type ExecLlmFeature,
-  type ExecPrincipal
+  type ExecPrincipal,
+  type ExecSettings
 } from "@/lib/exec/types";
 import { costUsd, isPricedModel } from "@/lib/exec/llm/models";
 import { assertExecRequestShape, requiredBetas, type ExecRequestParams } from "@/lib/exec/llm/request";
@@ -302,6 +303,12 @@ export interface CallModelInput {
   skipBudgetCheck?: boolean;
   /** SDK retries before the response starts (SDK default 2). */
   maxRetries?: number;
+  /**
+   * P9 F22: the principal's settings when the caller already holds them (the chat loop, a handler). The daily cap check
+   * then uses them instead of loading exec_settings again (one database round trip less per call). Must be this
+   * principal's settings (assertWithinDailyCap refuses another principal's). Absent: loaded as before.
+   */
+  settings?: ExecSettings;
 }
 
 export interface CallModelResult {
@@ -342,7 +349,8 @@ export async function callModel(input: CallModelInput): Promise<CallModelResult>
   }
   if (signal?.aborted) throw abortError(signal);
   if (principal && !input.skipBudgetCheck) {
-    await assertWithinDailyCap(principal);
+    // P9 F22: the caller's settings when given (no reload); the day's spend comes from usage.ts's 30 s memo.
+    await (input.settings !== undefined ? assertWithinDailyCap(principal, input.settings) : assertWithinDailyCap(principal));
     // The cap read is a database round trip. An abort that lands during it
     // shouldn't go on to build a client (which can mean a Vault read).
     if (signal?.aborted) throw abortError(signal);

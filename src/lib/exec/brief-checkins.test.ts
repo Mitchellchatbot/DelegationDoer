@@ -22,7 +22,7 @@ import {
   CHECKIN_OUTPUT_SCHEMA, CHECKIN_PROMPT_VERSION, CHECKIN_SYSTEM_PROMPT_V1, generateCheckins, postProcessCheckinText, rewriteCheckinText, selectCheckinRecipients
 } from "@/lib/exec/brief-checkins";
 import { listLegacyCheckinRecipients, listRecentCheckinRecipients, listSentCheckinTexts } from "@/lib/exec/brief-store";
-import type { CheckinCandidate, CheckinRow } from "@/lib/exec/brief-types";
+import { BRIEF_LIMITS, type CheckinCandidate, type CheckinRow } from "@/lib/exec/brief-types";
 import { callModel, type CallModelResult } from "@/lib/exec/llm/client";
 import { EXEC_MODELS } from "@/lib/exec/llm/models";
 import type { DdDepartment, DdTask, DdUser } from "@/lib/exec/sources/dd-types";
@@ -133,6 +133,41 @@ describe("CI01-CI03 selection (C8, C9)", () => {
     expect(sel.skipped).toMatchObject({ noSlack: 3, guest: 2 });
   });
 
+  it("CI08 (P9 F20) the lookups stop at their own 10 s bound and keep who resolved by then; the caller's abort still ends the selection", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"], now: NOW });
+    try {
+      const people = Array.from({ length: 6 }, (_, i) => user(`u_s${i}`, `S${i} X`));
+      vi.mocked(listUsers).mockResolvedValue(people);
+      vi.mocked(listOpenTasks).mockResolvedValue(people.map((p, i) => task(`t${i}`, p.id)));
+      seedSlack(people.map((p) => p.id));
+      // Every lookup takes 4 s: two resolve by 8 s; the third is cut by the bound at 10 s.
+      const fast = ws.handlers["users.lookupByEmail"]!;
+      ws.handlers["users.lookupByEmail"] = (body, headers) => new Promise((resolve) => setTimeout(() => resolve(fast(body, headers)), 4_000));
+      expect(BRIEF_LIMITS.checkinLookupsMs).toBe(10_000);
+      const pending = selectCheckinRecipients(PRINCIPAL, BOT_TOKEN, opts());
+      await vi.advanceTimersByTimeAsync(12_000);
+      const sel = await pending;
+      expect(sel.candidates.map((c) => c.userId)).toEqual(["u_s0", "u_s1"]);
+      expect(slack.calls.filter((c) => c.method === "users.lookupByEmail")).toHaveLength(3);
+      expect(sel.skipped.noSlack).toBe(0);
+
+      // A shorter bound from the caller (lookupsMs) cuts sooner; the caller's own abort rejects with its reason.
+      const short = selectCheckinRecipients(PRINCIPAL, BOT_TOKEN, { ...opts(), lookupsMs: 5_000 });
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect((await short).candidates).toHaveLength(1);
+      const job = new AbortController();
+      const reason = new Error("job timeout");
+      const aborted = selectCheckinRecipients(PRINCIPAL, BOT_TOKEN, { ...opts(), signal: job.signal });
+      const settled = aborted.then(() => "resolved", (e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(2_000);
+      job.abort(reason);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await settled).toBe(reason);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("CI03 the lookup uses the exec bot token and the DD users.email only", async () => {
     vi.mocked(listUsers).mockResolvedValue([{ ...user("u_a", "Ann A"), slackEmail: "someone.else@scaledai.org" } as DdUser]);
     vi.mocked(listOpenTasks).mockResolvedValue([task("t1", "u_a")]);
@@ -149,13 +184,14 @@ const CANDIDATES: CheckinCandidate[] = [
 const input = (candidates = CANDIDATES) => ({ briefId: BRIEF_ID, briefRev: 1, localDate: LOCAL_DATE, candidates, now: NOW });
 
 describe("CI04-CI07 generation (C10)", () => {
-  it("CI05 the request: feature checkin, Opus 5.5, effort medium, non-streamed, the schema, no temperature; the prompt pinned by sha256", async () => {
+  it("CI05 the request: feature checkin, Opus 5.5, effort medium, streamed (P9 F20), the schema, no temperature; the prompt pinned by sha256", async () => {
     modelAnswers({ checkins: [{ ref: "p1", text: "Hey Jane, how are you doing?" }, { ref: "p2", text: "Bob, how is your week going?" }] });
     const rows = await generateCheckins(PRINCIPAL, input(), { signal: new AbortController().signal });
     expect(rows).toHaveLength(2);
     const [{ feature, request, stream }] = vi.mocked(callModel).mock.calls[0] as unknown as [{ feature: string; request: Record<string, unknown>; stream?: boolean }];
     expect(feature).toBe("checkin");
-    expect(stream).toBe(false);
+    // P9 F20 (an expectation flip §1 implies; P8 sent it non-streamed): streamed, so an aborted call still records its usage.
+    expect(stream).toBe(true);
     expect(request.model).toBe(EXEC_MODELS.checkin);
     expect(request).not.toHaveProperty("temperature");
     expect(request.output_config).toEqual({ effort: "medium", format: { type: "json_schema", schema: CHECKIN_OUTPUT_SCHEMA } });

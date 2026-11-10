@@ -322,9 +322,25 @@ describe("PJ08: P5a's other sections are unchanged", () => {
   // golden check: <sp>/p7b-F/pj08-golden.README.txt).
   const BASE_SHA = "20d897078bd9dcce7f82856812f2749e1a0fb356f50ac9275762aae31d45e323";
 
-  it("a view without the section renders P5a's page exactly (the base golden, tabs aside)", () => {
+  // P9 F5 (flip): three tones changed on this page for WCAG AA, and nothing else: the Private pill (slate-500 → slate-600)
+  // and the neutral badges (the global badge-low, 4.34:1 → NEUTRAL_BADGE). Undoing exactly those gives P5a's base back.
+  // P9 F25 likewise spaces the task lists' links 10 px apart below sm (space-y-2.5 sm:space-y-1; it was space-y-1) and makes
+  // a source link chip 40 px tall below sm (min-h-10 … sm:min-h-0).
+  const undoP9Tones = (markup: string) =>
+    markup
+      .replace('text-slate-600">Private', 'text-slate-500">Private')
+      .split('class="badge border-slate-200 bg-slate-100 text-slate-600"')
+      .join('class="badge badge-low"')
+      .split('class="mt-1 space-y-2.5 sm:space-y-1"')
+      .join('class="mt-1 space-y-1"')
+      .split("text-slate-600 min-h-10 transition-colors hover:border-slate-300 hover:text-ink sm:min-h-0")
+      .join("text-slate-600 transition-colors hover:border-slate-300 hover:text-ink");
+
+  it("a view without the section renders P5a's page exactly (the base golden, tabs aside; P9's AA tones undone)", () => {
     const out = html(createElement(ProjectDetailPageView, { view: projectDetailView() }));
-    expect(sha(stripTabs(out))).toBe(BASE_SHA);
+    expect(out).toContain('text-slate-600">Private');
+    expect(out).not.toContain("badge-low");
+    expect(sha(undoP9Tones(stripTabs(out)))).toBe(BASE_SHA);
   });
 
   it("with the section, the page is P5a's plus the Slack card after Conversations, nothing else moved", () => {

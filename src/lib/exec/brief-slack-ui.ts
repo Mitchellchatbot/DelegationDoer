@@ -1,5 +1,5 @@
 import { BRIEF_COPY, fillBrief } from "@/lib/exec/brief-copy";
-import type { BriefScreen } from "@/lib/exec/brief-screen";
+import type { BriefScreen, BriefWithheldReason } from "@/lib/exec/brief-screen";
 import { BRIEF_LIMITS, BRIEF_SECTION_KEYS } from "@/lib/exec/brief-types";
 import type { BriefContent, BriefSectionContent, BriefSectionKey, BriefStateNote, CheckinView } from "@/lib/exec/brief-types";
 import { formatInZone } from "@/lib/exec/format";
@@ -100,11 +100,11 @@ function stateLineOf(s: BriefSectionContent): string | null {
 // --- the brief DM -------------------------------------------------------------------------------
 
 /** content → view: drops scrubbed lines' links, keeps each line's first ref whose url passes isAllowedLinkUrl (else null).
- *  opts.screen (§3.17.7, intel-13): a withheld item renders removedRestricted / removedSlack with no link; withheld pending lines and
+ *  opts.screen (§3.17.7, intel-13): a withheld item renders removedRestricted / removedSlack / removedUnavailable (P9) with no link; withheld pending lines and
  *  top-3 entries are left out; headline null when screen.hideHeadline. Pure (BriefScreen is an `import type`). */
 export function briefDmToView(content: BriefContent, opts: { tz: string; briefHref: string; screen: BriefScreen }): BriefDmView {
   const screen = opts.screen;
-  const withheldItems = screen?.items ?? new Map<string, "restricted" | "slack">();
+  const withheldItems = screen?.items ?? new Map<string, BriefWithheldReason>();
   const withheldPending = screen?.pending ?? new Set<string>();
   const withheldTop3 = screen?.top3 ?? new Set<string>();
   const reasonKey = content.modeReason !== null && Object.prototype.hasOwnProperty.call(BRIEF_COPY.modeReason, content.modeReason)
@@ -123,7 +123,9 @@ export function briefDmToView(content: BriefContent, opts: { tz: string; briefHr
     const lines = (Array.isArray(s.items) ? s.items : []).map((item) => {
       const why = withheldItems.get(item.id);
       if (why !== undefined) {
-        return { text: why === "slack" ? BRIEF_COPY.removedSlack : BRIEF_COPY.removedRestricted, kind: "fact" as const, href: null };
+        // P9 seed S2: "unavailable" reads BRIEF_COPY.removedUnavailable (no producer until Area C's F7/F11 screen).
+        const text = why === "slack" ? BRIEF_COPY.removedSlack : why === "unavailable" ? BRIEF_COPY.removedUnavailable : BRIEF_COPY.removedRestricted;
+        return { text, kind: "fact" as const, href: null };
       }
       // A scrubbed item's text is already the removed copy (the scrub RPC wrote it) and its refs are empty.
       if (item.scrubbed === true) return { text: item.text, kind: "fact" as const, href: null };

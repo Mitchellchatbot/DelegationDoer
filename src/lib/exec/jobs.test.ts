@@ -14,19 +14,26 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { notifyOps } from "@/lib/exec/ops";
 import { loadPrincipalById, principalFromRows } from "@/lib/exec/principal";
 import {
+  EXEC_DRAINING_KEY,
   WORKER_ID,
   __resetJobsForTests,
   backoffMs,
+  claimableJobKinds,
   classifyError,
   enqueueJob,
   getJobHandler,
+  inFlightCount,
+  isExecDraining,
   jobsInFlight,
   kickInteractive,
   purgeFinishedJobs,
   reapExpiredLeases,
   registerJobHandler,
-  runWorkerPass
+  runWorkerPass,
+  startExecDraining
 } from "@/lib/exec/jobs";
+import { draftGenerateJobHandler } from "@/lib/exec/handlers/draft-generate";
+import { draftReconcileJobHandler } from "@/lib/exec/handlers/draft-reconcile";
 import { createFakeExecDb, deferred, jobRow as baseJobRow, type FakeExecDb, type FakeResult } from "@/lib/exec/__tests__/fake-exec-db";
 import {
   BudgetExceededError,
@@ -1454,5 +1461,121 @@ describe("purgeFinishedJobs", () => {
   it("throws on a delete error", async () => {
     db.deleteResult = () => ({ count: null, error: { message: "canceling statement due to statement timeout" } });
     await expect(purgeFinishedJobs(14)).rejects.toThrow("exec_jobs purge failed: canceling statement due to statement timeout");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 F18 (contract §1, lead decision L1): a kind this process can't run is left out of p_kinds, so it stays queued
+// for a process that can (the two draft kinds need the EA token).
+// ---------------------------------------------------------------------------
+
+describe("P9 F18 claimable kinds", () => {
+  it("JC01 the real draft handlers: EA token unset → p_kinds lacks exec.draft-generate and exec.draft-reconcile; set → both there", async () => {
+    handler(async () => null);
+    registerJobHandler(draftGenerateJobHandler);
+    registerJobHandler(draftReconcileJobHandler);
+    vi.stubEnv("MISSIVE_EA_TOKEN", "");
+    await runWorkerPass({ lane: "interactive" });
+    vi.stubEnv("MISSIVE_EA_TOKEN", "   ");
+    await runWorkerPass({ lane: "bulk" });
+    vi.stubEnv("MISSIVE_EA_TOKEN", "an-ea-draft-token");
+    await runWorkerPass({ lane: "bulk" });
+    expect(claimCalls().map((c) => c.p_kinds)).toEqual([
+      ["test.job"],
+      ["test.job"],
+      ["test.job", "exec.draft-generate", "exec.draft-reconcile"]
+    ]);
+    expect(claimableJobKinds()).toEqual(["test.job", "exec.draft-generate", "exec.draft-reconcile"]);
+  });
+
+  it("JC02 a queued draft job stays queued on a process without the token: nothing claimed, no attempt spent, no outcome", async () => {
+    registerJobHandler(draftGenerateJobHandler);
+    handler(async () => null, { lane: "interactive" });
+    vi.stubEnv("MISSIVE_EA_TOKEN", "");
+    const [draftJob] = queue(jobRow({ kind: "exec.draft-generate", lane: "interactive" }));
+    const pass = await runWorkerPass({ lane: "interactive", awaitCompletion: true });
+    expect(pass).toMatchObject({ skipped: null, claimed: 0 });
+    expect(db.queue).toEqual([draftJob]);
+    expect(finishCalls()).toEqual([]);
+  });
+
+  it("JC03 claimable absent = claimable; false = left out; a throw = left out, logged by kind and error name only", async () => {
+    handler(async () => null);
+    handler(async () => null, { kind: "never.job", claimable: () => false });
+    const secret = new TypeError("token sk-live-0123456789 leaked into a message");
+    handler(async () => null, { kind: "throws.job", claimable: () => { throw secret; } });
+    handler(async () => null, { kind: "odd.job", claimable: () => "yes" as unknown as boolean });
+    await runWorkerPass({ lane: "bulk" });
+    expect(claimCalls()[0].p_kinds).toEqual(["test.job"]);
+    const warned = vi.mocked(console.warn).mock.calls.map((c) => c.map(String).join(" "));
+    expect(warned).toContain("[exec-jobs] throws.job: claimable() threw (TypeError); not claiming it this pass");
+    expect(warned.join("\n")).not.toContain("sk-live");
+  });
+
+  it("JC04 no claimable kind left → skipped no-handlers, no claim RPC, no slot reserved", async () => {
+    handler(async () => null, { claimable: () => false });
+    await expect(runWorkerPass({ lane: "bulk" })).resolves.toMatchObject({ skipped: "no-handlers", claimed: 0 });
+    expect(claimCalls()).toEqual([]);
+    expect(jobsInFlight()).toEqual({ interactive: 0, bulk: 0 });
+  });
+
+  it("JC05 registration refuses a claimable that isn't a function", () => {
+    expect(() => registerJobHandler({ kind: "bad.claim", lane: "bulk", timeoutMs: 1000, run: async () => null, claimable: true as unknown as () => boolean }))
+      .toThrow(/claimable must be a function/);
+    expect(getJobHandler("bad.claim")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 F19 (contract §1, AM-P9-23): the shutdown drain. Once the flag is set a pass claims nothing and a kick is a no-op,
+// while runs already claimed finish and record; inFlightCount is what the SIGTERM handler waits on.
+// ---------------------------------------------------------------------------
+
+describe("P9 F19 draining", () => {
+  it("JD01 after the flag a pass claims nothing (skipped draining) on either lane, and a kick starts no pass", async () => {
+    handler(async () => null);
+    const [row] = queue(jobRow());
+    startExecDraining();
+    expect(isExecDraining()).toBe(true);
+    await expect(runWorkerPass({ lane: "bulk", awaitCompletion: true })).resolves.toMatchObject({ skipped: "draining", claimed: 0 });
+    await expect(runWorkerPass({ lane: "interactive" })).resolves.toMatchObject({ skipped: "draining", claimed: 0 });
+    const scheduled = vi.spyOn(globalThis, "setImmediate");
+    kickInteractive();
+    // The kick returns before scheduling anything: no pass starts at all (not merely one that then claims nothing).
+    expect(scheduled).not.toHaveBeenCalled();
+    scheduled.mockRestore();
+    for (let i = 0; i < 5; i += 1) await new Promise((r) => setImmediate(r));
+    expect(claimCalls()).toEqual([]);
+    expect(db.queue).toEqual([row]);
+    expect(inFlightCount()).toBe(0);
+  });
+
+  it("JD02 runs claimed before the flag keep going, finish and record their outcome; inFlightCount drops to 0", async () => {
+    const gate = deferred();
+    handler(async () => {
+      await gate.promise;
+      return { done: 1 };
+    });
+    queue(jobRow(), jobRow());
+    const pass = await runWorkerPass({ lane: "bulk" });
+    expect(pass).toMatchObject({ claimed: 2, running: 2 });
+    expect(inFlightCount()).toBe(2);
+    startExecDraining();
+    await expect(runWorkerPass({ lane: "bulk" })).resolves.toMatchObject({ skipped: "draining" });
+    expect(inFlightCount()).toBe(2);
+    gate.resolve();
+    await vi.waitFor(() => expect(inFlightCount()).toBe(0));
+    expect(finishCalls().map((c) => c.p_outcome)).toEqual(["succeeded", "succeeded"]);
+    expect(claimCalls()).toHaveLength(1);
+  });
+
+  it("JD03 the flag lives on globalThis under the key cron-bootstrap sets; __resetJobsForTests clears it", () => {
+    expect(EXEC_DRAINING_KEY).toBe("__ddExecDraining");
+    expect(isExecDraining()).toBe(false);
+    Reflect.set(globalThis, EXEC_DRAINING_KEY, true);
+    expect(isExecDraining()).toBe(true);
+    __resetJobsForTests();
+    expect(isExecDraining()).toBe(false);
+    expect(Reflect.get(globalThis, EXEC_DRAINING_KEY)).toBeUndefined();
   });
 });

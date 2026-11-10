@@ -4,7 +4,8 @@ vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
 vi.mock("@/lib/supabase-server", () => ({ getSupabaseServer: vi.fn() }));
 vi.mock("@/lib/exec/jobs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/jobs")>();
-  return { isValidJobKind: actual.isValidJobKind, enqueueJob: vi.fn(), reapExpiredLeases: vi.fn() };
+  // P9 F19: the scheduler reads the real draining flag (never set here).
+  return { isValidJobKind: actual.isValidJobKind, isExecDraining: actual.isExecDraining, enqueueJob: vi.fn(), reapExpiredLeases: vi.fn() };
 });
 vi.mock("@/lib/exec/principal", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/principal")>();

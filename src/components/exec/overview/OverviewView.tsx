@@ -96,7 +96,7 @@ export function OverviewView({
           )}
           <ApprovalsSection approvals={approvals} now={now} decisionAsks={decisionAsks} />
           <OverviewEmailSection email={email} tz={tz} now={now} />
-          <SystemSection system={system} now={now} mail={emailOn ? emailOn.mail : null} tz={tz} />
+          <SystemSection system={system} now={now} mail={emailOn ? emailOn.mail : null} tz={tz} briefLate={brief?.pill.state === "late"} />
         </div>
       </div>
       <div className="grid items-start gap-5 lg:grid-cols-2">

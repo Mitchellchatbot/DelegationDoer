@@ -386,8 +386,11 @@ describe("UI07: the pill", () => {
       vi.mocked(getBriefByDate).mockResolvedValueOnce(briefRow({ status, deliveredAt: null }));
       expect(await getBriefPill(principal, SETTINGS, NOW)).toEqual({ state: status, label: label(status) });
     }
+    // P9 F31 (flip): NOW is 9:00 AM EST, an hour past the 8:00 AM brief time with no row: "late"; within 45 minutes, "none".
     vi.mocked(getBriefByDate).mockResolvedValueOnce(null);
-    expect(await getBriefPill(principal, SETTINGS, NOW)).toEqual({ state: "none", label: label("none") });
+    expect(await getBriefPill(principal, SETTINGS, NOW)).toEqual({ state: "late", label: label("late") });
+    vi.mocked(getBriefByDate).mockResolvedValueOnce(null);
+    expect(await getBriefPill(principal, SETTINGS, new Date("2026-11-09T13:30:00.000Z"))).toEqual({ state: "none", label: label("none") });
     expect(await getBriefPill(principal, briefSettings({ briefEnabled: false }), NOW)).toEqual({ state: "off", label: label("off") });
     vi.mocked(briefSchemaReady).mockResolvedValueOnce(false);
     expect(await getBriefPill(principal, SETTINGS, NOW)).toEqual({ state: "not_installed", label: label("not_installed") });

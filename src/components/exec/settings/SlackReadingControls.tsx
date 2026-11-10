@@ -11,6 +11,7 @@ import { SETTINGS_COPY, patchSettings, stopReading } from "@/lib/exec/ui/setting
 import { cn } from "@/lib/utils";
 import { useIsTopWindow } from "../drafts/frame-guard";
 import { refreshWithoutResult } from "./SlackConnectControls";
+import { SWITCH_BUTTON, switchKnobClass, switchTrackClass } from "./SettingsForm";
 
 // The Slack reading half's actions (P7a contract §3.16, N4, N20, C47; Area E).
 // A client island inside the server SlackReadingSection: top-level only (P4's
@@ -184,12 +185,11 @@ function Switch({ on, labelledBy, disabled, onClick, buttonRef }: { on: boolean;
       aria-labelledby={labelledBy}
       disabled={disabled}
       onClick={onClick}
-      className={cn(
-        "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-        on ? "bg-indigo-600" : "bg-slate-300"
-      )}
+      className={SWITCH_BUTTON}
     >
-      <span className={cn("inline-block h-5 w-5 rounded-full bg-white shadow transition-transform", on ? "translate-x-[22px]" : "translate-x-0.5")} />
+      <span aria-hidden className={switchTrackClass(on)}>
+        <span className={switchKnobClass(on)} />
+      </span>
     </button>
   );
 }

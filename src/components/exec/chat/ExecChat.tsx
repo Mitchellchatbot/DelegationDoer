@@ -108,6 +108,15 @@ export const EXEC_CHAT_COPY = {
   askAiFallbackLabel: "this Needs Attention item"
 } as const;
 
+/** P9 F33: true when the browser asks for reduced motion (false where matchMedia doesn't exist). */
+export function prefersReducedMotion(win: { matchMedia?: (q: string) => { matches: boolean } } | undefined = typeof window === "undefined" ? undefined : window): boolean {
+  try {
+    return typeof win?.matchMedia === "function" && win.matchMedia("(prefers-reduced-motion: reduce)").matches === true;
+  } catch {
+    return false;
+  }
+}
+
 const ATTENTION_ID = /^ea_[0-9a-f]{32}$/;
 const CHAT_PAGE = "/executive/chat";
 export const chatPageHref = (conversationId: string | null) => (conversationId ? `${CHAT_PAGE}?c=${encodeURIComponent(conversationId)}` : CHAT_PAGE);
@@ -365,7 +374,8 @@ export function ExecChat(props: ExecChatProps) {
       const box = composerRef.current;
       if (box) {
         box.focus({ preventScroll: true });
-        box.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        // P9 F33: no smooth scroll under prefers-reduced-motion.
+        box.scrollIntoView({ block: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" });
       }
     };
     document.addEventListener("click", onClick);

@@ -81,12 +81,15 @@ describe("TeamPageView: cells (test 72)", () => {
     expect(textOf(cellOf(sam, "capacity"))).toBe("6.5 of 8 h");
   });
 
-  it("a failed cell is '—' titled Couldn't load, never a zero", () => {
+  // P9 F36 (flip): the dash is hidden from screen readers and "Couldn't load" is real (sr-only) text, not only a title.
+  it("a failed cell is '—' with 'Couldn't load' as screen-reader text (and its title), never a zero", () => {
     const kim = rowOf(people, "u_kim");
     for (const col of ["open", "overdue", "completedThisWeek", "capacity", "eod", "onTime", "cycle", "extensions"]) {
       const cell = cellOf(kim, col);
-      expect(textOf(cell), col).toBe("—");
+      expect(textOf(cell), col).toBe("— Couldn't load");
+      expect(cell, col).toContain('<span aria-hidden="true">—</span><span class="sr-only">Couldn&#x27;t load</span>');
       expect(cell, col).toContain('title="Couldn&#x27;t load"');
+      expect(cell, col).not.toMatch(/aria-label="Couldn/);
     }
   });
 

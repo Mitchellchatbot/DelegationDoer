@@ -10,19 +10,31 @@ vi.mock("@/lib/exec/intake-screen", () => ({ loadIntakeScreeningPolicy: vi.fn(),
 vi.mock("@/lib/exec/sync-state", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/sync-state")>()), getSyncState: vi.fn(), putSyncState: vi.fn() }));
 vi.mock("@/lib/exec/slack-reading", () => {
   const listPurgeLog = vi.fn();
-  // The facade, or (h.facade false) a build where P7a's facade doesn't carry listPurgeLog.
-  return { get listPurgeLog() { return h.facade ? listPurgeLog : undefined; }, __listPurgeLog: listPurgeLog };
+  // P9 (Area C): F11's channel read and F4's opt-out list, behind the same switch.
+  const listIntelChannels = vi.fn();
+  const listAuthorOptouts = vi.fn();
+  // The facade, or (h.facade false) a build where P7a's facade doesn't carry listPurgeLog (nor the two P9 readers).
+  return {
+    get listPurgeLog() { return h.facade ? listPurgeLog : undefined; }, __listPurgeLog: listPurgeLog,
+    get listIntelChannels() { return h.facade ? listIntelChannels : undefined; }, __listIntelChannels: listIntelChannels,
+    get listAuthorOptouts() { return h.facade ? listAuthorOptouts : undefined; }, __listAuthorOptouts: listAuthorOptouts
+  };
 });
 
 import { BRIEF_TEXT_SENTINELS, assertNoBriefText, captureConsole } from "@/lib/exec/__tests__/brief-assert";
 import { createFakeBriefDb, type FakeBriefDb } from "@/lib/exec/__tests__/fake-brief-db";
 import type { Row } from "@/lib/exec/__tests__/fake-slack-db";
 import { BRIEF_COPY } from "@/lib/exec/brief-copy";
-import { NO_SCREEN, catchUpBriefScrubs, purgeLogScrubQuery, screenBriefContent, withholdAllEmail } from "@/lib/exec/brief-screen";
+import {
+  NO_SCREEN, OPTOUT_SCRUB_WINDOW_MS, applyBriefOptoutScrubs, catchUpBriefScrubs, parseBriefOptoutState, purgeLogScrubQuery, screenBriefContent, slackLineShown,
+  withholdAllEmail
+} from "@/lib/exec/brief-screen";
 import { briefDmToView } from "@/lib/exec/brief-slack-ui";
 import { __resetBriefStoreForTests } from "@/lib/exec/brief-store";
 import type { BriefContent, BriefItem, BriefPendingLine, BriefTopItem } from "@/lib/exec/brief-types";
 import type { ThreadScreenRow } from "@/lib/exec/email-types";
+import type { ChannelRow } from "@/lib/exec/slack-read-types";
+import { optoutFingerprint } from "@/lib/exec/slack-redact";
 import { listThreadScreenRows } from "@/lib/exec/email-store";
 import { loadIntakeScreeningPolicy, restrictedIntakeTaskIds } from "@/lib/exec/intake-screen";
 import { DEFAULT_SETTINGS, principalFromRows } from "@/lib/exec/principal";
@@ -38,7 +50,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 // screen) tests Area E's brief-view.ts and is E's.
 
 const principal = principalFromRows(
-  { id: "ep_owner", user_id: "u_mitchell", enabled: true, mail_account_ids: [], slack_team_id: null, slack_user_id: null },
+  { id: "ep_owner", user_id: "u_mitchell", enabled: true, mail_account_ids: ["acc_1"], slack_team_id: null, slack_user_id: null },
   { id: "u_mitchell", email: "mitchell@scaledai.org", name: "Mitchell", work_timezone: "America/New_York" },
   null
 )!;
@@ -46,6 +58,19 @@ const settings: ExecSettings = { ...DEFAULT_SETTINGS, principalId: principal.id 
 const NOW = new Date("2026-11-06T13:30:00.000Z");
 const TZ = "America/New_York";
 const listPurgeLog = (slackReading as unknown as { __listPurgeLog: ReturnType<typeof vi.fn> }).__listPurgeLog;
+const listIntelChannels = (slackReading as unknown as { __listIntelChannels: ReturnType<typeof vi.fn> }).__listIntelChannels;
+const listAuthorOptouts = (slackReading as unknown as { __listAuthorOptouts: ReturnType<typeof vi.fn> }).__listAuthorOptouts;
+/** P9 F11: a P7a channel row (watched, standard, a member, never left) unless over says otherwise. */
+const channelRow = (channelId: string, over: Partial<ChannelRow> = {}): ChannelRow => ({
+  channelId, installationId: "esi_00000000000000000000000000000001", convType: "channel", class: "standard", denyReason: null, hubKind: null,
+  financeName: false, watchState: "watched", muteSource: null, watchSetByOwnerAt: null, name: null, imUserId: null, isMember: true, isPrivate: false,
+  isExtShared: false, extEver: false, isArchived: false, histWatermarkTs: null, deepSweptAt: null, sweptAt: null, lastEventTs: null, lastActivityTs: null,
+  activity30d: null, probedAt: null, classifiedAt: null, leftAt: null, updatedAt: "2026-11-06T13:00:00.000Z", ...over
+});
+/** The channel rows listIntelChannels answers (by id); a missing id = no row (deny rows are never returned either). */
+let channelRows: Map<string, ChannelRow>;
+/** brief/optouts as stored (the cursor of brief/slack-scrub stays { afterId: 4 }). */
+let optoutState: unknown;
 const tsAt = (iso: string) => `${Math.floor(Date.parse(iso) / 1000)}.000100`;
 const TS_A = tsAt("2026-11-06T04:30:00.000Z");   // 23:30 on Nov 5 in New York
 
@@ -103,8 +128,24 @@ beforeEach(() => {
   vi.mocked(slackIntelState).mockResolvedValue("ok");
   vi.mocked(loadIntakeScreeningPolicy).mockReset().mockResolvedValue({ rules: [], hash: "h1" });
   vi.mocked(restrictedIntakeTaskIds).mockReset().mockResolvedValue(new Map());
-  vi.mocked(getSyncState).mockResolvedValue({ value: { afterId: 4 }, rev: 3 });
+  // The sweep's scrub cursor, and (P9 F4) the brief's own opt-out state, each under its key (parsed as the real store does).
+  optoutState = undefined;
+  vi.mocked(getSyncState).mockReset().mockImplementation((async (_p: unknown, _s: unknown, key: string, parse: (raw: unknown) => unknown) => {
+    if (key === "slack-scrub") return { value: { afterId: 4 }, rev: 3 };
+    if (key === "optouts" && optoutState !== undefined) {
+      const value = parse(optoutState);
+      return value === null ? null : { value, rev: 2 };
+    }
+    return null;
+  }) as never);
+  vi.mocked(putSyncState).mockReset().mockImplementation(async (_p, _s, key, value) => {
+    if (key === "optouts") optoutState = structuredClone(value);
+  });
   listPurgeLog.mockReset().mockResolvedValue([]);
+  channelRows = new Map(["C0OPS0001", "C0SAFE001"].map((id) => [id, channelRow(id)]));
+  listIntelChannels.mockReset().mockImplementation(async (_p: unknown, o?: { channelIds?: string[] }) =>
+    (o?.channelIds ?? []).flatMap((id) => (channelRows.has(id) ? [channelRows.get(id)!] : [])));
+  listAuthorOptouts.mockReset().mockResolvedValue([]);
   consoleSpy = captureConsole();
 });
 afterEach(() => {
@@ -261,7 +302,7 @@ describe("BS06 catchUpBriefScrubs (intel-13)", () => {
     expect(c.headlineScrubbed).toBe(true);
     expect(stored(id).ref_thread_ids).toEqual(["th_ok"]);
     expect(stored(id).ref_slack_keys).toEqual(["m:C0OPS0001:1.2"]);   // only the pending line's other message is left
-    const threadScrubs = db.calls.filter((x) => x.kind === "rpc" && x.target === "exec_brief_scrub_threads");
+    const threadScrubs = db.calls.filter((x) => x.kind === "rpc" && x.target === "exec_brief_scrub_threads_v2");
     expect(threadScrubs.map((x) => (x.payload as { p_thread_ids: string[] }).p_thread_ids)).toEqual([["th_bad", "th_gone"]]);
     // The returned row is the fresh one, and its screen is clean now.
     expect(r.row.content?.headline).toBeNull();
@@ -289,7 +330,7 @@ describe("BS06 catchUpBriefScrubs (intel-13)", () => {
   it("a scrub or read error → screen_unavailable; an unknown brief → not_found", async () => {
     const id = await seedBrief();
     listPurgeLog.mockResolvedValueOnce([{ id: 5, scope: "reading", channelId: null, ts: null, reason: "reading_purged", createdAt: NOW.toISOString() }]);
-    db.failNext("exec_brief_scrub_slack", "XX000");
+    db.failNext("exec_brief_scrub_slack_v2", "XX000");
     expect(await catchUpBriefScrubs(principal, settings, id, { now: NOW })).toEqual({ ok: false, reason: "screen_unavailable" });
     listPurgeLog.mockRejectedValueOnce(new Error("log read"));
     expect(await catchUpBriefScrubs(principal, settings, id, { now: NOW })).toEqual({ ok: false, reason: "screen_unavailable" });
@@ -326,5 +367,192 @@ describe("BS07 the DM view with a screen (Area D's briefDmToView)", () => {
     expect(plain.headline).toContain("Headline");
     expect(plain.sections.find((s) => s.key === "emails")!.lines[0].text).toContain("Line b1");
     expect(plain.top3.map((t) => t.title)).toEqual(["Top i1", "Top i3", "Top i5"]);   // the view shows at most 3
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 (Area C): F7 (pinned accounts), F11 (the channel rows now), F4 (author opt-outs vs digest lines)
+// ---------------------------------------------------------------------------
+
+describe("BS-P9-F7 a thread row on an account that is no longer pinned (P3 ui-3)", () => {
+  it("BS-P9-F7: its line, pending line and top-3 entry are withheld 'unavailable' (render only: not in withheldThreadIds, never scrubbed); restricted wins; a pinned row shows", async () => {
+    vi.mocked(listThreadScreenRows).mockImplementation(async (_p, ids) => new Map(ids.map((id) =>
+      [id, screenRow(id, id === "th_ok" ? { accountId: "acc_unpinned" } : id === "th_bad" ? { accountId: "acc_unpinned", state: "restricted_hidden" } : {})])));
+    const c = content();
+    c.sections[0].pending.push(pend("email:thread:th_ok:m", { threadIds: ["th_ok"] }));
+    c.top3.push(top("i2", null, { threadIds: ["th_ok"] }));
+    const r = await screenBriefContent(principal, settings, c, { now: NOW });
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.screen.items.get("b2")).toBe("unavailable");
+    expect(r.screen.items.get("b1")).toBe("restricted");   // a restricted row on an unpinned account is still restricted
+    expect(r.screen.pending.has("email:thread:th_ok:m")).toBe(true);
+    expect(r.screen.top3.has("i2")).toBe(true);
+    expect(r.screen.withheldThreadIds).toEqual(["th_bad"]);   // th_ok is not scrubbed into the row
+    expect(r.screen.hideHeadline).toBe(true);
+    const dm = briefDmToView(c, { tz: TZ, briefHref: "https://operations.scaledai.org/executive/brief", screen: r.screen });
+    expect(dm.sections.find((x) => x.key === "emails")!.lines[1]).toMatchObject({ text: BRIEF_COPY.removedUnavailable, href: null });
+    // The catch-up scrubs only the restricted threads: th_ok's line stays in the row (a re-pin shows it again).
+    const id = await seedBrief(c);
+    const caught = await catchUpBriefScrubs(principal, settings, id, { now: NOW });
+    if (!caught.ok) throw new Error("expected ok");
+    expect(storedContent(id).sections[0].items.find((i) => i.id === "b2")!.text).toContain("Line b2");
+    expect(caught.screen.items.get("b2")).toBe("unavailable");
+    // Pinned again: shown.
+    const pinned = principalFromRows({ id: "ep_owner", user_id: "u_mitchell", enabled: true, mail_account_ids: ["acc_1", "acc_unpinned"], slack_team_id: null,
+      slack_user_id: null }, { id: "u_mitchell", email: "mitchell@scaledai.org", name: "Mitchell", work_timezone: "America/New_York" }, null)!;
+    const again = await screenBriefContent(pinned, settings, c, { now: NOW });
+    if (!again.ok) throw new Error("expected ok");
+    expect(again.screen.items.has("b2")).toBe(false);
+  });
+});
+
+describe("BS-P9-F11 the cited Slack channel rows, re-read at render (listIntelChannels, once)", () => {
+  /** content() plus a line, a pending line and a top-3 entry on a second, untouched channel. */
+  function twoChannels(): BriefContent {
+    const c = content();
+    c.sections[1].items.push(line("b6", { slackKeys: [`m:C0SAFE001:${TS_A}`], slackChannels: ["C0SAFE001"] }));
+    c.sections[1].pending.push(pend("slack:msg:C0SAFE001:1.3", { slackChannels: ["C0SAFE001"], slackKeys: ["m:C0SAFE001:1.3"] }));
+    c.top3.push(top("i6", "b6", { slackChannels: ["C0SAFE001"] }));
+    return c;
+  }
+  const clean = () => vi.mocked(listThreadScreenRows).mockImplementation(async (_p, ids) => new Map(ids.map((id) => [id, screenRow(id)])));
+  const changes: [string, Partial<ChannelRow> | null][] = [
+    ["renamed into a finance name", { financeName: true }],
+    ["classified finance", { class: "finance" }],
+    ["reset to unclassified (a leads rename)", { class: "unclassified" }],
+    ["now a hub", { class: "hub" }],
+    ["left", { leftAt: "2026-11-06T12:00:00.000Z" }],
+    ["set to Don't watch", { watchState: "unwatched", watchSetByOwnerAt: "2026-11-06T12:00:00.000Z" }],
+    ["gone (or deny: never listed)", null]
+  ];
+  for (const [what, over] of changes) {
+    it(`BS-P9-F11: C ${what} after the build → C's item and digest lines, its pending line and its top-3 entry withheld 'slack', the headline hidden; another channel's lines stay`, async () => {
+      clean();
+      if (over === null) channelRows.delete("C0OPS0001");
+      else channelRows.set("C0OPS0001", channelRow("C0OPS0001", over));
+      const r = await screenBriefContent(principal, settings, twoChannels(), { now: NOW });
+      if (!r.ok) throw new Error("expected ok");
+      expect([...r.screen.items]).toEqual([["b3", "slack"], ["b4", "slack"]]);
+      expect([...r.screen.pending]).toEqual(["slack:msg:C0OPS0001:1.2"]);
+      expect([...r.screen.top3]).toEqual(["i3"]);
+      expect(r.screen.hideHeadline).toBe(true);
+      expect(r.screen.withheldThreadIds).toEqual([]);
+      expect(listIntelChannels).toHaveBeenCalledTimes(1);
+      expect(listIntelChannels.mock.calls[0][1]).toMatchObject({ channelIds: ["C0OPS0001", "C0SAFE001"] });
+    });
+  }
+
+  it("BS-P9-F11: a mute passes only a message line in an IM muted by him or by Slack (the stored bypass); a digest line, a channel mention or a finance default mute never", () => {
+    const msg = { slackChannels: ["C1"], slackKeys: ["m:C1:1.000100"] };
+    const digest = { slackChannels: ["C1"], slackKeys: ["d:C1:2026-11-05"] };
+    const at = (over: Partial<ChannelRow>) => new Map([["C1", channelRow("C1", over)]]);
+    expect(slackLineShown(msg, at({}))).toBe(true);
+    expect(slackLineShown(digest, at({}))).toBe(true);
+    expect(slackLineShown(msg, at({ convType: "im", watchState: "muted", muteSource: "owner" }))).toBe(true);
+    expect(slackLineShown(msg, at({ convType: "im", watchState: "muted", muteSource: "slack" }))).toBe(true);
+    expect(slackLineShown(digest, at({ convType: "im", watchState: "muted", muteSource: "owner" }))).toBe(false);
+    expect(slackLineShown(msg, at({ convType: "im", watchState: "muted", muteSource: "default_finance" }))).toBe(false);
+    expect(slackLineShown(msg, at({ convType: "channel", watchState: "muted", muteSource: "owner" }))).toBe(false);
+    expect(slackLineShown(msg, at({ convType: "mpim", watchState: "muted", muteSource: "owner" }))).toBe(false);
+    expect(slackLineShown(msg, at({ convType: "im", watchState: "unwatched", muteSource: "owner" }))).toBe(false);
+    expect(slackLineShown(msg, at({ convType: "im", watchState: "muted", muteSource: "owner", financeName: true }))).toBe(false);
+    expect(slackLineShown({ slackChannels: ["C1"], slackKeys: [] }, at({ convType: "im", watchState: "muted", muteSource: "owner" }))).toBe(false);
+    expect(slackLineShown({ slackChannels: ["C1", "C2"], slackKeys: ["m:C1:1.000100"] }, at({}))).toBe(false);   // C2 has no row
+  });
+
+  it("BS-P9-F11: the channel read failing → screen_unavailable; a facade without the reader → every Slack line withheld (fail closed); state not ok → no channel read", async () => {
+    clean();
+    listIntelChannels.mockRejectedValueOnce(new Error("channels"));
+    expect(await screenBriefContent(principal, settings, twoChannels(), { now: NOW })).toEqual({ ok: false, reason: "screen_unavailable" });
+    vi.mocked(slackIntelState).mockResolvedValueOnce("reading_off");
+    listIntelChannels.mockClear();
+    const off = await screenBriefContent(principal, settings, twoChannels(), { now: NOW });
+    expect(listIntelChannels).not.toHaveBeenCalled();
+    if (!off.ok) throw new Error("expected ok");
+    expect([...off.screen.items].map(([id]) => id)).toEqual(["b3", "b4", "b6"]);
+    h.facade = false;
+    const r = await screenBriefContent(principal, settings, twoChannels(), { now: NOW });
+    if (!r.ok) throw new Error("expected ok");
+    expect([...r.screen.items]).toEqual([["b3", "slack"], ["b4", "slack"], ["b6", "slack"]]);
+    // Nothing cites Slack: no state read, no channel read.
+    h.facade = true;
+    vi.mocked(slackIntelState).mockClear();
+    listIntelChannels.mockClear();
+    await screenBriefContent(principal, settings, { ...content(), sections: [content().sections[0]], top3: [] }, { now: NOW });
+    expect(slackIntelState).not.toHaveBeenCalled();
+    expect(listIntelChannels).not.toHaveBeenCalled();
+  });
+});
+
+describe("BS-P9-F4 author opt-outs vs digest-derived lines (applyBriefOptoutScrubs; the catch-up runs it)", () => {
+  const T0 = NOW.getTime();
+  const at = (ms: number) => new Date(T0 + ms);
+
+  it("BS-P9-F4: a new opt-out (an author with no stored message) → the catch-up scrubs every d: line before the screen; the state is stored after the scrub", async () => {
+    const id = await seedBrief();
+    listAuthorOptouts.mockResolvedValue(["U0ALICE"]);
+    const r = await catchUpBriefScrubs(principal, settings, id, { now: NOW });
+    if (!r.ok) throw new Error(`expected ok, got ${r.reason}`);
+    const items = storedContent(id).sections.flatMap((x) => x.items);
+    expect(items.find((i) => i.id === "b4")).toMatchObject({ text: BRIEF_COPY.removedSlack, scrubbed: true, slackKeys: [] });
+    expect(items.find((i) => i.id === "b3")!.text).toContain("Line b3");    // a message line: P7a's purge-log rows cover those
+    expect(stored(id).scrubbed_at).toBe(NOW.toISOString());
+    expect(optoutState).toEqual({ ...optoutFingerprint(["U0ALICE"]), changedAt: NOW.toISOString() });
+    const scrubs = db.calls.filter((x) => x.kind === "rpc" && x.target === "exec_brief_scrub_slack_v2").map((x) => x.payload);
+    expect(scrubs).toEqual([{ p_principal: principal.id, p_slack_keys: ["d:C0OPS0001:2026-11-05"], p_channels: [], p_all: false }]);
+  });
+
+  it("BS-P9-F4: inside the 30-minute window a brief built later is scrubbed too; after it, nothing; a shrinking set stores its fingerprint and scrubs nothing", async () => {
+    listAuthorOptouts.mockResolvedValue(["U0ALICE", "U0BOB"]);
+    expect(await applyBriefOptoutScrubs(principal, at(0))).toEqual({ scrubbed: 0, window: true });   // nothing cites a digest yet
+    const later = await seedBrief();
+    expect(await applyBriefOptoutScrubs(principal, at(5 * 60_000))).toEqual({ scrubbed: 1, window: true });
+    expect(storedContent(later).sections[1].items.find((i) => i.id === "b4")!.text).toBe(BRIEF_COPY.removedSlack);
+    expect(optoutState).toMatchObject({ changedAt: at(0).toISOString(), count: 2 });
+    db.tables.exec_briefs.length = 0;
+    const afterWindow = await seedBrief();
+    expect(await applyBriefOptoutScrubs(principal, at(OPTOUT_SCRUB_WINDOW_MS))).toEqual({ scrubbed: 0, window: false });
+    expect(storedContent(afterWindow).sections[1].items.find((i) => i.id === "b4")!.text).toContain("Line b4");
+    // Shrinking: the new fingerprint is stored, no window opens.
+    vi.mocked(putSyncState).mockClear();
+    listAuthorOptouts.mockResolvedValue(["U0ALICE"]);
+    expect(await applyBriefOptoutScrubs(principal, at(OPTOUT_SCRUB_WINDOW_MS + 60_000))).toEqual({ scrubbed: 0, window: false });
+    expect(optoutState).toEqual({ ...optoutFingerprint(["U0ALICE"]), changedAt: at(0).toISOString() });
+    expect(storedContent(afterWindow).sections[1].items.find((i) => i.id === "b4")!.text).toContain("Line b4");
+    // The same set again: nothing written.
+    vi.mocked(putSyncState).mockClear();
+    await applyBriefOptoutScrubs(principal, at(OPTOUT_SCRUB_WINDOW_MS + 120_000));
+    expect(putSyncState).not.toHaveBeenCalled();
+  });
+
+  it("BS-P9-F4: a failing scrub stores no state (the next call retries); no opt-out and nothing stored writes nothing; the facade missing → null", async () => {
+    await seedBrief();
+    listAuthorOptouts.mockResolvedValue(["U0ALICE"]);
+    db.failNext("exec_brief_scrub_slack_v2", "XX000");
+    await expect(applyBriefOptoutScrubs(principal, NOW)).rejects.toMatchObject({ name: "BriefStoreError" });
+    expect(optoutState).toBeUndefined();
+    expect(await applyBriefOptoutScrubs(principal, NOW)).toEqual({ scrubbed: 1, window: true });
+    expect(optoutState).toMatchObject({ count: 1 });
+    optoutState = undefined;
+    vi.mocked(putSyncState).mockClear();
+    listAuthorOptouts.mockResolvedValue([]);
+    expect(await applyBriefOptoutScrubs(principal, NOW)).toEqual({ scrubbed: 0, window: false });
+    expect(putSyncState).not.toHaveBeenCalled();
+    h.facade = false;
+    expect(await applyBriefOptoutScrubs(principal, NOW)).toBeNull();
+  });
+
+  it("BS-P9-F4: the catch-up fails closed when the opt-out read fails (screen_unavailable, nothing posted from it)", async () => {
+    const id = await seedBrief();
+    listAuthorOptouts.mockRejectedValueOnce(new Error("optouts"));
+    expect(await catchUpBriefScrubs(principal, settings, id, { now: NOW })).toEqual({ ok: false, reason: "screen_unavailable" });
+  });
+
+  it("parseBriefOptoutState: C33's { fp, count } plus changedAt (null or a timestamp); anything else → null", () => {
+    expect(parseBriefOptoutState({ fp: "0123456789ab", count: 2, changedAt: NOW.toISOString(), rev: 4 })).toEqual({ fp: "0123456789ab", count: 2, changedAt: NOW.toISOString() });
+    expect(parseBriefOptoutState({ fp: "", count: 0 })).toEqual({ fp: "", count: 0, changedAt: null });
+    for (const bad of [null, {}, { fp: "xyz", count: 1 }, { fp: "0123456789ab", count: -1 }, { fp: "0123456789ab", count: 1, changedAt: "soon" }]) {
+      expect(parseBriefOptoutState(bad)).toBeNull();
+    }
   });
 });

@@ -22,6 +22,9 @@ import { CheckinList } from "./CheckinList";
 // rule). Withheld lines were already replaced by brief-view.ts (C31); here they only look muted and carry no link.
 
 /** The named counters a section's context line shows, in this order (C's stats; anything else, and "more", is never shown). */
+/** P9 F5: a withheld line or pending title on the white section card (slate-400 was 2.56:1; slate-500 is 4.76:1). */
+export const BRIEF_WITHHELD_TEXT = "italic text-slate-500";
+
 const STAT_LABELS: Readonly<Partial<Record<BriefSectionKey, readonly (readonly [key: string, one: string, many: string])[]>>> = {
   emails: [
     ["reply", "to reply", "to reply"], ["urgent", "urgent", "urgent"], ["important", "important", "important"],
@@ -155,7 +158,7 @@ function Section({ section }: { section: BriefContentView["sections"][number] })
                     )}
                   </div>
                 )}
-                <p className={cn("break-words text-[13px] leading-relaxed", line.withheld === null ? "text-slate-800" : "italic text-slate-400")}>{line.text}</p>
+                <p className={cn("break-words text-[13px] leading-relaxed", line.withheld === null ? "text-slate-800" : BRIEF_WITHHELD_TEXT)}>{line.text}</p>
                 {line.refs.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1.5">
                     {line.refs.map((r, i) => (
@@ -170,7 +173,7 @@ function Section({ section }: { section: BriefContentView["sections"][number] })
         {section.pending.length > 0 && (
           <ul data-brief-pending className="space-y-1 border-t border-slate-100 pt-2.5">
             {section.pending.map((p, i) => (
-              <li key={i} className={cn("break-words text-[12.5px]", p.withheld ? "italic text-slate-400" : "text-slate-600")}>
+              <li key={i} className={cn("break-words text-[12.5px]", p.withheld ? BRIEF_WITHHELD_TEXT : "text-slate-600")}>
                 {BRIEF_COPY.pendingPrefix}
                 {p.title}
               </li>
@@ -261,7 +264,12 @@ export function BriefView({ view }: { view: BriefPageView }) {
         </Notice>
       );
     case "none":
-      return (
+      // P9 F31: more than 45 minutes past its time and not started (view.late, brief-view.ts briefIsLate): say so, in amber.
+      return view.late === true ? (
+        <Notice icon={TriangleAlert} tone="amber">
+          <p data-brief-state-copy="none-late">{fillBrief(BRIEF_COPY.noneLate, { time: formatInZone(view.dueAt, view.tz, "time") })}</p>
+        </Notice>
+      ) : (
         <Notice icon={CalendarClock}>
           <p data-brief-state-copy="none">{fillBrief(BRIEF_COPY.none, { time: formatInZone(view.dueAt, view.tz, "time") })}</p>
         </Notice>

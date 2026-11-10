@@ -47,10 +47,15 @@ export function ddtextConfirmText(turningOn: boolean, retentionDays: number): { 
         body:
           // Names every source the job sends to the model (DdtextSourceType and the batch context; review ui-2).
           `Every 10 minutes Claude Haiku reads new task comments (including the notes on status changes), handoff notes, extension reasons and submitted EOD/SOD blocker notes, with up to five earlier comments and the task's title and client for context, and stores short AI summaries ` +
-          `(up to 200 characters) for ${retentionDays} days. Turning it off deletes them within 10 minutes. Confirm first that the team ` +
+          `(up to 200 characters) for ${retentionDays} days. Turning it off deletes them within 10 minutes; morning-brief lines and chat answers that already used them stay until those expire. Confirm first that the team ` +
           `has been told and that Anthropic's data terms cover employee text.`
       }
-    : { question: "Turn off DD text triage?", body: "Its stored summaries and items are deleted within 10 minutes." };
+    : {
+        question: "Turn off DD text triage?",
+        // P9 F17: honest about what stays (the brief and chat keep their own copies until they expire).
+        body:
+          "Its stored summaries and Needs Attention items are deleted within 10 minutes. Morning-brief lines and chat answers that already used them stay until those expire (the brief after 30 days, chat after your chat retention)."
+      };
 }
 
 function installed(def: Pick<SettingsFieldDef, "group">, schema: Readonly<Partial<Record<SettingsSchemaKey, boolean>>>): boolean {
@@ -99,6 +104,19 @@ export function askAiLockedText(view: Pick<SettingsView, "settings">): string | 
   return view.settings.chatEnabled ? null : "Turn on Chat first.";
 }
 
+/**
+ * P9 (F5, F25, F33): the exec switches' look, shared by SettingsForm, BriefSettingsForm and SlackReadingControls. The
+ * button is a 40x56 px hit area below sm (24x44 from sm up) around the visible track; the off track is slate-500
+ * (4.76:1 against white; slate-300 was 1.48:1); track and knob don't animate under prefers-reduced-motion.
+ */
+export const SWITCH_BUTTON =
+  "group relative inline-flex h-10 w-14 shrink-0 items-center justify-center rounded-full disabled:cursor-not-allowed disabled:opacity-50 sm:h-6 sm:w-11";
+export const SWITCH_TRACK = { on: "bg-indigo-600", off: "bg-slate-500" } as const;
+export const switchTrackClass = (on: boolean): string =>
+  cn("relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors motion-reduce:transition-none", on ? SWITCH_TRACK.on : SWITCH_TRACK.off);
+export const switchKnobClass = (on: boolean): string =>
+  cn("inline-block h-5 w-5 rounded-full bg-white shadow transition-transform motion-reduce:transition-none", on ? "translate-x-[22px]" : "translate-x-0.5");
+
 const SMALL_BUTTON =
   "rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:border-slate-300 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50";
 const PRIMARY_BUTTON = "rounded-lg bg-indigo-600 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50";
@@ -125,12 +143,11 @@ function Switch({
       aria-labelledby={labelledBy}
       disabled={disabled}
       onClick={onClick}
-      className={cn(
-        "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-        on ? "bg-indigo-600" : "bg-slate-300"
-      )}
+      className={SWITCH_BUTTON}
     >
-      <span className={cn("inline-block h-5 w-5 rounded-full bg-white shadow transition-transform", on ? "translate-x-[22px]" : "translate-x-0.5")} />
+      <span aria-hidden className={switchTrackClass(on)}>
+        <span className={switchKnobClass(on)} />
+      </span>
     </button>
   );
 }

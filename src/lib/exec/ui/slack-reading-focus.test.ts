@@ -54,7 +54,7 @@ vi.mock("@/lib/exec/ui/settings-api", async (orig) => ({
 import type { ReactElement } from "react";
 import { useRouter } from "next/navigation";
 import { slackReadingView, pickerRow } from "@/lib/exec/__tests__/p5a-ui-fixtures";
-import { FinanceConfirm, SlackChannelPicker, watchChoiceKey } from "@/components/exec/settings/SlackChannelPicker";
+import { FinanceConfirm, SlackChannelPicker, focusedWatchChoice, watchChoiceKey } from "@/components/exec/settings/SlackChannelPicker";
 import { SlackReadingControls, StopReadingConfirm } from "@/components/exec/settings/SlackReadingControls";
 import { setChannelWatch, setWatchMode, stopReading } from "@/lib/exec/ui/settings-api";
 
@@ -155,6 +155,60 @@ describe("SlackChannelPicker: the finance confirm returns focus to its row (fixe
     expect(watchChoiceKey("Home", "unwatched")).toBe("watched");
     expect(watchChoiceKey("End", "watched")).toBe("unwatched");
     expect(watchChoiceKey("Tab", "watched")).toBeNull();
+  });
+});
+
+// P9 F35: every watch choice is a server write, so the arrow keys (and Home/End) only move focus between the three
+// options; Space or Enter on the focused option (the button's own click) commits it, once.
+describe("P9 F35: the picker's watch choices: arrows move focus, Space/Enter commits", () => {
+  const ROW_ID = "C0GENERAL";
+  /** The row's WatchControl, drawn in place with a fake button per option that records its focus. */
+  function watchControl(): El {
+    render<PickerProps>(SlackChannelPicker, { view: VIEW });
+    const ctl = watchControlOf(ROW_ID)!;
+    const group = (ctl.type as (p: Record<string, unknown>) => El)(ctl.props);
+    for (const b of [...walk(group)].filter((e) => typeof e.props["data-picker-choice"] === "string")) {
+      const choice = b.props["data-picker-choice"] as string;
+      (b.ref as (n: unknown) => void)({ focus: () => focused.push(`choice:${choice}`) });
+    }
+    return group;
+  }
+  const keyFrom = (key: string, choice: string) => ({ key, target: { getAttribute: (n: string) => (n === "data-picker-choice" ? choice : null) }, preventDefault: vi.fn() });
+
+  it("ArrowLeft/Right/Up/Down, Home and End move focus from the focused option and call no setChannelWatch", () => {
+    const group = watchControl();
+    const onKeyDown = group.props.onKeyDown as (e: ReturnType<typeof keyFrom>) => void;
+    // "watched" is checked; ArrowRight from it → muted, then ArrowRight from muted → unwatched (focus follows the focused one).
+    onKeyDown(keyFrom("ArrowRight", "watched"));
+    onKeyDown(keyFrom("ArrowRight", "muted"));
+    onKeyDown(keyFrom("ArrowLeft", "unwatched"));
+    onKeyDown(keyFrom("Home", "muted"));
+    onKeyDown(keyFrom("End", "watched"));
+    onKeyDown(keyFrom("ArrowDown", "unwatched"));
+    expect(focused).toEqual(["choice:muted", "choice:unwatched", "choice:muted", "choice:watched", "choice:unwatched", "choice:watched"]);
+    expect(setChannelWatch).not.toHaveBeenCalled();
+    expect(focusedWatchChoice({ getAttribute: () => "muted" })).toBe("muted");
+    expect(focusedWatchChoice({ getAttribute: () => "bogus" })).toBeNull();
+    expect(focusedWatchChoice(null)).toBeNull();
+  });
+
+  it("Space and Enter reach the group's handler as no-ops; the focused option's click commits exactly once", async () => {
+    vi.mocked(setChannelWatch).mockResolvedValue({ kind: "updated", channel: { ...pickerRow({ version: VERSION }), watchState: "muted", version: "2026-11-01T15:06:00.000Z" } } as never);
+    const group = watchControl();
+    const onKeyDown = group.props.onKeyDown as (e: ReturnType<typeof keyFrom>) => void;
+    const space = keyFrom(" ", "muted");
+    const enter = keyFrom("Enter", "muted");
+    onKeyDown(space);
+    onKeyDown(enter);
+    expect(space.preventDefault).not.toHaveBeenCalled();
+    expect(enter.preventDefault).not.toHaveBeenCalled();
+    expect(setChannelWatch).not.toHaveBeenCalled();
+    // The browser turns Space/Enter on a focused <button> into its click.
+    const muted = [...walk(group)].find((e) => e.props["data-picker-choice"] === "muted")!;
+    (muted.props.onClick as () => void)();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(setChannelWatch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(setChannelWatch).mock.calls[0]).toEqual([ROW_ID, { watchState: "muted", expectedVersion: VERSION, confirm: undefined }]);
   });
 });
 

@@ -45,6 +45,15 @@ const ANSWERED_TONE: Readonly<Record<string, ChipTone>> = {
 };
 
 /** Why a filtered, failed or deferred thread wasn't assessed, as words. */
+/**
+ * P9 F36: the client chip's words. Below high confidence the confidence is part of the visible text ("Client: Acme (low
+ * confidence)"); it was only in the chip's title, which neither a touch screen nor a screen reader reliably shows.
+ */
+export function clientChipText(client: Pick<NonNullable<EmailRowView["client"]>, "name" | "confidence">): string {
+  const shown = client.confidence !== null && client.confidence !== "high" ? labelOf(CONFIDENCE_LABEL, client.confidence) : null;
+  return shown ? `Client: ${client.name} (${shown})` : `Client: ${client.name}`;
+}
+
 export function notAssessedReason(row: Pick<EmailRowView, "state" | "filterReason" | "triageError" | "lastAttemptError">): string {
   if (row.state === "filtered") return labelOf(FILTER_REASON_LABEL, row.filterReason) ?? "Set aside before assessment";
   if (row.state === "deferred_budget") return labelOf(ATTEMPT_ERROR_LABEL, "budget") ?? "Deferred";
@@ -101,7 +110,7 @@ export function EmailRowItem({ row, tz, now }: { row: EmailRowView; tz: string; 
               tone="amber"
               title={[labelOf(MATCH_VIA_LABEL, row.client.via), labelOf(CONFIDENCE_LABEL, row.client.confidence)].filter(Boolean).join(", ")}
             >
-              {`Client: ${row.client.name}`}
+              {clientChipText(row.client)}
             </Chip>
           )}
           {row.partialThread && <Chip>Part of the conversation isn&apos;t synced</Chip>}

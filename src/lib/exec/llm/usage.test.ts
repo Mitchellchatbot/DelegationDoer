@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
 vi.mock("@/lib/exec/ops", () => ({ notifyOps: vi.fn() }));
@@ -11,7 +11,17 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { notifyOps } from "@/lib/exec/ops";
 import { loadSettings, principalFromRows, settingsFromRow } from "@/lib/exec/principal";
 import { BudgetExceededError, type ExecPrincipal, type ExecSettings } from "@/lib/exec/types";
-import { assertWithinDailyCap, featureSpentTodayUsd, recordUsage, spentTodayUsd, usageRow, type UsageRecordInput } from "@/lib/exec/llm/usage";
+import {
+  SPEND_MEMO_TTL_MS,
+  __resetSpendMemoForTests,
+  assertWithinDailyCap,
+  featureSpentTodayUsd,
+  recordUsage,
+  spentTodayUsd,
+  usageRow,
+  type UsageRecordInput
+} from "@/lib/exec/llm/usage";
+import { chatSpentTodayUsd } from "@/lib/exec/agent/budget";
 
 // ---------------------------------------------------------------------------
 // A chainable stand-in for the bits of supabase-js this module uses.
@@ -449,5 +459,179 @@ describe("featureSpentTodayUsd (P7a C17)", () => {
     expect(await featureSpentTodayUsd("ep_1", "UTC", ["slack_triage"], NOW)).toBeCloseTo(1.5, 6);
     expect(queries).toHaveLength(2);
     expect(queries[1].filters).toContainEqual(["gt", "id", 1000]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 F22 (contract §1, §5.1): the 30 s per-process spend memo behind spentTodayUsd (the daily cap, the DD-text ceiling)
+// and featureSpentTodayUsd (the Slack sub-cap). recordUsage adds this process's spend at once. chatSpentTodayUsd (P5b
+// C17) stays a fresh read every time.
+// ---------------------------------------------------------------------------
+
+describe("P9 F22 the spend memo", () => {
+  type Row = { id: number; principal_id: string | null; feature: string; cost_usd: number; created_at: string };
+  /** An exec_ai_usage stand-in that answers the keyset reads (eq / in / gte / gt / order / limit / abortSignal) and inserts. */
+  function spendDb(seed: Omit<Row, "id">[] = []) {
+    const rows: Row[] = seed.map((r, i) => ({ id: i + 1, ...r }));
+    let reads = 0;
+    let failNext: string | null = null;
+    let hold: Promise<void> | null = null;
+    const client = {
+      from(table: string) {
+        expect(table).toBe("exec_ai_usage");
+        return {
+          insert(row: Omit<Row, "id" | "created_at">) {
+            rows.push({ ...row, id: rows.length + 1, created_at: new Date().toISOString() } as Row);
+            return Promise.resolve({ error: null });
+          },
+          select() {
+            reads += 1;
+            const filters: ((r: Row) => boolean)[] = [];
+            let limit = Infinity;
+            const run = async () => {
+              if (hold) await hold;
+              if (failNext !== null) {
+                const message = failNext;
+                failNext = null;
+                return { data: null, error: { message } };
+              }
+              const out = rows.filter((r) => filters.every((f) => f(r))).sort((a, b) => a.id - b.id).slice(0, limit);
+              return { data: out.map((r) => ({ id: r.id, cost_usd: r.cost_usd })), error: null };
+            };
+            const b = {
+              eq: (c: string, v: unknown) => (filters.push((r) => (r as Record<string, unknown>)[c] === v), b),
+              in: (c: string, v: unknown[]) => (filters.push((r) => v.includes((r as Record<string, unknown>)[c])), b),
+              gte: (c: string, v: string) => (filters.push((r) => Date.parse(String((r as Record<string, unknown>)[c])) >= Date.parse(v)), b),
+              gt: (c: string, v: number) => (filters.push((r) => Number((r as Record<string, unknown>)[c]) > v), b),
+              order: () => b,
+              limit: (n: number) => ((limit = n), b),
+              abortSignal: () => b,
+              then: (ok: (v: unknown) => unknown, bad?: (e: unknown) => unknown) => run().then(ok, bad)
+            };
+            return b;
+          }
+        };
+      }
+    };
+    vi.mocked(getSupabaseAdmin).mockReturnValue(client as never);
+    return {
+      rows,
+      reads: () => reads,
+      failNext: (m: string) => (failNext = m),
+      holdReads: () => {
+        let release!: () => void;
+        hold = new Promise<void>((r) => (release = r));
+        return () => {
+          hold = null;
+          release();
+        };
+      }
+    };
+  }
+  const NOW = new Date("2026-11-04T15:00:00Z"); // 10:00 EST; his local day began 05:00Z
+  const TODAY = "2026-11-04T14:00:00Z";
+  const NY = "America/New_York";
+  const rec = (over: Partial<UsageRecordInput>): UsageRecordInput => ({ ...baseRecord, ...over });
+  // baseRecord (chat, Opus): $0.039 a row.
+
+  beforeEach(() => {
+    __resetSpendMemoForTests();
+    vi.useFakeTimers({ toFake: ["Date"], now: NOW });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("SP01 two cap checks within 30 s → one read; the second answers from the memo", async () => {
+    const db = spendDb([{ principal_id: "ep_1", feature: "triage", cost_usd: 4.5, created_at: TODAY }]);
+    await expect(assertWithinDailyCap(principal, settings(), NOW)).resolves.toEqual({ spentUsd: 4.5, capUsd: 15 });
+    vi.setSystemTime(NOW.getTime() + SPEND_MEMO_TTL_MS - 1);
+    await expect(assertWithinDailyCap(principal, settings(), new Date())).resolves.toEqual({ spentUsd: 4.5, capUsd: 15 });
+    expect(db.reads()).toBe(1);
+    expect(SPEND_MEMO_TTL_MS).toBe(30_000);
+  });
+
+  it("SP02 recordUsage moves the memo: this process's spend counts at once, without a read", async () => {
+    const db = spendDb([{ principal_id: "ep_1", feature: "triage", cost_usd: 4.5, created_at: TODAY }]);
+    expect(await spentTodayUsd("ep_1", NY, NOW)).toBeCloseTo(4.5, 9);
+    await recordUsage(rec({}));
+    await recordUsage(rec({ principalId: "ep_2" }));
+    expect(await spentTodayUsd("ep_1", NY, NOW)).toBeCloseTo(4.539, 9);
+    expect(db.reads()).toBe(1);
+    // A cap reached by this process's own calls refuses the next one before any read.
+    await recordUsage(rec({ usage: { input_tokens: 1_000_000, output_tokens: 500_000 } })); // $14 on Opus
+    await expect(assertWithinDailyCap(principal, settings(), NOW)).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(db.reads()).toBe(1);
+  });
+
+  it("SP03 after 30 s → a fresh read, which sees the rows that were recorded (no double count)", async () => {
+    const db = spendDb([{ principal_id: "ep_1", feature: "triage", cost_usd: 1, created_at: TODAY }]);
+    expect(await spentTodayUsd("ep_1", NY, NOW)).toBeCloseTo(1, 9);
+    await recordUsage(rec({}));
+    vi.setSystemTime(NOW.getTime() + SPEND_MEMO_TTL_MS);
+    expect(await spentTodayUsd("ep_1", NY, new Date())).toBeCloseTo(1.039, 9);
+    expect(db.reads()).toBe(2);
+  });
+
+  it("SP04 one entry per principal, local day and feature filter", async () => {
+    const db = spendDb([
+      { principal_id: "ep_1", feature: "ddtext", cost_usd: 0.25, created_at: TODAY },
+      { principal_id: "ep_1", feature: "chat", cost_usd: 1, created_at: TODAY },
+      { principal_id: "ep_2", feature: "chat", cost_usd: 7, created_at: TODAY }
+    ]);
+    expect(await spentTodayUsd("ep_1", NY, NOW)).toBeCloseTo(1.25, 9);
+    expect(await spentTodayUsd("ep_1", NY, NOW, { feature: "ddtext" })).toBeCloseTo(0.25, 9);
+    expect(await spentTodayUsd("ep_2", NY, NOW)).toBeCloseTo(7, 9);
+    // Another day is another entry (its read counts every row from that midnight on, as the query does).
+    expect(await spentTodayUsd("ep_1", NY, new Date("2026-11-03T15:00:00Z"))).toBeCloseTo(1.25, 9);
+    expect(db.reads()).toBe(4);
+    // A chat row of ep_1 moves ep_1's totals that count chat (both days' "every feature"), not the DD-text one or ep_2's.
+    await recordUsage(rec({}));
+    expect(await spentTodayUsd("ep_1", NY, NOW)).toBeCloseTo(1.289, 9);
+    expect(await spentTodayUsd("ep_1", NY, NOW, { feature: "ddtext" })).toBeCloseTo(0.25, 9);
+    expect(await spentTodayUsd("ep_2", NY, NOW)).toBeCloseTo(7, 9);
+    expect(await spentTodayUsd("ep_1", NY, new Date("2026-11-03T15:00:00Z"))).toBeCloseTo(1.289, 9);
+    expect(db.reads()).toBe(4);
+  });
+
+  it("SP05 a failed read keeps nothing: it throws (fail closed) and the next check reads again", async () => {
+    const db = spendDb([{ principal_id: "ep_1", feature: "triage", cost_usd: 2, created_at: TODAY }]);
+    db.failNext("connection refused");
+    await expect(assertWithinDailyCap(principal, settings(), NOW)).rejects.toThrow("exec_ai_usage read failed: connection refused");
+    await expect(assertWithinDailyCap(principal, settings(), NOW)).resolves.toEqual({ spentUsd: 2, capUsd: 15 });
+    expect(db.reads()).toBe(2);
+  });
+
+  it("SP06 featureSpentTodayUsd (the Slack sub-cap) is memoized too: a Slack row recorded here moves it, a chat row doesn't", async () => {
+    const db = spendDb([{ principal_id: "ep_1", feature: "slack_triage", cost_usd: 0.5, created_at: TODAY }]);
+    const slack = ["slack_triage", "digest"] as const;
+    expect(await featureSpentTodayUsd("ep_1", NY, slack, NOW)).toBeCloseTo(0.5, 9);
+    await recordUsage(rec({ feature: "slack_triage", model: "claude-haiku-5-5", usage: { input_tokens: 100_000 } })); // $0.01
+    await recordUsage(rec({})); // chat
+    expect(await featureSpentTodayUsd("ep_1", NY, ["digest", "slack_triage"], NOW)).toBeCloseTo(0.51, 9);
+    expect(db.reads()).toBe(1);
+    // An aborted signal still throws before anything (memo or read).
+    const aborted = new AbortController();
+    aborted.abort(new Error("job lease lost"));
+    await expect(featureSpentTodayUsd("ep_1", NY, slack, NOW, { signal: aborted.signal })).rejects.toThrow("job lease lost");
+  });
+
+  it("SP07 spend recorded while a read is in flight joins that read's total (it may miss the row: counting it errs high)", async () => {
+    const db = spendDb([{ principal_id: "ep_1", feature: "triage", cost_usd: 1, created_at: TODAY }]);
+    const release = db.holdReads();
+    const pending = spentTodayUsd("ep_1", NY, NOW);
+    await recordUsage(rec({}));
+    release();
+    // This fake's held read sees the new row too, and the memo adds it again: the total errs high (for up to 30 s).
+    expect(await pending).toBeCloseTo(1.078, 9);
+    expect(await spentTodayUsd("ep_1", NY, NOW)).toBeCloseTo(1.078, 9);
+    expect(db.reads()).toBe(1);
+  });
+
+  it("SP08 chatSpentTodayUsd (P5b C17) is not memoized: every call reads", async () => {
+    const db = spendDb([{ principal_id: "ep_1", feature: "chat", cost_usd: 3, created_at: TODAY }]);
+    expect(await chatSpentTodayUsd(principal, NOW)).toBeCloseTo(3, 9);
+    expect(await chatSpentTodayUsd(principal, NOW)).toBeCloseTo(3, 9);
+    expect(db.reads()).toBe(2);
   });
 });

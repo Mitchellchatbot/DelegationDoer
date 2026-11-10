@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useReducer, useRef } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import Link from "next/link";
 import { CircleCheck, Filter, Inbox } from "lucide-react";
 import type {
@@ -14,6 +14,7 @@ import { draftReplyHrefFor } from "@/lib/exec/drafts-links";
 import { formatInZone, pluralize } from "@/lib/exec/format";
 import { fetchAttentionPage, patchAttention, postFeedback } from "@/lib/exec/ui/feed-api";
 import { feedFocusSelectors, focusFirst, focusLost } from "@/lib/exec/ui/focus";
+import type { FeedMessage } from "@/lib/exec/ui/feed-api";
 import { feedReducer, initialFeedState, type FeedRow } from "@/lib/exec/ui/feed-state";
 import { snoozePresets, type SnoozePreset } from "@/lib/exec/ui/snooze-presets";
 import { AttentionRow } from "../AttentionRow";
@@ -102,6 +103,29 @@ export function feedEmptyKind(p: { filtered: boolean; freshnessUnknown: boolean;
   return p.checkedAt ? "checked" : "never_checked";
 }
 
+/**
+ * P9 F27: the text of the newest row message that changed since the last render (a message object a row didn't have
+ * before), or null when none did. Pure.
+ */
+export function latestRowMessage(before: ReadonlyMap<string, FeedMessage | null>, rows: readonly Pick<FeedRow, "item" | "message">[]): string | null {
+  let text: string | null = null;
+  for (const r of rows) {
+    if (r.message !== null && r.message !== before.get(r.item.id)) text = r.message.text;
+  }
+  return text;
+}
+
+/** U+00A0 NO-BREAK SPACE (built, never typed as an escape). */
+const NBSP = String.fromCodePoint(0xa0);
+
+/**
+ * P9 fixer ui-7: the live region's text for the nth announcement: the text itself, with a trailing no-break space on every
+ * second one, so the same text twice in a row still changes the region (and is read out again). Pure.
+ */
+export function announceText(a: { text: string; n: number }): string {
+  return a.n > 0 && a.n % 2 === 0 ? `${a.text}${NBSP}` : a.text;
+}
+
 /** "/executive/chat?context=attention:<id>" while Ask AI is on (coherence-16); else null. */
 export function askAiHrefFor(itemId: string, askAiEnabled: boolean): string | null {
   return askAiEnabled ? `/executive/chat?context=attention:${itemId}` : null;
@@ -133,6 +157,17 @@ export function FeedList({
   const [state, dispatch] = useReducer(feedReducer, null, () =>
     initialFeedState({ items: initialItems, cursor: initialCursor, status: filters.status ?? "default", tz, hiddenEmail, emailScreen })
   );
+  // P9 F27: a row's outcome (Dismissed, Snoozed, Thanks, a failure) is read out by ONE live region that is always in the
+  // list; the row's own message line remounts with the row's controls (or appears in a new stub), and a region that
+  // arrives already holding its text isn't reliably announced.
+  // P9 fixer ui-7: { text, n }, n counting the announcements. Two outcomes in a row with the same text ("Dismissed." twice)
+  // would set the same string, React would skip the render and the region would say nothing the second time; so every
+  // second announcement carries a trailing no-break space (U+00A0, built with fromCodePoint), which changes the region's
+  // text without changing what is read out.
+  const [announced, setAnnounced] = useState<{ text: string; n: number }>({ text: "", n: 0 });
+  const setAnnouncement = (text: string) => setAnnounced((prev) => ({ text, n: prev.n + 1 }));
+  const announcement = announceText(announced);
+  const lastMessages = useRef(new Map<string, FeedMessage | null>());
   // Computed only once the actions show (a top-level window, after mount);
   // the click handler recomputes the chosen preset from the clock it has then (C4).
   const presets: SnoozePreset[] = isTop ? snoozePresets(new Date(), tz) : [];
@@ -182,6 +217,12 @@ export function FeedList({
   }
 
   useEffect(() => {
+    const text = latestRowMessage(lastMessages.current, state.rows);
+    lastMessages.current = new Map(state.rows.map((r) => [r.item.id, r.message]));
+    if (text !== null) setAnnouncement(text);
+  }, [state.rows]);
+
+  useEffect(() => {
     const id = focusAfter.current;
     if (id === null) return;
     const row = state.rows.find((r) => r.item.id === id);
@@ -229,6 +270,9 @@ export function FeedList({
       <div aria-live="polite" role="status" className={state.notice ? "border-b border-slate-100 px-4 py-2 text-[12px] text-slate-700" : "sr-only"}>
         {state.notice?.text ?? ""}
       </div>
+      <p aria-live="polite" role="status" data-feed-announce className="sr-only">
+        {announcement}
+      </p>
       {rows.length === 0 ? (
         emptyKind === "no_match" ? (
           <EmptyState
@@ -306,7 +350,7 @@ export function FeedList({
             data-load-more
             onClick={() => void loadMore()}
             disabled={state.loadingMore}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:border-slate-300 hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex min-h-10 items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:border-slate-300 hover:text-ink disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-0"
           >
             {state.loadingMore ? FEED_LIST_COPY.loading : FEED_LIST_COPY.loadMore}
           </button>

@@ -14,7 +14,7 @@ import { SPARK_COLOR, Sparkline } from "./Sparkline";
 export type StatTint = keyof typeof SPARK_COLOR;
 
 // Literal class strings: Tailwind only emits classes it can read in source.
-const TINT: Readonly<Record<StatTint, string>> = {
+export const TINT: Readonly<Record<StatTint, string>> = {
   indigo: "border-indigo-100 bg-indigo-50/60",
   emerald: "border-emerald-100 bg-emerald-50/60",
   teal: "border-teal-100 bg-teal-50/60",
@@ -25,7 +25,8 @@ const TINT: Readonly<Record<StatTint, string>> = {
   slate: "border-slate-200 bg-white"
 };
 
-const TONE = { good: "text-emerald-600", bad: "text-rose-600", warn: "text-amber-600", flat: "text-muted" } as const;
+// P9 F5 (WCAG AA on every tint): amber-600 ("Couldn't load") was about 3.1:1 and emerald-600 3.8:1 on white.
+export const TONE = { good: "text-emerald-700", bad: "text-rose-700", warn: "text-amber-800", flat: "text-slate-600" } as const;
 
 export type StatTone = keyof typeof TONE;
 

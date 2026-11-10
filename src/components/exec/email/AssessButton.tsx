@@ -75,11 +75,10 @@ export function AssessButton({ threadId, size = "sm" }: { threadId: string; size
       <button type="button" onClick={assess} disabled={status.kind === "sending" || status.kind === "queued"} className={button}>
         {status.kind === "sending" ? "Queuing…" : status.kind === "queued" ? "Queued" : "Assess"}
       </button>
-      {status.kind === "queued" && (
-        <span role="status" className="text-[11.5px] text-emerald-700">
-          {assessMessage(202)}
-        </span>
-      )}
+      {/* P9 F27: the status line stays mounted (empty until there is something to say), so "Queued" is announced. */}
+      <span role="status" aria-live="polite" data-assess-status className={status.kind === "queued" ? "text-[11.5px] text-emerald-700" : "sr-only"}>
+        {status.kind === "queued" ? assessMessage(202) : ""}
+      </span>
       {status.kind === "error" && (
         <span role="alert" className="text-[11.5px] text-rose-700">
           {status.message}

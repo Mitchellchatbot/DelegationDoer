@@ -441,6 +441,48 @@ describe("scanDraftOutput (C65)", () => {
     expect(scanDraftOutput(out("Jane today."), { ...baseCtx, userNames: ["Jane"] })).toEqual([]);
   });
 
+  it("C65 bare domains (P9 F9): a link with no scheme is flagged like one with https:// or www.", () => {
+    for (const hostile of [
+      "Please confirm your details at bit.ly/3xYzQ before Friday.",
+      "Pay via evil.example.com/pay?id=123 today.",
+      "Log in at acme-billing.example/verify to keep service.",
+      "Go to Evil.Example/Pay now.",
+      "See //evil.example/x and /\\evil.example/y."
+    ]) {
+      expect(scanDraftOutput(out(hostile), baseCtx), hostile).toEqual(["unexpected_url"]);
+    }
+    // In the subject too.
+    expect(scanDraftOutput(out("Hi.", "Re: bit.ly/3xYzQ"), baseCtx)).toEqual(["unexpected_url"]);
+  });
+
+  it("C65 bare domains (P9 F9): prose, numbers, his own domains and an address's dotted local part are not links", () => {
+    for (const fine of [
+      "See scaledai.org/report for the numbers.",
+      "Our status page app.scaledai.com/status is up.",
+      "Use the template, e.g. the plan we sent.",
+      "This is version 2.5 of the plan.",
+      "Mr. Smith will call at 3 p.m. on Friday.",
+      "Write to jane.doe@client.com or ann@client.com.",
+      "It is ready (U.S. time)."
+    ]) {
+      expect(scanDraftOutput(out(fine), { ...baseCtx, recipients: new Set(["ann@client.com", "jane.doe@client.com"]) }), fine).toEqual([]);
+    }
+    // An address that isn't a recipient is an unexpected email, never also a link.
+    expect(scanDraftOutput(out("Write to jane.doe@other.example."), baseCtx)).toEqual(["unexpected_email"]);
+  });
+
+  it("C65 bare domains (P9 F9): allowed when his own instruction or a DD fact carries it; never just for being a recipient's domain", () => {
+    expect(scanDraftOutput(out("The form is at bit.ly/3xYzQ."), { ...baseCtx, instruction: "Point her to bit.ly/3xYzQ" })).toEqual([]);
+    expect(scanDraftOutput(out("Your site acmedental.com/contact is back up."), { ...baseCtx, factLines: ["[F1] Website: https://acmedental.com/contact"] })).toEqual([]);
+    // The assistant's own instruction allows nothing (P5b F6): the caller passes instruction null for it.
+    expect(scanDraftOutput(out("The form is at bit.ly/3xYzQ."), { ...baseCtx, instruction: null, factLines: [] })).toEqual(["unexpected_url"]);
+    // The reply goes to the hostile sender: their own domain in the body is still flagged.
+    const toHostile: ScanContext = { ...baseCtx, recipients: new Set(["x@evil.example.com"]) };
+    expect(scanDraftOutput(out("Pay via evil.example.com/pay?id=123 today."), toHostile)).toEqual(["unexpected_url"]);
+    // A different path on an allowed bare domain is not allowed by it.
+    expect(scanDraftOutput(out("Pay at bit.ly/OTHER."), { ...baseCtx, instruction: "Point her to bit.ly/3xYzQ" })).toEqual(["unexpected_url"]);
+  });
+
   it("DC10 returns codes only and logs nothing", () => {
     const sentinel = "SENTINEL-TOKEN-7f2c";
     const flags = scanDraftOutput(

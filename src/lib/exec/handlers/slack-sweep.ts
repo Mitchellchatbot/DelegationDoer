@@ -7,12 +7,13 @@ import { getDraftView } from "@/lib/exec/drafts";
 import { enqueueJob } from "@/lib/exec/jobs";
 import { loadSettings } from "@/lib/exec/principal";
 import { getProposalView } from "@/lib/exec/proposals";
-import type { ScheduledWork } from "@/lib/exec/scheduler";
+import type { ScheduledWork, SystemScheduledWork } from "@/lib/exec/scheduler";
 import { listDmItems } from "@/lib/exec/sources/slack";
 import { dmDelete, dmPost, dmRead, dmUpdate, errLabel, isSlackAuthError, ownSignal, slackCodeOf } from "@/lib/exec/slack-dm";
 import {
   getActiveInstallation,
   isSlackSchemaMissing,
+  listActiveInstallationsForSystem,
   listCardPostsForMessage,
   listOldSlackPosts,
   listOpenReplies,
@@ -20,6 +21,7 @@ import {
   markPostFollowed,
   openActiveInstallation,
   openInstallationById,
+  openInstallationForSystem,
   recordSlackError,
   replyStep,
   slackSchemaReady
@@ -52,6 +54,16 @@ import type { ExecPrincipal, JobContext, JobHandler } from "@/lib/exec/types";
 //   listing calls per run; a rate limit ends the run early.
 // Errors per item are logged by event id or ts; an auth-class Slack error stops
 // a run (rethrown, recorded by slack-dm.ts). Returns counts only.
+//
+// P9 F16 (Area C): the DM purge is SYSTEM work now (slackDmPurgeSystemWork: daily at
+// 04:10 UTC, principal_id null, runtime.ts's BUILT_IN_SYSTEM_SCHEDULE), as P8 made
+// every DB retention step: a principal disabled by hand keeps an active
+// installation, and the per-principal scheduler lists enabled principals only, so
+// its bot DMs outlived retention_days_chat. The system pass purges every active
+// installation (openInstallationForSystem) with its own principal's
+// retention_days_chat; one failing installation doesn't stop the rest (the first
+// failure is rethrown at the end). A per-principal row queued before P9 still runs
+// once, for its principal, as before.
 
 const SWEEP_KIND = SLACK_JOB_KINDS.sweep;
 const PURGE_KIND = SLACK_JOB_KINDS.dmPurge;
@@ -68,7 +80,11 @@ export type SlackSweepResult = { skipped: string } | { swept: number; followed: 
 /** A stale note that failed after the swept CAS is retried by its own one-off sweep job: first at +30 s, three attempts. */
 export const STALE_NOTE_RETRY_DELAY_MS = 30_000;
 export const STALE_NOTE_RETRY_ATTEMPTS = 3;
-export type SlackDmPurgeResult = { skipped: string } | { deleted: number; ledger: number; scanned: number; stoppedEarly: boolean };
+export type SlackDmPurgeResult = { skipped: string } | { deleted: number; ledger: number; scanned: number; stoppedEarly: boolean }
+  /** P9 F16: the system pass's totals over every active installation. */
+  | { installations: number; deleted: number; ledger: number; scanned: number; stoppedEarly: number; tokenUnavailable: number; failed: number };
+/** P9 F16: the most active installations one system pass purges (one per principal: a bound, not a quota). */
+const SYSTEM_PURGE_INSTALLATIONS = 50;
 
 /** The scheduler's gate for both schedules (Y4): an active installation exists. Schema missing → false; other errors throw. */
 export async function slackWorkDue(principal: ExecPrincipal): Promise<boolean> {
@@ -283,13 +299,62 @@ export function slackTsOf(ms: number): string {
 
 async function runDmPurge(ctx: JobContext): Promise<SlackDmPurgeResult> {
   const principal = ctx.principal;
-  if (!principal) return { skipped: "no_principal" };
+  // P9 F16: the system job (principal_id null) purges every active installation.
+  if (!principal) return runSystemDmPurge(ctx.signal);
+  // A per-principal row queued before P9 (the old per-principal schedule) runs once, for its principal, as before.
   const opened = await activeInstallation(principal);
   if (opened === null) return { skipped: "no_installation" };
   if (typeof opened === "string") return { skipped: opened };
-  const inst = opened;
   const settings = await loadSettings(principal.id);
-  const cutoffMs = Date.now() - settings.retentionDaysChat * DAY_MS;
+  return purgeInstallationDms(opened, settings.retentionDaysChat, ctx.signal);
+}
+
+/**
+ * P9 F16: the system pass. Every active installation (its principal enabled or not; listActiveInstallationsForSystem), opened
+ * by id without a principal (openInstallationForSystem), purged with ITS principal's retention_days_chat. A token our key can't
+ * open is recorded on the row (C34) and counted; any other failure is logged by installation id, counted, and the first one is
+ * rethrown after the rest ran (the job retries; every delete is idempotent). Counts only.
+ */
+async function runSystemDmPurge(signal: AbortSignal): Promise<SlackDmPurgeResult> {
+  if (!(await slackSchemaReady())) return { skipped: "not_installed" };
+  const out = { installations: 0, deleted: 0, ledger: 0, scanned: 0, stoppedEarly: 0, tokenUnavailable: 0, failed: 0 };
+  let firstError: unknown = null;
+  for (const row of await listActiveInstallationsForSystem(SYSTEM_PURGE_INSTALLATIONS, { signal })) {
+    signal.throwIfAborted();
+    try {
+      let inst: OpenInstallation | null;
+      try {
+        inst = await openInstallationForSystem(row.id, { signal });
+      } catch (err) {
+        if (!(err instanceof SecretUnavailableError)) throw err;
+        out.tokenUnavailable += 1;
+        await recordSlackError(row.id, "token_unavailable");
+        continue;
+      }
+      if (inst === null) continue;
+      const settings = await loadSettings(row.principalId);
+      const r = await purgeInstallationDms(inst, settings.retentionDaysChat, signal);
+      out.installations += 1;
+      out.deleted += r.deleted;
+      out.ledger += r.ledger;
+      out.scanned += r.scanned;
+      if (r.stoppedEarly) out.stoppedEarly += 1;
+    } catch (err) {
+      if (signal.aborted) throw err;
+      out.failed += 1;
+      console.error(`[exec-slack] system dm purge: installation ${row.id} failed (${errLabel(err)})`);
+      firstError ??= err;
+    }
+  }
+  console.info(`[exec-slack] system dm purge installations=${out.installations} deleted=${out.deleted} ledger=${out.ledger} scanned=${out.scanned}`);
+  if (firstError !== null) throw firstError;
+  return out;
+}
+
+/** One installation's DM purge (K12, C19, C43): the ledger first, then the bounded backstop scan. */
+async function purgeInstallationDms(inst: OpenInstallation, retentionDaysChat: number, signal: AbortSignal):
+  Promise<{ deleted: number; ledger: number; scanned: number; stoppedEarly: boolean }> {
+  const cutoffMs = Date.now() - retentionDaysChat * DAY_MS;
   const budget = SLACK_LIMITS.dmPurgeMaxDeletes;
   let deleted = 0;
   let ledger = 0;
@@ -313,14 +378,14 @@ async function runDmPurge(ctx: JobContext): Promise<SlackDmPurgeResult> {
     const cutoffTs = slackTsOf(cutoffMs);
     let cursor: string | null = null;
     while (deleted < budget && listings < SLACK_LIMITS.dmPurgeMaxPages) {
-      const page = await dmRead(inst, (target) => listDmItems(target, { latest: cutoffTs, cursor, limit: 200 }, { signal: ctx.signal }));
+      const page = await dmRead(inst, (target) => listDmItems(target, { latest: cutoffTs, cursor, limit: 200 }, { signal }));
       listings += 1;
       for (const item of page.items) {
         if (deleted >= budget) break;
         scanned += 1;
         // A thread's replies first (his own stay: no user token), then its root if it is ours.
         if (item.replyCount > 0 && listings < SLACK_LIMITS.dmPurgeMaxPages) {
-          const replies = await dmRead(inst, (target) => listDmItems(target, { latest: cutoffTs, rootTs: item.ts, limit: 200 }, { signal: ctx.signal }));
+          const replies = await dmRead(inst, (target) => listDmItems(target, { latest: cutoffTs, rootTs: item.ts, limit: 200 }, { signal }));
           listings += 1;
           for (const reply of replies.items) {
             if (deleted >= budget) break;
@@ -369,10 +434,12 @@ export const slackSweepScheduledWork: ScheduledWork = {
   when: (principal) => slackWorkDue(principal)
 };
 
-export const slackDmPurgeScheduledWork: ScheduledWork = {
+/** P9 F16: the DM purge as SYSTEM work (principal_id null), daily at 04:10 UTC, two attempts, the handler's 120 s; keyed
+ *  exec.slack-dm-purge:system:<UTC date> by the scheduler, whose EXEC_ENABLED gate is the only one (a disabled principal's
+ *  installation is purged too). Replaces P6's per-principal schedule (daily at 04:10 local, enabled principals only). */
+export const slackDmPurgeSystemWork: SystemScheduledWork = Object.freeze<SystemScheduledWork>({
   kind: PURGE_KIND,
   lane: "bulk",
-  cadence: { kind: "daily", at: () => "04:10" },
-  maxAttempts: 2,
-  when: (principal) => slackWorkDue(principal)
-};
+  cadence: { kind: "daily", atUtc: "04:10" },
+  maxAttempts: 2
+});

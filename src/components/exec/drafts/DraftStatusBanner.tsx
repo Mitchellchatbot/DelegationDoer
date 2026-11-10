@@ -1,3 +1,4 @@
+import type { Ref } from "react";
 import { ShieldAlert, TriangleAlert } from "lucide-react";
 import type { DraftView } from "@/lib/exec/drafts-types";
 import { cn } from "@/lib/utils";
@@ -37,7 +38,8 @@ export function DraftStatusBanner({
   pollFailures = 0,
   clientName = null,
   onRecheck,
-  rechecking = false
+  rechecking = false,
+  headlineRef
 }: {
   view: DraftView;
   tz: string;
@@ -49,6 +51,8 @@ export function DraftStatusBanner({
   /** ui-2 (additive): re-prove the drafts readiness from the "drafts unavailable" notice. */
   onRecheck?: () => void;
   rechecking?: boolean;
+  /** P9 F27: the headline, for DraftPanel to move focus to (a tabIndex -1 status line). */
+  headlineRef?: Ref<HTMLParagraphElement>;
 }) {
   const banner = statusBanner(view, nowIso, tz);
   const poll = pollErrorCopy(pollFailures);
@@ -73,7 +77,11 @@ export function DraftStatusBanner({
       )}
       {notice && <Notice>{notice}</Notice>}
       <div className={cn("rounded-xl border px-4 py-3", TONE[banner.tone])}>
-        <p className="text-[13.5px] font-semibold leading-snug">{banner.headline}</p>
+        {/* P9 F27: one persistent status region whose text changes with the draft's state (save, send, discard are
+            announced), and the place focus goes when the pressed button is gone (DraftPanel). */}
+        <p ref={headlineRef} tabIndex={-1} role="status" aria-live="polite" data-banner-headline className="text-[13.5px] font-semibold leading-snug outline-none">
+          {banner.headline}
+        </p>
         {banner.notes.map((line) => (
           <p key={line} className="mt-1 text-[12px] opacity-90">
             {line}

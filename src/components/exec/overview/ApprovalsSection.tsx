@@ -38,6 +38,9 @@ const MECHANISMS: Readonly<Record<ApprovalMechanism, { label: string; places: re
   checkins: { label: "Check-ins", places: [], note: "In your Slack brief" }
 };
 
+/** P9 F5: a zero count on the white card (slate-400 was 2.56:1; slate-500 is 4.76:1). */
+export const ZERO_COUNT_TEXT = "text-slate-500";
+
 function waitingFor(bucket: ApprovalBucket, now: string): string {
   if (bucket.count === 0) return "None waiting";
   return bucket.oldestAt === null ? "Oldest: age unknown" : `Oldest ${ago(bucket.oldestAt, now)}`;
@@ -61,7 +64,7 @@ function ApprovalRow({ bucket, now }: { bucket: ApprovalBucket; now: string }) {
           {meta.note && <span>{meta.note}</span>}
         </div>
       </div>
-      <span className={cn("shrink-0 text-[16px] font-semibold tabular-nums", waiting ? "text-ink" : "text-slate-400")}>
+      <span className={cn("shrink-0 text-[16px] font-semibold tabular-nums", waiting ? "text-ink" : ZERO_COUNT_TEXT)}>
         {formatCount(bucket.count)}
       </span>
     </li>

@@ -134,6 +134,14 @@ export function watchChoiceKey(key: string, current: WatchState): WatchState | n
   return null;
 }
 
+/** P9 F35: the option a key event came from (its data-picker-choice), or null when the target isn't one of them. */
+export function focusedWatchChoice(target: unknown): WatchState | null {
+  const attr = typeof target === "object" && target !== null && typeof (target as { getAttribute?: unknown }).getAttribute === "function"
+    ? (target as { getAttribute: (name: string) => string | null }).getAttribute("data-picker-choice")
+    : null;
+  return WATCH_CHOICES.some((c) => c.state === attr) ? (attr as WatchState) : null;
+}
+
 /**
  * The rows after the channels route answered: updated → the answer's row; conflict → the answer's row (or the row as
  * it was) and pickerConflict; confirmation_required → the row as it was, and open the finance confirm; failed → the row
@@ -198,6 +206,8 @@ function RowName({ row }: { row: PickerRow }) {
 function WatchControl({ row, disabled, onChoose, watchRef }: { row: PickerRow; disabled: boolean; onChoose: (next: WatchState) => void;
   watchRef?: (el: HTMLButtonElement | null) => void }) {
   // ui-9: one tab stop per row (the checked option); the arrow keys move between the three (the ARIA radio pattern).
+  // P9 F35: the arrows (and Home/End) move focus ONLY: every choice is a server write, and ArrowLeft from Mute on a private
+  // or Slack Connect channel would have turned model triage on. Space or Enter on the focused option (its click) commits it.
   const buttons = useRef<Partial<Record<WatchState, HTMLButtonElement | null>>>({});
   return (
     <div
@@ -205,11 +215,10 @@ function WatchControl({ row, disabled, onChoose, watchRef }: { row: PickerRow; d
       aria-label={channelLabel(row)}
       data-picker-control
       onKeyDown={(e) => {
-        const next = watchChoiceKey(e.key, row.watchState);
+        const next = watchChoiceKey(e.key, focusedWatchChoice(e.target) ?? row.watchState);
         if (next === null || disabled) return;
         e.preventDefault();
         buttons.current[next]?.focus();
-        if (next !== row.watchState) onChoose(next);
       }}
       className="inline-flex shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white"
     >
@@ -232,7 +241,7 @@ function WatchControl({ row, disabled, onChoose, watchRef }: { row: PickerRow; d
               if (!on) onChoose(c.state);
             }}
             className={cn(
-              "whitespace-nowrap px-2.5 py-1 text-[12px] font-semibold disabled:cursor-not-allowed disabled:opacity-60",
+              "inline-flex min-h-10 items-center whitespace-nowrap px-2.5 py-1 text-[12px] font-semibold disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-0",
               i > 0 && "border-l border-slate-200",
               on ? "bg-indigo-600 text-white" : "text-slate-700 hover:bg-slate-50"
             )}

@@ -535,7 +535,8 @@ describe("draft cards (UI13, UI14)", () => {
     const short = card(draftView());
     expect(contextsOf(short)).not.toContain(SLACK_COPY.draftPreviewClipped);
     expect(sectionsOf(short)).toEqual([SLACK_COPY.draftHeader, "Thanks, Thursday works.\n\nBest,\nMitchell"]);
-    expect(contextsOf(short)[0]).toBe("To: Jane Doe · Subject: Contract renewal");
+    // P9 F10 (C75): the address first, the display name after it.
+    expect(contextsOf(short)[0]).toBe("To: `jane@acme.com` (Jane Doe) · Subject: Contract renewal");
     expect(contextsOf(short)).toContain("Check the date.");
   });
 
@@ -654,15 +655,60 @@ describe("draft cards (UI13, UI14)", () => {
     expect(contextsOf(card(null, "rateLimited"))).toEqual([SLACK_COPY.draftStatus.rateLimited]);
   });
 
-  it("recipients: up to three names (name, else address) and +N; hostile names and subjects are made safe", () => {
+  it("recipients: up to three, each its address then its name (P9 F10), and +N; hostile names and subjects are made safe", () => {
     const view = draftView({
       to: [recipient("a@x.example", "Ann"), recipient("b@x.example"), recipient("c@x.example", "<!here> Cy"), recipient("d@x.example"), recipient("e@x.example")],
       subject: "Re: see https://evil.example/x"
     });
     const parts = card(view);
     assertSlackParts(parts);
-    expect(contextsOf(parts)[0]).toBe("To: Ann, `b@x.example`, &lt;!here&gt; Cy +2 · Subject: Re: see `https://evil.example/x`");
+    expect(contextsOf(parts)[0]).toBe("To: `a@x.example` (Ann), `b@x.example`, `c@x.example` (&lt;!here&gt; Cy) +2 · Subject: Re: see `https://evil.example/x`");
     expect(contextsOf(card(draftView({ to: [], subject: null, threadSubject: null })))[0]).toBe("To: — · Subject: —");
+  });
+});
+
+describe("UI-C75 (P9 F10): the draft card shows each recipient by address, then the name, and lists Cc", () => {
+  const card = (view: DraftView) => renderDraftCard(view, { draftId: DRAFT_ID });
+
+  it("a display name that looks like the client's address can't stand in for the sender's real address", () => {
+    const parts = card(draftView({ to: [recipient("x@evil.example", "accounts@acmedental.com")], cc: [recipient("boss@evil.example")], subject: "Re: October invoice" }));
+    assertSlackParts(parts);
+    const line = contextsOf(parts)[0];
+    expect(line.startsWith("To: `x@evil.example`")).toBe(true);
+    expect(line).toBe("To: `x@evil.example` (`accounts@acmedental.com`) · Cc: `boss@evil.example` · Subject: Re: October invoice");
+    expect(line.indexOf("x@evil.example")).toBeLessThan(line.indexOf("accounts@acmedental.com"));
+  });
+
+  it("Cc is listed after To, up to three then +N; a name holding a control sequence stays escaped; no Cc → no Cc label", () => {
+    const parts = card(draftView({
+      to: [recipient("jane@acme.com", "Jane Doe")],
+      cc: [recipient("a@acme.com", "<!here> Al"), recipient("b@acme.com", "<@U0JANE>"), recipient("c@acme.com"), recipient("d@acme.com"), recipient("e@acme.com")]
+    }));
+    assertSlackParts(parts);
+    expect(contextsOf(parts)[0]).toBe(
+      "To: `jane@acme.com` (Jane Doe) · Cc: `a@acme.com` (&lt;!here&gt; Al), `b@acme.com` (&lt;@U0JANE&gt;), `c@acme.com` +2 · Subject: Contract renewal"
+    );
+    expect(JSON.stringify(parts)).not.toContain("<!here>");
+    expect(JSON.stringify(parts)).not.toContain("<@U0JANE>");
+    expect(contextsOf(card(draftView()))[0]).not.toContain("Cc:");
+  });
+
+  it("a name equal to the address (any case), an empty name and invisible characters: the address alone, never twice", () => {
+    const zw = String.fromCodePoint(0x200b); // U+200B ZERO WIDTH SPACE
+    const parts = card(draftView({ to: [recipient("ann@client.com", "ANN@client.com"), recipient("bo@client.com", `  ${zw} `), recipient("cy@client.com", `C${zw}y   Lee`)] }));
+    expect(contextsOf(parts)[0]).toBe("To: `ann@client.com`, `bo@client.com`, `cy@client.com` (Cy Lee) · Subject: Contract renewal");
+  });
+
+  it("names full of & < > can't push the line past Slack's limit: entries past the budget are counted into +N", () => {
+    const hostile = "<&>".repeat(40);
+    const to = Array.from({ length: 3 }, (_v, i) => recipient(`${"&".repeat(100)}${i}@evil.example`, hostile));
+    const cc = Array.from({ length: 3 }, (_v, i) => recipient(`${"&".repeat(100)}${i}@evil.example`, hostile));
+    const parts = card(draftView({ to, cc }));
+    assertSlackParts(parts);
+    const line = contextsOf(parts)[0];
+    expect(line.length).toBeLessThanOrEqual(3_000);
+    expect(line).toMatch(/\+\d/);
+    expect(line).not.toContain("<");
   });
 });
 

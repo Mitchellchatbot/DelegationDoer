@@ -15,10 +15,18 @@ vi.mock("@/lib/exec/slack-install", async (orig) => ({
 }));
 vi.mock("@/lib/exec/jobs", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/jobs")>()), enqueueJob: vi.fn(), isJobLive: vi.fn() }));
 vi.mock("@/lib/exec/sources/dd", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/sources/dd")>()), listUsers: vi.fn() }));
+// P9 (Area C): the real catch-up's reads, for the F4 / F11 cases that run it (every other case mocks catchUpBriefScrubs).
+vi.mock("@/lib/exec/sync-state", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/sync-state")>()), getSyncState: vi.fn(), putSyncState: vi.fn() }));
+vi.mock("@/lib/exec/slack-reading", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/slack-reading")>()), listPurgeLog: vi.fn(),
+  listAuthorOptouts: vi.fn(), listIntelChannels: vi.fn() }));
+vi.mock("@/lib/exec/slack-intel-store", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/slack-intel-store")>()), slackIntelState: vi.fn() }));
+vi.mock("@/lib/exec/email-store", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/email-store")>()), listThreadScreenRows: vi.fn() }));
+vi.mock("@/lib/exec/sources/mail", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/sources/mail")>()), loadScreeningPolicy: vi.fn() }));
 
 import { assertNoBriefText, BRIEF_TEXT_SENTINELS, captureConsole } from "@/lib/exec/__tests__/brief-assert";
 import {
-  BOT_TOKEN, BRIEF_ID, briefRowSeed, checkinSeed, DM, LOCAL_DATE, MITCH_SLACK, NOW, openInstallation, ownership, PRINCIPAL, settings, settle, TEAM
+  BOT_TOKEN, BRIEF_ID, briefContent, briefRowSeed, checkinSeed, DM, INSTALLATION_ID, LOCAL_DATE, MITCH_SLACK, NOW, openInstallation, ownership, PRINCIPAL,
+  settings, settle, TEAM
 } from "@/lib/exec/__tests__/brief-d-harness";
 import { createFakeBriefDb, type FakeBriefDb } from "@/lib/exec/__tests__/fake-brief-db";
 import { fakeSlackWorkspace, installFakeSlack, type FakeSlackWorkspace } from "@/lib/exec/__tests__/fake-slack-api";
@@ -39,6 +47,13 @@ import { listUsers } from "@/lib/exec/sources/dd";
 import { findDmMessageByMetadata, SlackChannelRefusedError } from "@/lib/exec/sources/slack";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { ctxFor } from "@/lib/exec/__tests__/brief-d-harness";
+import { listThreadScreenRows } from "@/lib/exec/email-store";
+import { slackIntelState } from "@/lib/exec/slack-intel-store";
+import type { ChannelRow } from "@/lib/exec/slack-read-types";
+import { listAuthorOptouts, listIntelChannels, listPurgeLog } from "@/lib/exec/slack-reading";
+import { loadScreeningPolicy } from "@/lib/exec/sources/mail";
+import { getSyncState, putSyncState } from "@/lib/exec/sync-state";
+import type { BriefContent } from "@/lib/exec/brief-types";
 
 // P8 §5.9 DL01-DL24 (Area D): exec.brief-deliver, exactly once (M2). The brief store is real over the standalone fake (its RPC 3
 // mirrors the SQL's CAS and the post_attempts CHECK); Slack is the stateful fake workspace (metadata, "posted but timed out");
@@ -148,6 +163,9 @@ describe("DL04-DL08, DL17 ambiguous posts and the metadata lookup", () => {
     expect(briefPosts()).toHaveLength(1);
     expect(brief()).toMatchObject({ status: "delivered", slack_ts: briefPosts()[0].ts, post_attempts: 1 });
     expect(slack.calls.filter((c) => c.method === "chat.postMessage")).toHaveLength(1);
+    // P9 F12 (a): the post threw before its own ledger write; the lookup's hit gets the ledger row (kind note) here.
+    expect(vi.mocked(recordSlackPost).mock.calls.map((c) => c[1])).toEqual([{ installationId: INSTALLATION_ID, channelId: DM, ts: briefPosts()[0].ts,
+      threadTs: null, kind: "note", messageId: null, refId: null }]);
   });
 
   it("DL05 ambiguous, not found → exactly one more post (post_attempts 2) → delivered", async () => {
@@ -404,6 +422,42 @@ describe("DL16, DL19, DL20, DL22, DL23 content, screens and the check-ins messag
   });
 });
 
+describe("DL-P9-C1 (fixer correctness-1): a delivery_unknown brief rendered after its catch-up's scrubs needs no follow-up for them", () => {
+  /** The catch-up scrubs one thread line before the render, as DL22b's does. */
+  const scrubBeforeRender = () =>
+    vi.mocked(catchUpBriefScrubs).mockImplementation(async (p, _s, id) => {
+      await scrubBriefsForThreads(p, ["t_1"]);
+      const row = await getBriefById(p, id);
+      return row === null ? { ok: false, reason: "not_found" } : { ok: true, row, screen: NO_SCREEN };
+    });
+
+  it.each<[string, () => void, string]>([
+    ["DL06 ambiguous twice", () => { ws.failNext("chat.postMessage", "network"); ws.failNext("chat.postMessage", "timeout"); }, "ambiguous_twice"],
+    ["DL07 the lookup fails", () => { ws.failNext("chat.postMessage", "timeout"); ws.failNext("conversations.history", { error: "internal_error" }); }, "lookup_failed"]
+  ])("%s: dm_followed_at = the rendered scrub, listFollowups has nothing (no chat.update); a later scrub is still followed up", async (_label, fail, reason) => {
+    scrubBeforeRender();
+    fail();
+    expect(await run()).toMatchObject({ outcome: "delivery_unknown", reason });
+    const scrubbedAt = brief().scrubbed_at as string;
+    expect(scrubbedAt).not.toBeNull();
+    expect(brief()).toMatchObject({ status: "delivery_unknown", dm_followed_at: scrubbedAt });
+    expect(await listFollowups(PRINCIPAL, 10)).toEqual([]);
+    expect(slack.calls.filter((c) => c.method === "chat.update")).toEqual([]);
+    // Another message deleted after the post: its scrub is newer than the render, so the sweep follows it up.
+    vi.setSystemTime(new Date(NOW.getTime() + 60_000));
+    await scrubBriefsForSlack(PRINCIPAL, { slackKeys: ["m:C0SALES:1794000000.000100"], channels: [], all: false });
+    expect((await listFollowups(PRINCIPAL, 10)).map((f) => f.id)).toEqual([BRIEF_ID]);
+  });
+
+  it("no scrub before the render: delivery_unknown leaves dm_followed_at unset (nothing to record)", async () => {
+    ws.failNext("chat.postMessage", "timeout");
+    ws.failNext("conversations.history", { error: "internal_error" });
+    expect(await run()).toMatchObject({ outcome: "delivery_unknown", reason: "lookup_failed" });
+    expect(brief()).toMatchObject({ scrubbed_at: null, dm_followed_at: null });
+    expect(await listFollowups(PRINCIPAL, 10)).toEqual([]);
+  });
+});
+
 describe("resolveStaleRows (shared by the watchdog and the sweep; never posts)", () => {
   it("a stale delivering row: the lookup finds the post → delivered; not found → delivery_unknown stale_delivering (+ ops); no post", async () => {
     useDb([briefRowSeed("delivering", { updated_at: "2026-11-09T13:02:00.000Z" })]);
@@ -425,5 +479,97 @@ describe("the installation's identity in the DM", () => {
     await run();
     expect(posts()[0]).toMatchObject({ token: BOT_TOKEN, channel: DM });
     expect(MITCH_SLACK).toBe("U0MITCH");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 (Area C): F12 (a) the found post's ledger row; F4 / F11 through the real catch-up
+// ---------------------------------------------------------------------------
+
+describe("DL-P9-F12 a post the metadata lookup finds gets its P6 ledger row (F12 a)", () => {
+  it("DL-P9-F12 the second post landed but timed out → the second lookup's hit is recorded (one row, that ts); a clean post is recorded once by dmPost", async () => {
+    ws.failNext("chat.postMessage", "timeout");
+    ws.failNext("chat.postMessage", "posted_timeout");
+    expect(await run()).toMatchObject({ outcome: "delivered", postAttempts: 2 });
+    expect(vi.mocked(recordSlackPost).mock.calls.map((c) => c[1])).toEqual([expect.objectContaining({ ts: briefPosts()[0].ts, kind: "note",
+      installationId: INSTALLATION_ID, channelId: DM, threadTs: null, refId: null })]);
+    vi.mocked(recordSlackPost).mockClear();
+    useDb([briefRowSeed("built")]);
+    ws.messages.length = 0;
+    await run();
+    expect(vi.mocked(recordSlackPost)).toHaveBeenCalledTimes(1);
+  });
+
+  it("DL-P9-F12 a stale delivering row whose lookup finds the post → the ledger row, then delivered (never a post)", async () => {
+    useDb([briefRowSeed("delivering", { updated_at: "2026-11-09T13:02:00.000Z" })]);
+    ws.messages.push({ channel: DM, ts: "1794229330.000100", token: BOT_TOKEN, text: "x", blocks: [], deleted: false, updates: 0,
+      metadata: { event_type: "exec_brief", event_payload: { brief_id: BRIEF_ID, rev: 1 } } });
+    await settle(resolveStaleRows(PRINCIPAL, NOW, new AbortController().signal));
+    expect(brief()).toMatchObject({ status: "delivered", slack_ts: "1794229330.000100" });
+    expect(vi.mocked(recordSlackPost).mock.calls.map((c) => c[1])).toEqual([expect.objectContaining({ ts: "1794229330.000100", kind: "note" })]);
+    expect(slack.calls.filter((c) => c.method === "chat.postMessage")).toEqual([]);
+  });
+});
+
+describe("DL-P9 the real catch-up before the post (F4: a pending author opt-out; F11: the channel rows now)", () => {
+  /** The brief's Slack line as a digest line of #sales (d:C0SALES:2026-11-08). */
+  function digestContent(): BriefContent {
+    const c = briefContent();
+    c.sections[1].items[0] = { ...c.sections[1].items[0], slackKeys: ["d:C0SALES:2026-11-08"], slackChannels: ["C0SALES"] };
+    return c;
+  }
+  const channel = (over: Partial<ChannelRow> = {}): ChannelRow => ({
+    channelId: "C0SALES", installationId: INSTALLATION_ID, convType: "channel", class: "standard", denyReason: null, hubKind: null, financeName: false,
+    watchState: "watched", muteSource: null, watchSetByOwnerAt: null, name: null, imUserId: null, isMember: true, isPrivate: false, isExtShared: false,
+    extEver: false, isArchived: false, histWatermarkTs: null, deepSweptAt: null, sweptAt: null, lastEventTs: null, lastActivityTs: null, activity30d: null,
+    probedAt: null, classifiedAt: null, leftAt: null, updatedAt: "2026-11-09T13:00:00.000Z", ...over
+  });
+  let channelRow: ChannelRow;
+  const stored = new Map<string, unknown>();
+  beforeEach(async () => {
+    const real = await vi.importActual<typeof import("@/lib/exec/brief-screen")>("@/lib/exec/brief-screen");
+    vi.mocked(catchUpBriefScrubs).mockImplementation(real.catchUpBriefScrubs);
+    stored.clear();
+    vi.mocked(getSyncState).mockReset().mockImplementation((async (_p: unknown, _s: unknown, key: string, parse: (raw: unknown) => unknown) =>
+      stored.has(key) ? { value: parse(stored.get(key)), rev: 1 } : null) as never);
+    vi.mocked(putSyncState).mockReset().mockImplementation(async (_p, _s, key, value) => {
+      stored.set(key, structuredClone(value));
+    });
+    vi.mocked(listPurgeLog).mockReset().mockResolvedValue([]);
+    vi.mocked(listAuthorOptouts).mockReset().mockResolvedValue([]);
+    channelRow = channel();
+    vi.mocked(listIntelChannels).mockReset().mockImplementation(async () => [channelRow]);
+    vi.mocked(slackIntelState).mockReset().mockResolvedValue("ok");
+    vi.mocked(loadScreeningPolicy).mockReset().mockResolvedValue({ rules: [], hash: "h1" });
+    vi.mocked(listThreadScreenRows).mockReset().mockImplementation(async (_p, ids) => new Map(ids.map((id) => [id, { threadId: id, accountId: "acc_1",
+      state: "triaged", screenHashes: [], screenTruncated: false, screenedPolicyHash: "h1" }])));
+  });
+  const dmText = () => JSON.stringify(briefPosts()[0]?.blocks ?? null);
+
+  it("DL-P9-F4 a pending author opt-out is applied before the post: the posted blocks lack the digest line (removedSlack instead); the row is scrubbed", async () => {
+    useDb([briefRowSeed("built", { content: digestContent(), ref_slack_keys: ["d:C0SALES:2026-11-08"], ref_slack_channels: ["C0SALES"] })]);
+    vi.mocked(listAuthorOptouts).mockResolvedValue(["U0ALICE"]);
+    expect(await run()).toMatchObject({ outcome: "delivered" });
+    expect(dmText()).not.toContain(BRIEF_TEXT_SENTINELS.digestSummary);
+    expect(dmText()).toContain(BRIEF_COPY.removedSlack);
+    expect((brief().content as BriefContent).sections[1].items[0]).toMatchObject({ text: BRIEF_COPY.removedSlack, scrubbed: true });
+    expect(stored.get("optouts")).toMatchObject({ count: 1 });
+    // The same brief with no opt-out keeps its line.
+    useDb([briefRowSeed("built", { content: digestContent(), ref_slack_keys: ["d:C0SALES:2026-11-08"], ref_slack_channels: ["C0SALES"] })]);
+    ws.messages.length = 0;
+    stored.clear();
+    vi.mocked(listAuthorOptouts).mockResolvedValue([]);
+    expect(await run()).toMatchObject({ outcome: "delivered" });
+    expect(dmText()).toContain("Sales asked about pricing");
+  });
+
+  it("DL-P9-F11 #sales renamed into a finance name after the build → the DM rendered now has no line from it (the screen withholds it; nothing scrubbed)", async () => {
+    channelRow = channel({ financeName: true });
+    expect(await run()).toMatchObject({ outcome: "delivered" });
+    expect(dmText()).not.toContain(BRIEF_TEXT_SENTINELS.digestSummary);
+    expect(dmText()).toContain(BRIEF_COPY.removedSlack);
+    expect(dmText()).not.toContain("slack.com/archives");
+    expect((brief().content as BriefContent).sections[1].items[0].text).toContain("Sales asked about pricing");   // render-time only
+    expect(listIntelChannels).toHaveBeenCalledWith(PRINCIPAL, expect.objectContaining({ channelIds: ["C0SALES"] }));
   });
 });

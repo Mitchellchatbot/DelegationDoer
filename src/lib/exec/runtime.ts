@@ -40,7 +40,7 @@ import { slackRekeyJobHandler } from "@/lib/exec/handlers/slack-rekey";
 import { slackReplyJobHandler } from "@/lib/exec/handlers/slack-reply";
 import {
   slackDmPurgeJobHandler,
-  slackDmPurgeScheduledWork,
+  slackDmPurgeSystemWork,
   slackSweepJobHandler,
   slackSweepScheduledWork
 } from "@/lib/exec/handlers/slack-sweep";
@@ -103,6 +103,8 @@ import type { ExecPrincipal, JobHandler, JobLane } from "@/lib/exec/types";
 // beside exec.ops-watch (C18). Per-principal exec.purge rows queued before the deploy still run once (idempotent).
 // Two hooks: P7a's answered-exclusion (A6, the check-in posts aren't answers by him) and P7b's since-last-brief
 // resolver (B4); registered once, each skipped if it can't register. No purge hook (A7): the brief sweep reads the log.
+// P9 F16 (Area C): exec.slack-dm-purge is SYSTEM work too (daily at 04:10 UTC, every active installation, a disabled
+// principal's included), in BUILT_IN_SYSTEM_SCHEDULE; its per-principal schedule is gone (a row queued before still runs once).
 const BUILT_IN_HANDLERS: readonly JobHandler[] = [
   purgeJobHandler,
   ddAttentionJobHandler,
@@ -145,6 +147,10 @@ const BUILT_IN_HANDLERS: readonly JobHandler[] = [
   opsWatchJobHandler,
   accessAlertJobHandler
 ];
+/** P9 seed S5 (lead; contract F26, §4): every job kind this registry registers, in registration order (derived from
+ *  BUILT_IN_HANDLERS, so a handler added there is listed here too). Read-only data for the System card's label map test
+ *  and the runbook test; nothing registers from it. */
+export const BUILT_IN_JOB_KINDS: readonly string[] = Object.freeze(BUILT_IN_HANDLERS.map((h) => h.kind));
 const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [
   ddAttentionScheduledWork,
   emailReconcileScheduledWork,
@@ -153,7 +159,6 @@ const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [
   voiceRefreshScheduledWork,
   ddtextScheduledWork,
   slackSweepScheduledWork,
-  slackDmPurgeScheduledWork,
   slackDiscoverScheduledWork,
   slackReadSweepScheduledWork,
   slackProbeScheduledWork,
@@ -167,8 +172,8 @@ const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [
   briefSweepScheduledWork,
   briefHealthScheduledWork
 ];
-/** P8 (M10, C17, C18): principal_id null, keyed `${kind}:system:…`, enqueued before the principals are listed. */
-const BUILT_IN_SYSTEM_SCHEDULE: readonly SystemScheduledWork[] = [purgeSystemWork, opsWatchSystemWork];
+/** P8 (M10, C17, C18): principal_id null, keyed `${kind}:system:…`, enqueued before the principals are listed. P9 F16: the DM purge. */
+const BUILT_IN_SYSTEM_SCHEDULE: readonly SystemScheduledWork[] = [purgeSystemWork, opsWatchSystemWork, slackDmPurgeSystemWork];
 
 // The cron route's whole run has to fit well inside its 60 s maxDuration.
 const MAX_CRON_BUDGET_MS = 45_000;

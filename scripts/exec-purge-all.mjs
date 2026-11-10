@@ -6,13 +6,21 @@
 //   node scripts/exec-purge-all.mjs                           dry run (the default): prints "table: <count>" per table
 //   node scripts/exec-purge-all.mjs --apply                   deletes every row, children first; keeps exec_audit_log
 //   node scripts/exec-purge-all.mjs --apply --include-audit   also deletes exec_audit_log
+//   node scripts/exec-purge-all.mjs --apply --delete-fallback-dms   first deletes the DD bot's pending mini-brief DMs (below)
 //
 // --apply refuses (exit 2) while any exec_slack_installations row is still active (revoked_at null): disconnect Slack in
-// Executive AI → Settings first, so Slack revokes the tokens before their rows go. A table that doesn't exist (the phase's
-// migration was never applied) prints "not installed". Output is table names and counts only: never a row, a value, an
-// error body or a key.
+// Executive AI → Settings first, so Slack revokes the tokens before their rows go. P9 F15: it also refuses (exit 2) while any
+// DD-bot watchdog mini-brief DM is still in Slack (an exec_briefs row with fallback_slack_ts set and fallback_deleted_at null):
+// exec_briefs is the only record of those DMs. --delete-fallback-dms deletes each one first with SLACK_BOT_TOKEN (the DD bot's
+// token, chat.delete; message_not_found / channel_not_found count as done) and stops before any DELETE if one fails. Without
+// the flag, re-run with it, or wait while the daily system purge (EXEC_ENABLED=true) deletes each one once its
+// fallback_delete_after has passed. The dry run prints how many are pending.
 //
-// Env: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (from .env.local), as scripts/find-users.mjs reads them.
+// A table that doesn't exist (the phase's migration was never applied) prints "not installed". Output is table names and
+// counts only: never a row, a value, an error body or a key.
+//
+// Env: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (from .env.local), as scripts/find-users.mjs reads them;
+// SLACK_BOT_TOKEN only with --delete-fallback-dms.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -86,15 +94,16 @@ const EXEC_PURGE_ORDER = Object.freeze([
   { table: "exec_principals", key: "id" }
 ]);
 
-const USAGE = "usage: node scripts/exec-purge-all.mjs [--apply] [--keep-audit | --include-audit]";
+const USAGE = "usage: node scripts/exec-purge-all.mjs [--apply] [--keep-audit | --include-audit] [--delete-fallback-dms]";
 const args = process.argv.slice(2);
-const known = new Set(["--apply", "--keep-audit", "--include-audit"]);
+const known = new Set(["--apply", "--keep-audit", "--include-audit", "--delete-fallback-dms"]);
 if (args.some((a) => !known.has(a)) || (args.includes("--keep-audit") && args.includes("--include-audit"))) {
   console.error(USAGE);
   process.exit(1);
 }
 const apply = args.includes("--apply");
 const includeAudit = args.includes("--include-audit");
+const deleteFallbackDms = args.includes("--delete-fallback-dms");
 
 const headers = (extra = {}) => ({ apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, ...extra });
 const rest = (table, query) => `${SUPABASE_URL}/rest/v1/${table}?${query}`;
@@ -114,6 +123,60 @@ async function isMissing(res) {
   } catch {
     return false;
   }
+}
+
+/** P9 F15: the filter of a DD-bot mini-brief DM still in Slack (posted, not deleted): exec_briefs is its only record. */
+const PENDING_FALLBACK_DM = "fallback_slack_ts=not.is.null&fallback_deleted_at=is.null";
+
+/** P9 F15: how many DD-bot mini-brief DMs are still in Slack (a HEAD count), "not installed", or an error status. */
+async function countPendingFallbackDms() {
+  const res = await fetch(rest("exec_briefs", `select=id&${PENDING_FALLBACK_DM}`), { method: "HEAD", headers: headers({ Prefer: "count=exact" }) });
+  if (res.ok) return { count: rangeCount(res) ?? 0 };
+  if (await isMissing(res)) return { missing: true };
+  return { error: res.status };
+}
+
+/** P9 F15: every pending DD-bot mini-brief DM's (channel, ts), paged by id; or "not installed", or an error status. */
+async function listPendingFallbackDms() {
+  const rows = [];
+  let after = null;
+  for (;;) {
+    const page = `select=id,fallback_channel_id,fallback_slack_ts&${PENDING_FALLBACK_DM}&order=id.asc&limit=1000${after === null ? "" : `&id=gt.${after}`}`;
+    const res = await fetch(rest("exec_briefs", page), { method: "GET", headers: headers() });
+    if (!res.ok) return (await isMissing(res)) ? { missing: true, rows } : { error: res.status };
+    const body = await res.json();
+    const list = Array.isArray(body) ? body : [];
+    for (const r of list) {
+      if (r && typeof r.id === "string" && typeof r.fallback_channel_id === "string" && typeof r.fallback_slack_ts === "string") {
+        rows.push({ channel: r.fallback_channel_id, ts: r.fallback_slack_ts });
+      }
+    }
+    if (list.length < 1000) return { rows };
+    after = list[list.length - 1].id;
+  }
+}
+
+/** P9 F15: Slack chat.delete with the DD bot's token: "deleted" (message_not_found / channel_not_found count as done) or "failed". */
+async function deleteFallbackDm(token, channel, ts) {
+  let res;
+  try {
+    res = await fetch("https://slack.com/api/chat.delete", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({ channel, ts })
+    });
+  } catch {
+    return "failed";
+  }
+  let body = null;
+  try {
+    body = await res.json();
+  } catch {
+    body = null;
+  }
+  if (res.ok && body && body.ok === true) return "deleted";
+  if (body && (body.error === "message_not_found" || body.error === "channel_not_found")) return "deleted";
+  return "failed";
 }
 
 /** HEAD select=* with Prefer: count=exact → the table's row count, "not installed", or an error status. */
@@ -136,6 +199,13 @@ if (!apply) {
       console.log(`${table}: error ${r.error}`);
     } else console.log(`${table}: ${r.count}${note}`);
   }
+  // P9 F15: the DD bot's mini-brief DMs still in Slack (--apply refuses while any is, unless --delete-fallback-dms).
+  const p = await countPendingFallbackDms();
+  if (p.missing) console.log("exec-purge-all: DD-bot mini-brief DMs still in Slack: not installed");
+  else if (p.error !== undefined) {
+    errors += 1;
+    console.log(`exec-purge-all: DD-bot mini-brief DMs still in Slack: error ${p.error}`);
+  } else console.log(`exec-purge-all: DD-bot mini-brief DMs still in Slack: ${p.count}${p.count > 0 ? " (--apply refuses unless --delete-fallback-dms)" : ""}`);
   process.exit(errors > 0 ? 1 : 0);
 }
 
@@ -151,6 +221,38 @@ if (!apply) {
   } else if (!(await isMissing(res))) {
     console.error(`exec-purge-all: refused: the Slack installation check failed (${res.status})`);
     process.exit(2);
+  }
+}
+
+// P9 F15: exec_briefs is the only record of the DD bot's watchdog mini-brief DMs: none may still be in Slack when it goes.
+{
+  const pending = await listPendingFallbackDms();
+  if (pending.error !== undefined) {
+    console.error(`exec-purge-all: refused: the DD-bot mini-brief DM check failed (${pending.error})`);
+    process.exit(2);
+  }
+  const dms = pending.rows;
+  if (dms.length > 0 && !deleteFallbackDms) {
+    console.error(`exec-purge-all: refused: ${dms.length} DD-bot mini-brief DM(s) are still in Slack and exec_briefs is their only record. Re-run with --delete-fallback-dms (SLACK_BOT_TOKEN) to delete them first, or wait for the daily system purge to delete them.`);
+    process.exit(2);
+  }
+  if (dms.length > 0) {
+    const token = process.env.SLACK_BOT_TOKEN;
+    if (!token) {
+      console.error("exec-purge-all: refused: --delete-fallback-dms needs SLACK_BOT_TOKEN (the DD bot's token)");
+      process.exit(2);
+    }
+    let deleted = 0;
+    let failed = 0;
+    for (const dm of dms) {
+      if ((await deleteFallbackDm(token, dm.channel, dm.ts)) === "deleted") deleted += 1;
+      else failed += 1;
+    }
+    console.log(`exec-purge-all: DD-bot mini-brief DMs deleted: ${deleted}`);
+    if (failed > 0) {
+      console.error(`exec-purge-all: refused: ${failed} DD-bot mini-brief DM(s) could not be deleted; nothing else was deleted (re-run to retry)`);
+      process.exit(2);
+    }
   }
 }
 

@@ -15,12 +15,16 @@ import { cn } from "@/lib/utils";
 export const PROJECT_STATUS_META: Readonly<Record<ProjectHealthStatus, { label: string; className: string }>> = {
   off_track: { label: "Off track", className: "text-rose-700 border-rose-200 bg-rose-50" },
   at_risk: { label: "At risk", className: "text-amber-800 border-amber-200 bg-amber-50" },
-  on_track: { label: "On track", className: "text-ok border-ok/30 bg-ok/10" },
-  no_data: { label: "No data", className: "text-muted border-border bg-surface2" }
+  // P9 F5: text-ok on ok/10 was 2.96:1 and text-muted on surface2 4.34:1.
+  on_track: { label: "On track", className: "text-emerald-700 border-emerald-200 bg-emerald-50" },
+  no_data: { label: "No data", className: "text-slate-600 border-slate-200 bg-slate-100" }
 };
 
+/** P9 F5: the exec pages' neutral badge (the global badge-low, text-muted on surface2, is 4.34:1). */
+export const NEUTRAL_BADGE = "border-slate-200 bg-slate-100 text-slate-600";
+
 export function ProjectStatusBadge({ status }: { status: ProjectHealthStatus }) {
-  const meta = PROJECT_STATUS_META[status] ?? { label: String(status), className: "text-muted border-border bg-surface2" };
+  const meta = PROJECT_STATUS_META[status] ?? { label: String(status), className: PROJECT_STATUS_META.no_data.className };
   return <span className={cn("badge", meta.className)}>{meta.label}</span>;
 }
 

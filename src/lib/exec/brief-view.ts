@@ -4,7 +4,7 @@ import type { FactBasis, PriorityBand } from "@/lib/exec/attention-types";
 import { BRIEF_COPY, fillBrief } from "@/lib/exec/brief-copy";
 import { catchUpCutoff, scheduledInstant } from "@/lib/exec/brief-ownership";
 import { loadBriefOwnership } from "@/lib/exec/brief-ownership-load";
-import { screenBriefContent, withholdAllEmail, type BriefScreen } from "@/lib/exec/brief-screen";
+import { screenBriefContent, withholdAllEmail, type BriefScreen, type BriefWithheldReason } from "@/lib/exec/brief-screen";
 import { briefSchemaReady, checkinCounts, getBriefByDate, getLatestBrief, listCheckinsForBrief } from "@/lib/exec/brief-store";
 import { BRIEF_LIMITS, BRIEF_SECTION_KEYS } from "@/lib/exec/brief-types";
 import type {
@@ -49,7 +49,7 @@ export interface BriefContentView {
   top3: { title: string; next: string | null; href: string | null; withheld: boolean }[];
   sections: { key: BriefSectionKey; title: string; stateLine: string | null;
     lines: { id: string; text: string; kind: "fact" | "recommendation"; basis: FactBasis; band: PriorityBand;
-      refs: { label: string; href: string | null }[]; withheld: "restricted" | "slack" | null }[];
+      refs: { label: string; href: string | null }[]; withheld: BriefWithheldReason | null }[];
     pending: { title: string; withheld: boolean }[]; unchanged: number; more: number; stats: Record<string, number> }[];
   restrictedEmail: number | null; financeHref: "/finance";
 }
@@ -64,6 +64,8 @@ export interface BriefPageView {
     fallbackSentAt: string | null; content: BriefContentView | null } | null;
   checkins: CheckinPageRow[]; checkinsPosted: boolean;
   canRegenerate: boolean; expectedRev: number | null; dueAt: string | null;
+  /** P9 F31 (additive): state "none" more than BRIEF_LATE_AFTER_MS past dueAt (briefIsLate); absent = not late. */
+  late?: boolean;
 }
 
 export interface BriefPillView { label: string; state: keyof typeof BRIEF_COPY.pillState }
@@ -206,7 +208,9 @@ function refViews(refs: readonly SourceRef[] | undefined): { label: string; href
     .map((r) => ({ label: r.label, href: linkOf(r) }));
 }
 
-const removedText = (why: "restricted" | "slack"): string => (why === "slack" ? BRIEF_COPY.removedSlack : BRIEF_COPY.removedRestricted);
+// P9 seed S2: "unavailable" reads BRIEF_COPY.removedUnavailable (no producer until Area C's F7/F11 screen).
+const removedText = (why: BriefWithheldReason): string =>
+  why === "slack" ? BRIEF_COPY.removedSlack : why === "unavailable" ? BRIEF_COPY.removedUnavailable : BRIEF_COPY.removedRestricted;
 
 /** A withheld entry with no reason of its own: Slack-only refs read as Slack, anything else as restricted mail (fail closed). */
 function reasonOf(x: { threadIds?: readonly string[]; slackChannels?: readonly string[] }): "restricted" | "slack" {
@@ -226,7 +230,7 @@ const STAT_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,40}$/;
 export function briefContentView(content: BriefContent, screen: BriefScreen): BriefContentView {
   const reasonKey = content.mode === "deterministic" && content.modeReason !== null && content.modeReason in BRIEF_COPY.modeReason ? content.modeReason : "model_error";
   const modeLine = content.mode === "ai" ? BRIEF_COPY.modeAi : fillBrief(BRIEF_COPY.modeDeterministic, { reason: BRIEF_COPY.modeReason[reasonKey] });
-  const itemReason = new Map<string, "restricted" | "slack">();
+  const itemReason = new Map<string, BriefWithheldReason>();
   const sections: BriefContentView["sections"] = [];
   const byKey = new Map((Array.isArray(content.sections) ? content.sections : []).map((s) => [s.key, s]));
   for (const key of BRIEF_SECTION_KEYS) {
@@ -305,6 +309,32 @@ export function checkinStatusLine(row: Pick<CheckinRow, "status" | "statusReason
   return fillBrief(BRIEF_COPY.checkinStatus[key], { name: firstName.length > 0 ? firstName : "—", time: timeIn(row.sentAt, tz) });
 }
 
+/** P9 F31: today's brief that hasn't started this long after its time is late (the page, the pill, the System row). */
+export const BRIEF_LATE_AFTER_MS = 45 * 60_000;
+
+/** P9 F31: true when `now` is more than BRIEF_LATE_AFTER_MS past `dueAt`; false when either can't be read. */
+export function briefIsLate(dueAt: string | null | undefined, now: Date | string): boolean {
+  const due = typeof dueAt === "string" ? Date.parse(dueAt) : Number.NaN;
+  const at = now instanceof Date ? now.getTime() : Date.parse(now);
+  return Number.isFinite(due) && Number.isFinite(at) && at - due > BRIEF_LATE_AFTER_MS;
+}
+
+/**
+ * P9 F31 (pure): today's pill. Not installed, off, then no row: "late" once briefIsLate, else "none"; a row: its status
+ * (delivered shows the send time, the rest the scheduled time).
+ */
+export function briefTodayPill(input: {
+  installed: boolean; enabled: boolean; row: Pick<BriefRow, "status" | "deliveredAt" | "scheduledAt" | "tz"> | null;
+  dueAt: string | null; tz: string; now: Date;
+}): BriefPillView {
+  const { row, dueAt, tz } = input;
+  if (!input.installed) return briefPillOf("not_installed", dueAt, tz);
+  if (!input.enabled) return briefPillOf("off", dueAt, tz);
+  if (row === null) return briefPillOf(briefIsLate(dueAt, input.now) ? "late" : "none", dueAt, tz);
+  const zone = row.tz.length > 0 ? row.tz : tz;
+  return row.status === "delivered" ? briefPillOf("delivered", row.deliveredAt, zone) : briefPillOf(row.status, row.scheduledAt, zone);
+}
+
 /** The pill (C42): "Brief {time} {tz} · {state}"; the time is the send time once delivered, else the day's brief time. */
 export function briefPillOf(state: keyof typeof BRIEF_COPY.pillState, timeIso: string | null, tz: string): BriefPillView {
   const { time, zone } = briefTimeParts(timeIso, tz);
@@ -361,12 +391,8 @@ async function pageCheckins(principal: ExecPrincipal, row: BriefRow, tz: string)
   });
 }
 
-function pillFor(settings: ExecSettings, installed: boolean, row: BriefRow | null, today: Today): BriefPillView {
-  if (!installed) return briefPillOf("not_installed", today.dueAt, today.tz);
-  if (settings.briefEnabled !== true) return briefPillOf("off", today.dueAt, today.tz);
-  if (row === null) return briefPillOf("none", today.dueAt, today.tz);
-  const zone = row.tz.length > 0 ? row.tz : today.tz;
-  return row.status === "delivered" ? briefPillOf("delivered", row.deliveredAt, zone) : briefPillOf(row.status, row.scheduledAt, zone);
+function pillFor(settings: ExecSettings, installed: boolean, row: BriefRow | null, today: Today, now: Date): BriefPillView {
+  return briefTodayPill({ installed, enabled: settings.briefEnabled === true, row, dueAt: today.dueAt, tz: today.tz, now });
 }
 
 /** C31: email-derived lines re-screened at render; Slack-derived lines withheld unless slackIntelState is ok. Never persists. */
@@ -388,7 +414,11 @@ export async function getBriefPageView(principal: ExecPrincipal, now: Date): Pro
   };
   if (!(await briefSchemaReady())) return { ...base, state: "not_installed" };
   const row = await getBriefByDate(principal, today.localDate);
-  if (row === null) return { ...base, state: settings.briefEnabled === true ? "none" : "off" };
+  if (row === null) {
+    if (settings.briefEnabled !== true) return { ...base, state: "off" };
+    // P9 F31: past its time by more than 45 minutes and not started: the page says so (in amber).
+    return briefIsLate(today.dueAt, now) ? { ...base, state: "none", late: true } : { ...base, state: "none" };
+  }
   const state: BriefPageState = row.status === "building" ? "building" : row.status === "failed" ? "failed" : "ready";
   const content = row.content !== null && row.status !== "building" ? await screenedContent(principal, settings, row.content, now) : null;
   const checkins = await pageCheckins(principal, row, today.tz);
@@ -426,7 +456,7 @@ export async function getBriefCardView(principal: ExecPrincipal, now: Date): Pro
     headline: view.headline,
     top3: view.top3,
     statusLine: briefStatusLine(row, today.tz),
-    pill: pillFor(settings, true, isToday ? row : null, today),
+    pill: pillFor(settings, true, isToday ? row : null, today, now),
     mode: row.mode,
     modeLine: view.modeLine
   };
@@ -437,10 +467,10 @@ export async function getBriefHeaderView(principal: ExecPrincipal, settings: Exe
   requirePrincipal(principal, "getBriefHeaderView");
   validNow(now, "getBriefHeaderView");
   const today = todayOf(principal, settings, now);
-  if (!(await briefSchemaReady())) return { pill: pillFor(settings, false, null, today), canRegenerate: false, expectedRev: null };
+  if (!(await briefSchemaReady())) return { pill: pillFor(settings, false, null, today, now), canRegenerate: false, expectedRev: null };
   const row = await getBriefByDate(principal, today.localDate);
   return {
-    pill: pillFor(settings, true, row, today),
+    pill: pillFor(settings, true, row, today, now),
     canRegenerate: row !== null && row.status !== "building" && canRegenerateBrief(row, settings, now),
     expectedRev: row?.rev ?? null
   };

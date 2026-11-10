@@ -3,20 +3,23 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 vi.mock("@/lib/supabase-server", () => ({ getSupabaseServer: vi.fn() }));
 vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
-vi.mock("@/lib/exec/principal", () => ({ loadPrincipalForUser: vi.fn() }));
+vi.mock("@/lib/exec/principal", () => ({ loadPrincipalForUser: vi.fn(), loadSettings: vi.fn() }));
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getSupabaseServer } from "@/lib/supabase-server";
-import { loadPrincipalForUser } from "@/lib/exec/principal";
+import { loadPrincipalForUser, loadSettings } from "@/lib/exec/principal";
 import {
   clientIp,
+  execAskAiRoutingStateFor,
+  execNavItemFor,
   isExecEnabled,
   logAccess,
   requireExecPrincipal,
   sessionIdFromAccessToken,
   type ExecAccessResult
 } from "@/lib/exec/access";
-import type { ExecPrincipal } from "@/lib/exec/types";
+import type { ExecPrincipal, ExecSettings } from "@/lib/exec/types";
+import { fakeFactorAdmin, linkWithOwnFactorToken, pinFactors, strongToken } from "@/lib/exec/__tests__/step-up-fixtures";
 
 const OWNER_AUTH_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_AUTH_ID = "22222222-2222-4222-8222-222222222222";
@@ -357,6 +360,38 @@ describe("requireExecPrincipal", () => {
     const admin = fakeAdmin();
     await requireExecPrincipal(request({}), ROUTE);
     expect(admin.logRows[0]).toMatchObject({ ip: null, user_agent: null });
+  });
+});
+
+// P9 F1: the Sidebar row and the Ask AI routing make the page gate's checks (AM-P9-12): a link session that enrolled and
+// verified its own authenticator (aal2, amr [totp, otp]) gets neither, even with only pinned factors on the account.
+describe("P9 F1: execNavItemFor and execAskAiRoutingStateFor refuse a link session with its own second factor", () => {
+  const OWNER = { id: "u_1", email: "mitchell@scaledai.org" };
+  const ON = { chatSchemaReady: true, chatEnabled: true, askAiUsesExec: true } as unknown as ExecSettings;
+
+  function cookieSession(token: string) {
+    const getSession = vi.fn(async () => ({ data: { session: { access_token: token, user: { id: OWNER_AUTH_ID } } }, error: null }));
+    vi.mocked(getSupabaseServer).mockReturnValue({ auth: { getSession } } as unknown as ReturnType<typeof getSupabaseServer>);
+  }
+
+  beforeEach(() => {
+    pinFactors();
+    const factors = fakeFactorAdmin();
+    vi.mocked(getSupabaseAdmin).mockReturnValue({ auth: factors.auth } as unknown as SupabaseClient);
+    vi.mocked(loadSettings).mockResolvedValue(ON);
+  });
+
+  it("aal2 amr [totp, otp] → no nav row and { routed: false }, before any principal read", async () => {
+    cookieSession(linkWithOwnFactorToken("sess-own", OWNER_AUTH_ID));
+    await expect(execNavItemFor(OWNER)).resolves.toBeNull();
+    await expect(execAskAiRoutingStateFor(OWNER)).resolves.toEqual({ routed: false, emailOn: false });
+    expect(loadPrincipalForUser).not.toHaveBeenCalled();
+  });
+
+  it("his password plus his pinned code → the row and routed (the same helpers, the control case)", async () => {
+    cookieSession(strongToken("sess-strong", OWNER_AUTH_ID));
+    await expect(execNavItemFor(OWNER)).resolves.toEqual({ href: "/executive", label: "Executive AI" });
+    await expect(execAskAiRoutingStateFor(OWNER)).resolves.toMatchObject({ routed: true });
   });
 });
 

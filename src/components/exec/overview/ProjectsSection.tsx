@@ -12,15 +12,16 @@ import { ago, projectPath } from "./labels";
 // status here is computed by fixed rules, and the rules that fired are listed
 // under it. The section is labeled Derived for that reason.
 
-const STATUS_META: Readonly<Record<ProjectHealthStatus, { label: string; className: string }>> = {
+// P9 F5: the Projects pages' tones (PROJECT_STATUS_META), so both read the same and pass AA.
+export const STATUS_META: Readonly<Record<ProjectHealthStatus, { label: string; className: string }>> = {
   off_track: { label: "Off track", className: "text-rose-700 border-rose-200 bg-rose-50" },
   at_risk: { label: "At risk", className: "text-amber-800 border-amber-200 bg-amber-50" },
-  on_track: { label: "On track", className: "text-ok border-ok/30 bg-ok/10" },
-  no_data: { label: "No data", className: "text-muted border-border bg-surface2" }
+  on_track: { label: "On track", className: "text-emerald-700 border-emerald-200 bg-emerald-50" },
+  no_data: { label: "No data", className: "text-slate-600 border-slate-200 bg-slate-100" }
 };
 
 function ProjectItem({ project, now }: { project: ProjectHealth; now: string }) {
-  const meta = STATUS_META[project.status] ?? { label: String(project.status), className: "text-muted border-border bg-surface2" };
+  const meta = STATUS_META[project.status] ?? { label: String(project.status), className: STATUS_META.no_data.className };
   const { done, total } = project.stageProgress;
   return (
     <li className="px-4 py-3">

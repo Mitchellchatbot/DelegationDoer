@@ -474,6 +474,44 @@ export async function findDmMessageByMetadata(target: DmTarget, q: { channel: st
   return null;
 }
 
+/** P9 F12 (b; Area C, additive: findDmMessageByMetadata above is unchanged): EVERY message in his DM whose metadata matches, from
+ *  conversations.history(channel = target.dmChannelId, oldest, latest when given, inclusive, limit 50, include_all_metadata = true),
+ *  ≤ 2 pages, oldest first as read; complete = the window was read to its end (no page left), so "no match" proves absence.
+ *  Refuses q.channel !== target.dmChannelId before any network call (K11). Reads no text: ts and metadata only. */
+export async function findDmMessagesByMetadata(target: DmTarget, q: { channel: string; oldest: string; latest?: string; eventType: string;
+  match: Record<string, string | number> }, opts?: SlackCallOptions): Promise<{ matches: { ts: string }[]; complete: boolean }> {
+  assertDmChannel(target, q?.channel);
+  const method: SlackMethod = "conversations.history";
+  if (typeof q.oldest !== "string" || !SLACK_RE.ts.test(q.oldest) || (q.latest !== undefined && (typeof q.latest !== "string" || !SLACK_RE.ts.test(q.latest)))
+    || typeof q.eventType !== "string" || q.eventType.length === 0 || !isRecord(q.match) || Object.keys(q.match).length === 0) {
+    throw new SlackApiError(method, "invalid_arguments", { errorClass: "fatal" });
+  }
+  const wanted = Object.entries(q.match);
+  const matches: { ts: string }[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null = null;
+  for (let page = 0; page < METADATA_LOOKUP_PAGES; page++) {
+    const form: Record<string, FormValue> = {
+      channel: q.channel, oldest: q.oldest, ...(q.latest !== undefined ? { latest: q.latest } : {}), inclusive: "true", limit: "50",
+      include_all_metadata: "true", cursor
+    };
+    const json = await callSlack(method, bearer(method, target.token), { form }, opts);
+    for (const m of messagesOf(json)) {
+      const ts = str(m.ts);
+      const meta = isRecord(m.metadata) ? m.metadata : null;
+      if (ts === null || seen.has(ts) || meta === null || meta.event_type !== q.eventType || !isRecord(meta.event_payload)) continue;
+      const payload = meta.event_payload;
+      if (wanted.every(([k, v]) => payload[k] === v || (typeof v === "number" && payload[k] === String(v)))) {
+        seen.add(ts);
+        matches.push({ ts });
+      }
+    }
+    cursor = isRecord(json.response_metadata) ? str(json.response_metadata.next_cursor) : null;
+    if (!cursor || json.has_more !== true) return { matches, complete: true };
+  }
+  return { matches, complete: false };
+}
+
 // --- the only senders (K11) ----------------------------------------------------------------------
 
 /** P8 (§3.21.3, M2): Slack message metadata on a post: an event type and a payload of ids and numbers only. */

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { isExecEnabled } from "@/lib/exec/access";
-import { enqueueJob, isValidJobKind, reapExpiredLeases } from "@/lib/exec/jobs";
+import { enqueueJob, isExecDraining, isValidJobKind, reapExpiredLeases } from "@/lib/exec/jobs";
 import { listEnabledPrincipals, loadSettings } from "@/lib/exec/principal";
 import { intervalBucket, isLocalTimeReached, isoWeekKey, localDateString, localTimeToUtc, parseLocalTime, zonedParts } from "@/lib/exec/time";
 import type { ExecPrincipal, ExecSettings, JobLane } from "@/lib/exec/types";
@@ -110,10 +110,70 @@ function systemRegistry(): Map<string, SystemScheduledWork> {
   return fresh;
 }
 
-/** Test seam: forget every registered schedule (the P8 system schedule too). */
+/** Test seam: forget every registered schedule (the P8 system schedule too) and (P9 F23) the enqueue memo. */
 export function __resetSchedulerForTests(): void {
   registry().clear();
   systemRegistry().clear();
+  memo().clear();
+}
+
+// ---------------------------------------------------------------------------
+// P9 F23 (contract §1, §5.1): the enqueue memo
+// ---------------------------------------------------------------------------
+//
+// A tick used to re-upsert every due key (INSERT ... ON CONFLICT DO NOTHING) and re-run every async when-gate, though a
+// key only changes with its bucket (5 to 30 minutes for an interval work, a day or a week for a daily or weekly one). The
+// memo keeps, per slot ((kind, principal), (kind, system) and per companion (kind, principal)), the last dedupe key this
+// process enqueued or found already there. While a slot's due key is unchanged, the tick skips the when-gate and the
+// upsert; an enqueue error clears the slot, so the next tick retries it. A gate that answers false or throws memoizes
+// nothing (it is asked again next tick). An entry older than SCHEDULER_MEMO_TTL_MS, by the ticks' own clock, is checked
+// against the table again, so a job row removed by hand inside a long-lived bucket comes back within the hour. One memo
+// per process, on globalThis like the registries; two processes each upsert once per bucket, and the dedupe key still
+// keeps the work to one row.
+
+const MEMO_STATE_KEY = "__ddExecSchedulerMemo";
+/** P9 F23: how long a memoized key is trusted without asking the table again (an hour). */
+export const SCHEDULER_MEMO_TTL_MS = 60 * 60_000;
+
+interface MemoEntry {
+  key: string;
+  atMs: number;
+}
+
+function memo(): Map<string, MemoEntry> {
+  const existing: unknown = Reflect.get(globalThis, MEMO_STATE_KEY);
+  if (existing instanceof Map) return existing;
+  const fresh = new Map<string, MemoEntry>();
+  Reflect.set(globalThis, MEMO_STATE_KEY, fresh);
+  return fresh;
+}
+
+const workSlot = (kind: string, principalId: string) => `work|${kind}|${principalId}`;
+const systemSlot = (kind: string) => `system|${kind}`;
+const companionSlot = (kind: string, principalId: string) => `companion|${kind}|${principalId}`;
+
+/** The slot already holds this key, set within the TTL (either direction, so a clock step never pins an entry). */
+function memoHas(slot: string, key: string, nowMs: number): boolean {
+  const entry = memo().get(slot);
+  return entry !== undefined && entry.key === key && Math.abs(nowMs - entry.atMs) < SCHEDULER_MEMO_TTL_MS;
+}
+
+/** Enqueue under a slot: skipped (null) while the memo holds `key`; else the upsert, memoized on success, cleared on error. */
+async function enqueueOnce(slot: string, key: string, nowMs: number, enqueue: () => Promise<{ enqueued: boolean }>): Promise<boolean | null> {
+  if (memoHas(slot, key, nowMs)) return null;
+  try {
+    const r = await enqueue();
+    memo().set(slot, { key, atMs: nowMs });
+    return r.enqueued;
+  } catch (err) {
+    memo().delete(slot);
+    throw err;
+  }
+}
+
+/** Test seam: forget the enqueue memo only (the registries stay). */
+export function __resetSchedulerMemoForTests(): void {
+  memo().clear();
 }
 
 function errMessage(err: unknown): string {
@@ -272,20 +332,24 @@ export function __resetSystemSchedulerForTests(): void {
 async function runSystemWork(now: Date): Promise<{ enqueued: number; errors: number }> {
   let enqueued = 0;
   let errors = 0;
+  const nowMs = now.getTime();
   for (const work of listSystemScheduledWork()) {
     try {
       const dueKey = dueSystemDedupeKey(work, now);
       if (!dueKey) continue;
       const ctx: SystemScheduleContext = { now, utcDate: localDateString(now, "UTC"), dueKey };
-      const r = await enqueueJob({
-        kind: work.kind,
-        lane: work.lane,
-        principalId: null,
-        payload: work.payload ? work.payload(ctx) : {},
-        dedupeKey: dueKey,
-        maxAttempts: work.maxAttempts
-      });
-      if (r.enqueued) enqueued += 1;
+      // P9 F23: once per key (the memo), not once per tick.
+      const r = await enqueueOnce(systemSlot(work.kind), dueKey, nowMs, () =>
+        enqueueJob({
+          kind: work.kind,
+          lane: work.lane,
+          principalId: null,
+          payload: work.payload ? work.payload(ctx) : {},
+          dedupeKey: dueKey,
+          maxAttempts: work.maxAttempts
+        })
+      );
+      if (r === true) enqueued += 1;
     } catch (err) {
       errors += 1;
       console.error(`[exec-scheduler] system work ${work.kind} failed: ${errMessage(err)}`);
@@ -302,18 +366,24 @@ async function enqueueCompanions(work: ScheduledWork, principal: ExecPrincipal, 
   if (!work.companions || ctx.localDate === null) return { enqueued: 0, errors: 0 };
   let enqueued = 0;
   let errors = 0;
+  const nowMs = ctx.now.getTime();
   for (const c of work.companions(principal, ctx)) {
     try {
-      const r = await enqueueJob({
-        kind: c.kind,
-        lane: c.lane,
-        principalId: principal.id,
-        payload: c.payload,
-        dedupeKey: `${c.kind}:${principal.id}:${ctx.localDate}`,
-        runAfter: c.runAfter,
-        maxAttempts: c.maxAttempts
-      });
-      if (r.enqueued) enqueued += 1;
+      const dedupeKey = `${c.kind}:${principal.id}:${ctx.localDate}`;
+      // P9 F23: each companion has its own memo slot, so one whose enqueue failed is retried next tick even while its
+      // work's own key is memoized.
+      const r = await enqueueOnce(companionSlot(c.kind, principal.id), dedupeKey, nowMs, () =>
+        enqueueJob({
+          kind: c.kind,
+          lane: c.lane,
+          principalId: principal.id,
+          payload: c.payload,
+          dedupeKey,
+          runAfter: c.runAfter,
+          maxAttempts: c.maxAttempts
+        })
+      );
+      if (r === true) enqueued += 1;
     } catch (err) {
       errors += 1;
       console.error(`[exec-scheduler] ${c.kind} (companion of ${work.kind}) for principal ${principal.id} failed: ${errMessage(err)}`);
@@ -333,6 +403,8 @@ async function enqueueCompanions(work: ScheduledWork, principal: ExecPrincipal, 
  */
 export async function runSchedulerTick(now: Date = new Date()): Promise<SchedulerTickResult> {
   if (!isExecEnabled()) return { principals: 0, enqueued: 0, reaped: 0, summary: "disabled" };
+  // P9 F19: a process shutting down (SIGTERM) reaps and schedules nothing more; the next process's scheduler takes over.
+  if (isExecDraining()) return { principals: 0, enqueued: 0, reaped: 0, summary: "draining" };
 
   let errors = 0;
   let reaped = 0;
@@ -366,18 +438,24 @@ export async function runSchedulerTick(now: Date = new Date()): Promise<Schedule
         if (work.enabled && !work.enabled(settings)) continue;
         const dedupeKey = dueDedupeKey(work, principal, settings, now);
         if (!dedupeKey) continue;
-        // Y4: the asynchronous gate; a throw lands in the catch below (counted, logged, nothing enqueued).
-        if (work.when && !(await work.when(principal, settings, now))) continue;
         const ctx = scheduleContext(work, principal, settings, now, dedupeKey);
-        const r = await enqueueJob({
-          kind: work.kind,
-          lane: work.lane,
-          principalId: principal.id,
-          payload: work.payload ? work.payload(principal, ctx) : {},
-          dedupeKey,
-          maxAttempts: work.maxAttempts
-        });
-        if (r.enqueued) enqueued += 1;
+        const slot = workSlot(work.kind, principal.id);
+        // P9 F23: a key this process already enqueued (or found there) skips the gate and the upsert until it changes.
+        if (!memoHas(slot, dedupeKey, now.getTime())) {
+          // Y4: the asynchronous gate; a throw lands in the catch below (counted, logged, nothing enqueued or memoized).
+          if (work.when && !(await work.when(principal, settings, now))) continue;
+          const r = await enqueueOnce(slot, dedupeKey, now.getTime(), () =>
+            enqueueJob({
+              kind: work.kind,
+              lane: work.lane,
+              principalId: principal.id,
+              payload: work.payload ? work.payload(principal, ctx) : {},
+              dedupeKey,
+              maxAttempts: work.maxAttempts
+            })
+          );
+          if (r === true) enqueued += 1;
+        }
         // P8 (C3): due → its companions too, whether this tick enqueued the work or found it already there.
         const companions = await enqueueCompanions(work, principal, ctx);
         enqueued += companions.enqueued;

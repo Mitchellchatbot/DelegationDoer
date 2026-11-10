@@ -7,7 +7,8 @@
 //   from(t).delete({ count }) …filters… [.select(cols)]
 //   rpc("exec_email_stamp_screened" | "exec_email_upsert_signals" | "exec_email_insert_commitments"
 //       | "exec_drafts_purge_restricted" | "exec_drafts_purge_by_ids"
-//       | "exec_chat_redact_threads" | "exec_chat_draft_ids_for_threads" | "exec_brief_scrub_threads", args)
+//       | "exec_chat_redact_threads" | "exec_chat_draft_ids_for_threads" | "exec_brief_scrub_threads"
+//       | "exec_brief_scrub_threads_v2" (P9 §3.1), args)
 //
 // Filters follow SQL: a comparison with NULL is never true; timestamps compare
 // as instants ("Z" and "+00:00" alike). `.or()` understands the forms the
@@ -20,7 +21,7 @@
 //   const db = createFakeEmailDb({ tables: { exec_email_threads: [row] } });
 //   vi.mocked(getSupabaseAdmin).mockReturnValue(db.client as SupabaseClient);
 
-import { scrubBriefThreadRows } from "./fake-brief-db";
+import { scrubBriefThreadRows, scrubBriefThreadRowsV2 } from "./fake-brief-db";
 import { purgeRestrictedRows, purgeRowsByIds } from "./fake-drafts-db";
 
 export type Row = Record<string, unknown>;
@@ -331,6 +332,10 @@ export function createFakeEmailDb(cfg: FakeEmailDbConfig = {}): FakeEmailDb {
     // test seeds them: 0), so the tombstone procedure's and the safety nets' brief step runs here too.
     exec_brief_scrub_threads(args) {
       return scrubBriefThreadRows(tables, args, now());
+    },
+    // P9 (§3.1; Area C): the v2 RPC 5 brief-store.ts calls first (it also reaches a purged row whose DM may still exist).
+    exec_brief_scrub_threads_v2(args) {
+      return scrubBriefThreadRowsV2(tables, args, now());
     }
   };
 

@@ -185,13 +185,14 @@ function purposeOf(url: string): OAuthPurpose | null {
 }
 
 async function start(req: Request): Promise<Response> {
-  // 0. What the flow is for (P7a): P6's install, or the read consent.
-  const purpose = purposeOf(req.url);
-  if (purpose === null) return settingsRedirect("state_invalid");
-
-  // 1. The strong session.
+  // 1. The strong session, before anything else (P9 F6): a non-owner, a refused step-up or the flag off gets the gate's
+  // own answer (a 404) for any query string, never a redirect that names the settings page.
   const session = await requireExecSession(req, START_ROUTE, { requireStrongSignIn: true });
   if (!session.ok) return guarded(session.response);
+
+  // 1a. What the flow is for (P7a): P6's install, or the read consent.
+  const purpose = purposeOf(req.url);
+  if (purpose === null) return settingsRedirect("state_invalid");
 
   // 1b. The canonical host (C45): Slack sends the callback to the canonical redirect URL, and a session on another host
   // (host-only cookies) isn't one there, so a start anywhere else could never finish.

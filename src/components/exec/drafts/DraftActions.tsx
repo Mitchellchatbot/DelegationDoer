@@ -151,10 +151,11 @@ export function showsCheckedBox(view: DraftView, actions: readonly ActionSpec[])
   return actions.some((a) => a.needsChecked);
 }
 
+// P9 F25: 40 px tap targets below sm (they were about 31 px); unchanged from sm up.
 const BUTTON: Readonly<Record<ActionSpec["kind"], string>> = {
-  primary: "rounded-lg bg-indigo-600 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50",
-  secondary: "rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:border-slate-300 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50",
-  danger: "rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+  primary: "inline-flex min-h-10 items-center justify-center rounded-lg bg-indigo-600 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0",
+  secondary: "inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:border-slate-300 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0",
+  danger: "inline-flex min-h-10 items-center justify-center rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0"
 };
 
 export function DraftActions({
@@ -169,7 +170,8 @@ export function DraftActions({
   openBlocked = false,
   onOpenNow,
   privateRefsChecked = false,
-  onPrivateRefsChecked
+  onPrivateRefsChecked,
+  sendReason = null
 }: {
   view: DraftView;
   isTop: boolean;
@@ -188,6 +190,8 @@ export function DraftActions({
   /** P5b F5 (C45): the "I've checked it" box of a usesPrivateRefs draft (the panel owns its state; saves post confirmPrivate). */
   privateRefsChecked?: boolean;
   onPrivateRefsChecked?: (checked: boolean) => void;
+  /** P9 F24: the send probe's reason when it answered sendReady false (panel-logic sendProbeAnswer). */
+  sendReason?: string | null;
 }) {
   if (!isTop) return null;
   const actions = actionsFor(view, { outlookVersionShown, sendReady });
@@ -195,7 +199,10 @@ export function DraftActions({
   const privateBox = showsPrivateRefsBox(view, actions);
   const threadHref = view.kind === "reply" && view.threadId !== null ? `/executive/email/${encodeURIComponent(view.threadId)}` : null;
   const againHref = view.kind === "reply" && view.threadId !== null ? draftReplyHref(view.threadId) : null;
-  const sendHint = !view.restricted && view.status === "saved" && (view.capabilities.sendUnavailable !== null || sendReady === false);
+  const sendHint =
+    !view.restricted && view.status === "saved" && (view.capabilities.sendUnavailable !== null || sendReady === false)
+      ? sendHintText(view.capabilities.sendUnavailable ?? sendReason)
+      : null;
   const showsOpen = actions.some((a) => a.action === "open_in_outlook") && view.status === "saved";
   const outlookOk = view.outlook.webLink !== null && isAllowedLinkUrl(view.outlook.webLink);
   const disabled = busy !== null;
@@ -276,13 +283,21 @@ export function DraftActions({
       </div>
       {showsOpen && outlookOk && <p className="text-[12px] text-amber-800">{COPY.outlookEditWarning}</p>}
       {openBlocked && outlookOk && <p className="text-[12px] text-slate-600">{COPY.openItNow}</p>}
-      {sendHint && (
-        <p className="text-[12px] text-slate-600" title={view.capabilities.sendUnavailable !== null ? SEND_UNAVAILABLE_SENTENCE(view.capabilities.sendUnavailable) : undefined}>
-          {COPY.sendOffHint}
+      {sendHint !== null && (
+        <p data-send-hint className="text-[12px] text-slate-600">
+          {sendHint}
         </p>
       )}
     </div>
   );
+}
+
+/**
+ * P9 F24: why Send isn't offered, in words. Only "send_off" (the switch is off) reads "isn't switched on yet"; every other
+ * reason (the sending key, the mail service, the drafting key) says what it is, then where to send from instead.
+ */
+export function sendHintText(reason: string | null | undefined): string {
+  return reason === "send_off" ? COPY.sendOffHint : `${SEND_UNAVAILABLE_SENTENCE(reason)} Open it in Outlook to send.`;
 }
 
 /** The in-flight label of the button whose action is running. */

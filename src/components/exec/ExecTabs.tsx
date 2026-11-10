@@ -12,10 +12,13 @@ import { cn } from "@/lib/utils";
 // After the pill group, a gear links to Settings on every page; it is the
 // current page when `active` is "settings". The full Needs Attention feed
 // (/executive/attention) is reached from the Overview card, not a tab (C8).
-// Below sm the pills are tighter (no gap, px-1, 11 px text: P7b's sixth tab,
-// Slack, made px-2 / 12 px 22 px too wide, and P8's seventh, Brief, made
-// px-1.5 / 11.5 px 24 px too wide), so all seven fit beside the gear at a
-// 390 px phone (review ui-6, P8 SH01) instead of clipping the last.
+// P9 (F25, WCAG 2.5.8): below sm every pill is a 40 px tap target (min-h-10,
+// px-3, 12 px text) with a gap instead of shrinking to 30x29 px (P8 had
+// squeezed all seven in at 390 px); the gear is 40x40. P9 fixer ui-2: below
+// sm the strip wraps onto a second row (EXEC_TAB_STRIP) rather than scrolling,
+// so the current tab is always on screen with no script (a scrolled strip
+// loads scrolled to its start, hiding Projects and Chat). From sm up the strip
+// looks as before: one row, scrolling only if a narrow window needs it.
 
 export interface ExecTab {
   key: string;
@@ -36,18 +39,27 @@ export const EXEC_TABS: readonly ExecTab[] = [
 
 export const SETTINGS_HREF = "/executive/settings";
 
+/** P9 (F25): a tab pill: 40 px tall below sm, as before from sm up. */
+export const EXEC_TAB_PILL =
+  "inline-flex min-h-10 shrink-0 items-center rounded-full px-3 py-1.5 text-[12px] font-semibold transition-colors sm:min-h-0 sm:px-3.5 sm:text-[12.5px]";
+/** P9 (F25): the Settings gear: 40x40 below sm, 32x32 from sm up. */
+export const EXEC_GEAR = "grid h-10 w-10 shrink-0 place-items-center rounded-full border shadow-soft transition-colors sm:h-8 sm:w-8";
+/** P9 fixer ui-2: the pill group: wraps (rounded-2xl) below sm, one rounded-full row from sm up. */
+export const EXEC_TAB_STRIP =
+  "inline-flex min-w-0 max-w-full flex-wrap items-center gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-0.5 shadow-soft sm:flex-nowrap sm:gap-0.5 sm:rounded-full";
+
 export function ExecTabs({ active, tabs }: { active: string; tabs: readonly ExecTab[] }) {
   const settingsActive = active === "settings";
   return (
     <nav aria-label="Executive AI Assistant" className="flex max-w-full items-center gap-1.5">
-      <div data-exec-tab-strip className="inline-flex min-w-0 max-w-full items-center gap-0 overflow-x-auto rounded-full border border-slate-200 bg-white p-0.5 shadow-soft sm:gap-0.5">
+      <div data-exec-tab-strip className={EXEC_TAB_STRIP}>
         {tabs.map((tab) => (
           <Link
             key={tab.key}
             href={tab.href}
             aria-current={tab.key === active ? "page" : undefined}
             className={cn(
-              "shrink-0 rounded-full px-1 py-1.5 text-[11px] font-semibold transition-colors sm:px-3.5 sm:text-[12.5px]",
+              EXEC_TAB_PILL,
               tab.key === active ? "bg-indigo-600 text-white" : "text-muted hover:text-ink"
             )}
           >
@@ -61,7 +73,7 @@ export function ExecTabs({ active, tabs }: { active: string; tabs: readonly Exec
         title="Settings"
         aria-current={settingsActive ? "page" : undefined}
         className={cn(
-          "grid h-8 w-8 shrink-0 place-items-center rounded-full border shadow-soft transition-colors",
+          EXEC_GEAR,
           settingsActive ? "border-indigo-600 bg-indigo-600 text-white" : "border-slate-200 bg-white text-muted hover:text-ink"
         )}
       >

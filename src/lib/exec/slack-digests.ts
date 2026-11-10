@@ -710,13 +710,19 @@ export async function listBriefSlackDigests(principal: ExecPrincipal, q: { local
 // Catch-up counts (C24, P8 M7)
 // ---------------------------------------------------------------------------
 
+/** P9 F30 (additive): the counts, and truncated: true when the read hit its row limit (each count is then a floor, shown
+ *  as "N+"); the key is left out otherwise, so a count read below the limit is exactly P7b's shape. */
+export interface SlackCatchUpCountsView extends SlackCatchUpCounts {
+  truncated?: true;
+}
+
 /** Open items to him (C24, P8 M7's counts): P7a's screened open items ({ sinceIso: now − 14 d, limit: 200, surface: "web" }) re-screened by
  *  slackItemPolicy("page"); unanswered = needsResponse ∧ respondedAt null; decisionsPending = kind decision ∧ respondedAt null;
  *  notAssessed = !assessed. Counts above 200 read as 200 ("200+" in the tile). null unless the state is ok. Fixer ui-9: the
  *  items come from P7a's throwing readOpenSlackItems (listOpenSlackItems' read and screen), so a failed read propagates
  *  like the channel read (the caller's section fails soft: "Couldn't load", never zeros; AM-P7b-23's gap closed). `now`
  *  is additive and optional (default: the clock). */
-export async function slackCatchUpCounts(principal: ExecPrincipal, state: SlackIntelState, opts?: { signal?: AbortSignal; now?: Date }): Promise<SlackCatchUpCounts | null> {
+export async function slackCatchUpCounts(principal: ExecPrincipal, state: SlackIntelState, opts?: { signal?: AbortSignal; now?: Date }): Promise<SlackCatchUpCountsView | null> {
   if (state !== "ok") return null;
   const now = opts?.now ?? new Date();
   const { items } = await readOpenSlackItems(principal, {
@@ -724,6 +730,8 @@ export async function slackCatchUpCounts(principal: ExecPrincipal, state: SlackI
     limit: SLACK_INTEL_LIMITS.catchUpReadRows,
     surface: "web"
   });
+  // P9 F30: a full page of rows means there may be more than were read (the counts are floors).
+  const truncated = items.length >= SLACK_INTEL_LIMITS.catchUpReadRows;
   const counts: SlackCatchUpCounts = { unanswered: 0, decisionsPending: 0, notAssessed: 0 };
   if (items.length === 0) return counts;
   const ids = [...new Set(items.map((i) => i.channelId))];
@@ -735,7 +743,8 @@ export async function slackCatchUpCounts(principal: ExecPrincipal, state: SlackI
     if (!item.assessed) counts.notAssessed += 1;
   }
   const cap = SLACK_INTEL_LIMITS.catchUpReadRows;
-  return { unanswered: Math.min(counts.unanswered, cap), decisionsPending: Math.min(counts.decisionsPending, cap), notAssessed: Math.min(counts.notAssessed, cap) };
+  const capped: SlackCatchUpCounts = { unanswered: Math.min(counts.unanswered, cap), decisionsPending: Math.min(counts.decisionsPending, cap), notAssessed: Math.min(counts.notAssessed, cap) };
+  return truncated ? { ...capped, truncated: true } : capped;
 }
 
 // ---------------------------------------------------------------------------

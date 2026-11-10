@@ -10,7 +10,7 @@ vi.mock("next/navigation", () => ({ useRouter: vi.fn() }));
 
 import { useIsTopWindow } from "@/components/exec/drafts/frame-guard";
 import { SettingsForm, ddtextConfirmText, settingValueText } from "@/components/exec/settings/SettingsForm";
-import { SETTINGS_PAGE_COPY, SettingsPageView, feedbackKindLabel } from "@/components/exec/settings/SettingsPageView";
+import { SETTINGS_PAGE_COPY, STEP_UP_REFUSED_ROUTE_SUFFIX, SettingsPageView, accessRouteView, feedbackKindLabel } from "@/components/exec/settings/SettingsPageView";
 import { VoiceResetButton } from "@/components/exec/settings/VoiceResetButton";
 import { SETTINGS_FIELDS } from "@/lib/exec/settings-fields";
 import { SETTINGS_COPY, patchSettings, resetVoice, settingsMessageFor, voiceCanBuild, voiceResetDoneText } from "@/lib/exec/ui/settings-api";
@@ -91,7 +91,7 @@ describe("SettingsForm, top-level (test 75)", () => {
     const text = textOf(html);
     expect(text).toContain("Turn on DD text triage?");
     expect(text).toContain(
-      "Every 10 minutes Claude Haiku reads new task comments (including the notes on status changes), handoff notes, extension reasons and submitted EOD/SOD blocker notes, with up to five earlier comments and the task's title and client for context, and stores short AI summaries (up to 200 characters) for 45 days. Turning it off deletes them within 10 minutes. Confirm first that the team has been told and that Anthropic's data terms cover employee text."
+      "Every 10 minutes Claude Haiku reads new task comments (including the notes on status changes), handoff notes, extension reasons and submitted EOD/SOD blocker notes, with up to five earlier comments and the task's title and client for context, and stores short AI summaries (up to 200 characters) for 45 days. Turning it off deletes them within 10 minutes; morning-brief lines and chat answers that already used them stay until those expire. Confirm first that the team has been told and that Anthropic's data terms cover employee text."
     );
     expect(text).toContain("I've confirmed both");
     expect(html).toContain('type="checkbox"');
@@ -132,13 +132,29 @@ describe("SettingsForm, top-level (test 75)", () => {
     }
   });
 
-  it("the DD text confirm, turning it off: what it deletes", () => {
+  // P9 F17 (flip): turning it off deletes the summaries and items, not the brief lines or chat answers built from them.
+  it("the DD text confirm, turning it off: what it deletes, and what stays until it expires (the brief and chat)", () => {
     const html = form(settingsView({ settings: settings({ ddtextEnabled: true }) }), "off");
     const text = textOf(html);
-    expect(text).toContain("Turn off DD text triage? Its stored summaries and items are deleted within 10 minutes.");
+    expect(text).toContain("Turn off DD text triage? Its stored summaries and Needs Attention items are deleted within 10 minutes.");
     expect(html).not.toContain('type="checkbox"');
     expect(text).toContain("Turn off");
-    expect(ddtextConfirmText(false, 90).body).toBe("Its stored summaries and items are deleted within 10 minutes.");
+    expect(ddtextConfirmText(false, 90).body).toBe(
+      "Its stored summaries and Needs Attention items are deleted within 10 minutes. Morning-brief lines and chat answers that already used them stay until those expire (the brief after 30 days, chat after your chat retention)."
+    );
+    expect(text).toContain("Morning-brief lines and chat answers that already used them stay until those expire");
+  });
+
+  it("P9 F17: the turning-on body carries the same qualification", () => {
+    expect(ddtextConfirmText(true, 90).body).toContain(
+      "Turning it off deletes them within 10 minutes; morning-brief lines and chat answers that already used them stay until those expire."
+    );
+  });
+
+  it("P9 fixer ui-4: the switch's always-visible help names what stays too (the brief and chat), not just the deletion", () => {
+    const help = textOf(fieldOf(form(settingsView()), "ddtextEnabled"));
+    expect(help).toContain("Turning it off deletes them within 10 minutes; morning-brief lines and chat answers that already used them stay until those expire.");
+    expect(help).not.toMatch(/deletes them within 10 minutes\.(?!\S)/);
   });
 });
 
@@ -240,6 +256,26 @@ describe("SettingsPageView (test 75)", () => {
     expect(text).toContain("a1b2c3d4");
   });
 
+  it("P9 F2 step 6: a refused step-up's row reads 'Refused: not your password and code' with its route; others are unchanged", async () => {
+    const view = settingsView();
+    const base = view.recentAccess.ok ? view.recentAccess.data[0] : null;
+    if (base === null) throw new Error("fixture has recent access");
+    const refused = { ...base, route: "GET /executive step_up_refused", sessionTag: "e5f6a7b8" };
+    const html = page({ ...view, recentAccess: { ok: true, data: [refused, base] } });
+    const rows = html.split("<tr").slice(2);
+    expect(rows[0]).toContain("data-access-refused");
+    expect(textOf(rows[0])).toContain("Refused: not your password and code");
+    expect(textOf(rows[0])).toContain("GET /executive");
+    expect(textOf(rows[0])).not.toContain("step_up_refused");
+    expect(rows[1]).not.toContain("data-access-refused");
+    expect(textOf(rows[1])).not.toContain("Refused");
+    // The renderer's suffix is the gate's (access.ts is server-only, so the view keeps its own copy of the string).
+    const { STEP_UP_REFUSED_SUFFIX } = await import("@/lib/exec/access");
+    expect(STEP_UP_REFUSED_ROUTE_SUFFIX).toBe(STEP_UP_REFUSED_SUFFIX);
+    expect(accessRouteView("POST /api/exec/drafts/:id/send step_up_refused")).toEqual({ route: "POST /api/exec/drafts/:id/send", refused: true });
+    expect(accessRouteView("GET /executive")).toEqual({ route: "GET /executive", refused: false });
+  });
+
   it("spend, read-only flags, feedback totals", () => {
     const text = textOf(page());
     expect(text).toContain("$0.42 of $15.00 today");
@@ -278,6 +314,12 @@ describe("SettingsPageView (test 75)", () => {
     const text = textOf(page(settingsView({ spend: FAILED, recentAccess: FAILED, feedback: FAILED, voice: FAILED, pinnedMailbox: FAILED })));
     expect(text.match(/Couldn't load this section right now/g)).toHaveLength(4);
     expect(text).toContain("Pinned mailbox —");
+  });
+
+  it("P9 F36: the pinned mailbox that couldn't load says so as screen-reader text, not only in a title", () => {
+    const FAILED = { ok: false, error: "unavailable" } as const;
+    const html = page(settingsView({ pinnedMailbox: FAILED }));
+    expect(html).toMatch(/<span title="Couldn&#x27;t load" data-failed-cell="true"><span aria-hidden="true">—<\/span><span class="sr-only">Couldn&#x27;t load<\/span><\/span>/);
   });
 
   it("settingValueText", () => {

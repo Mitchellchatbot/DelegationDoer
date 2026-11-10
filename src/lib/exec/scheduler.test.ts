@@ -4,21 +4,28 @@ vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
 vi.mock("@/lib/supabase-server", () => ({ getSupabaseServer: vi.fn() }));
 vi.mock("@/lib/exec/jobs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/jobs")>();
-  return { isValidJobKind: actual.isValidJobKind, enqueueJob: vi.fn(), reapExpiredLeases: vi.fn() };
+  // P9 F19: the real draining flag (the F19 cases below set it through startExecDraining and clear it after).
+  return {
+    isValidJobKind: actual.isValidJobKind, isExecDraining: actual.isExecDraining, startExecDraining: actual.startExecDraining,
+    EXEC_DRAINING_KEY: actual.EXEC_DRAINING_KEY, enqueueJob: vi.fn(), reapExpiredLeases: vi.fn()
+  };
 });
 vi.mock("@/lib/exec/principal", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/principal")>();
   return { ...actual, listEnabledPrincipals: vi.fn(), loadSettings: vi.fn() };
 });
 
-import { enqueueJob, reapExpiredLeases } from "@/lib/exec/jobs";
+import { EXEC_DRAINING_KEY, enqueueJob, reapExpiredLeases, startExecDraining } from "@/lib/exec/jobs";
 import { listEnabledPrincipals, loadSettings, principalFromRows, settingsFromRow } from "@/lib/exec/principal";
 import {
+  SCHEDULER_MEMO_TTL_MS,
   __resetSchedulerForTests,
+  __resetSchedulerMemoForTests,
   dueDedupeKey,
   getScheduledWork,
   listScheduledWork,
   registerScheduledWork,
+  registerSystemScheduledWork,
   runSchedulerTick,
   type ScheduledWork
 } from "@/lib/exec/scheduler";
@@ -72,6 +79,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   __resetSchedulerForTests();
+  Reflect.deleteProperty(globalThis, EXEC_DRAINING_KEY);
 });
 
 // ---------------------------------------------------------------------------
@@ -385,5 +393,157 @@ describe("runSchedulerTick", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 F23 (contract §1, §5.1): the enqueue memo. A key this process enqueued (or found already there) skips the
+// when-gate and the upsert until the key changes; an enqueue error clears it; an hour-old entry is re-checked.
+// ---------------------------------------------------------------------------
+
+describe("P9 F23 the scheduler's enqueue memo", () => {
+  const noon = at("2026-11-04T17:00:00Z"); // 12:00 EST; 5-minute bucket 5,979,372
+  const plus = (ms: number) => new Date(noon.getTime() + ms);
+  const keys = () => vi.mocked(enqueueJob).mock.calls.map(([input]) => input.dedupeKey);
+
+  beforeEach(() => {
+    vi.mocked(listEnabledPrincipals).mockResolvedValue([nyP]);
+  });
+
+  it("SM01 two ticks in one bucket → one enqueue and one when-gate call; the second tick is idle", async () => {
+    const when = vi.fn<NonNullable<ScheduledWork["when"]>>(async () => true);
+    registerScheduledWork({ ...intervalWork, when });
+    const first = await runSchedulerTick(noon);
+    const second = await runSchedulerTick(plus(60_000));
+    expect(keys()).toEqual(["test.interval:ep_1:i5979372"]);
+    expect(when).toHaveBeenCalledTimes(1);
+    expect(first.enqueued).toBe(1);
+    expect(second).toMatchObject({ enqueued: 0, summary: "idle" });
+  });
+
+  it("SM02 a new bucket enqueues again and asks the gate again", async () => {
+    const when = vi.fn<NonNullable<ScheduledWork["when"]>>(async () => true);
+    registerScheduledWork({ ...intervalWork, when });
+    await runSchedulerTick(noon);
+    await runSchedulerTick(plus(4 * 60_000 + 59_000));
+    await runSchedulerTick(plus(5 * 60_000));
+    expect(keys()).toEqual(["test.interval:ep_1:i5979372", "test.interval:ep_1:i5979373"]);
+    expect(when).toHaveBeenCalledTimes(2);
+  });
+
+  it("SM03 an enqueue failure is retried on the next tick (the slot was cleared), then memoized", async () => {
+    vi.mocked(enqueueJob).mockRejectedValueOnce(new Error("exec_jobs enqueue failed (test.interval): timeout"));
+    registerScheduledWork(intervalWork);
+    const r1 = await runSchedulerTick(noon);
+    const r2 = await runSchedulerTick(plus(60_000));
+    const r3 = await runSchedulerTick(plus(120_000));
+    expect(keys()).toEqual(["test.interval:ep_1:i5979372", "test.interval:ep_1:i5979372"]);
+    expect(r1.summary).toBe("principals=1 enqueued=0 reaped=0 errors=1");
+    expect(r2.summary).toBe("principals=1 enqueued=1 reaped=0");
+    expect(r3.summary).toBe("idle");
+  });
+
+  it("SM04 a key the table already had (enqueued false) is memoized too", async () => {
+    vi.mocked(enqueueJob).mockResolvedValue({ enqueued: false, id: null });
+    registerScheduledWork(intervalWork);
+    await runSchedulerTick(noon);
+    await runSchedulerTick(plus(60_000));
+    expect(enqueueJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("SM05 a gate that answers false (or throws) memoizes nothing: it is asked again next tick", async () => {
+    const when = vi.fn<NonNullable<ScheduledWork["when"]>>();
+    when.mockResolvedValueOnce(false).mockRejectedValueOnce(new Error("exec_drafts down")).mockResolvedValue(true);
+    registerScheduledWork({ ...intervalWork, when });
+    await runSchedulerTick(noon);
+    await runSchedulerTick(plus(60_000));
+    await runSchedulerTick(plus(120_000));
+    await runSchedulerTick(plus(180_000));
+    expect(when).toHaveBeenCalledTimes(3);
+    expect(keys()).toEqual(["test.interval:ep_1:i5979372"]);
+  });
+
+  it("SM06 a daily key: once for the day, re-checked against the table once the entry is an hour old; the next day is a new key", async () => {
+    vi.mocked(loadSettings).mockResolvedValue(settings("ep_1", { briefEnabled: true, briefLocalTime: "08:00" }));
+    registerScheduledWork(briefWork);
+    const eight = at("2026-11-04T13:00:00Z");
+    await runSchedulerTick(eight);
+    await runSchedulerTick(new Date(eight.getTime() + 30 * 60_000));
+    await runSchedulerTick(new Date(eight.getTime() + SCHEDULER_MEMO_TTL_MS - 1));
+    expect(keys()).toEqual(["test.brief:ep_1:2026-11-04"]);
+    await runSchedulerTick(new Date(eight.getTime() + SCHEDULER_MEMO_TTL_MS));
+    expect(keys()).toEqual(["test.brief:ep_1:2026-11-04", "test.brief:ep_1:2026-11-04"]);
+    await runSchedulerTick(at("2026-11-05T13:00:00Z"));
+    expect(keys().at(-1)).toBe("test.brief:ep_1:2026-11-05");
+    expect(SCHEDULER_MEMO_TTL_MS).toBe(3_600_000);
+  });
+
+  it("SM07 the memo is per principal: one principal's key never skips another's", async () => {
+    vi.mocked(listEnabledPrincipals).mockResolvedValue([nyP, khiP]);
+    registerScheduledWork(intervalWork);
+    await runSchedulerTick(noon);
+    await runSchedulerTick(plus(60_000));
+    expect(keys()).toEqual(["test.interval:ep_1:i5979372", "test.interval:ep_2:i5979372"]);
+  });
+
+  it("SM08 system work: once per key, then the next bucket", async () => {
+    registerSystemScheduledWork({ kind: "test.sys", lane: "bulk", cadence: { kind: "interval", minutes: 15 } });
+    vi.mocked(listEnabledPrincipals).mockResolvedValue([]);
+    const r1 = await runSchedulerTick(at("2026-11-04T13:00:00Z"));
+    const r2 = await runSchedulerTick(at("2026-11-04T13:14:59Z"));
+    await runSchedulerTick(at("2026-11-04T13:15:00Z"));
+    expect(vi.mocked(enqueueJob).mock.calls.map(([i]) => [i.kind, i.principalId])).toEqual([["test.sys", null], ["test.sys", null]]);
+    expect(r1.system).toBe(1);
+    expect(r2).toMatchObject({ summary: "idle" });
+  });
+
+  it("SM09 companions have their own slots: one whose enqueue failed is retried next tick while its work stays memoized", async () => {
+    const companion: ScheduledWork = {
+      kind: "test.daily", lane: "bulk", cadence: { kind: "daily", at: () => "08:00" },
+      companions: (_p, ctx) => [{ kind: "test.watch", lane: "bulk", runAfter: ctx.now, payload: {}, maxAttempts: 1 }]
+    };
+    registerScheduledWork(companion);
+    let failWatch = true;
+    vi.mocked(enqueueJob).mockImplementation(async (input) => {
+      if (input.kind === "test.watch" && failWatch) {
+        failWatch = false;
+        throw new Error("exec_jobs enqueue failed (test.watch): timeout");
+      }
+      return { enqueued: true, id: 1 };
+    });
+    const eight = at("2026-11-04T13:00:00Z");
+    const r1 = await runSchedulerTick(eight);
+    const r2 = await runSchedulerTick(new Date(eight.getTime() + 60_000));
+    const r3 = await runSchedulerTick(new Date(eight.getTime() + 120_000));
+    expect(vi.mocked(enqueueJob).mock.calls.map(([i]) => i.kind)).toEqual(["test.daily", "test.watch", "test.watch"]);
+    expect(r1.summary).toBe("principals=1 enqueued=1 reaped=0 errors=1");
+    expect(r2.summary).toBe("principals=1 enqueued=1 reaped=0");
+    expect(r3.summary).toBe("idle");
+  });
+
+  it("SM10 the test seams forget the memo (__resetSchedulerMemoForTests keeps the registries)", async () => {
+    registerScheduledWork(intervalWork);
+    await runSchedulerTick(noon);
+    __resetSchedulerMemoForTests();
+    expect(listScheduledWork().map((w) => w.kind)).toEqual(["test.interval"]);
+    await runSchedulerTick(plus(60_000));
+    expect(enqueueJob).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 F19: a process shutting down schedules nothing more.
+// ---------------------------------------------------------------------------
+
+describe("P9 F19 a draining process", () => {
+  it("SD01 reaps, lists and enqueues nothing; the summary says draining", async () => {
+    vi.mocked(listEnabledPrincipals).mockResolvedValue([nyP]);
+    registerScheduledWork(intervalWork);
+    registerSystemScheduledWork({ kind: "test.sys", lane: "bulk", cadence: { kind: "interval", minutes: 15 } });
+    startExecDraining();
+    await expect(runSchedulerTick(at("2026-11-04T17:00:00Z"))).resolves.toEqual({ principals: 0, enqueued: 0, reaped: 0, summary: "draining" });
+    expect(reapExpiredLeases).not.toHaveBeenCalled();
+    expect(listEnabledPrincipals).not.toHaveBeenCalled();
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 });

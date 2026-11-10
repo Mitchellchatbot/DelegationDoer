@@ -12,6 +12,7 @@ import type {
   ParsedAddress
 } from "@/lib/exec/email-types";
 import { estimateTokens } from "@/lib/exec/llm/models";
+import { maskSecrets } from "@/lib/exec/text/secrets";
 import { zonedParts } from "@/lib/exec/time";
 import { NonRetryableError } from "@/lib/exec/types";
 
@@ -1205,6 +1206,12 @@ function chronological(a: HisMessage, b: HisMessage): number {
  * programming error (no messages, a message from another thread, a bad
  * nonce); content problems never throw.
  */
+/** P9 fixer security-5: a message body with its credentials masked (unchanged when there are none). */
+function maskedBody(body: MessageBody): MessageBody {
+  const { text, masked } = maskSecrets(body.text);
+  return masked ? { ...body, text } : body;
+}
+
 export function renderTriageInput(args: RenderTriageArgs): RenderedTriageInput {
   const { owner, threadId } = args;
   if (typeof threadId !== "string" || threadId === "") throw new NonRetryableError("renderTriageInput: threadId is required");
@@ -1231,7 +1238,11 @@ export function renderTriageInput(args: RenderTriageArgs): RenderedTriageInput {
 
   // Budget, newest first (§3.7): the newest message gets a head and a tail,
   // older ones a head each, until the total runs out.
-  const bodies = shownMessages.map((m) => messageBodyText(m));
+  // P9 fixer security-5 (P9 §2.1: credentials are [hidden] in every model request): each body is masked first (C46's
+  // maskSecrets, as on the chat path: a credential's label stays, its value becomes "[hidden]"), so neither the triage
+  // model nor a draft pack (drafts-pack.ts renders the thread through here) ever sees it, and a stored summary can't repeat
+  // it. The rendered text, the evidence checks and the content hash all read the masked text, so they agree with the model.
+  const bodies = shownMessages.map((m) => maskedBody(messageBodyText(m)));
   const budgeted: BudgetedText[] = new Array<BudgetedText>(shownMessages.length);
   let remaining = TOTAL_TEXT_CHARS;
   for (let i = shownMessages.length - 1; i >= 0; i--) {
@@ -1261,7 +1272,7 @@ export function renderTriageInput(args: RenderTriageArgs): RenderedTriageInput {
     lines.push(`From: ${formatAddress(m.from)}`);
     if (m.to.length > 0) lines.push(`To: ${formatAddressList(m.to)}`);
     if (m.cc.length > 0) lines.push(`Cc: ${formatAddressList(m.cc)}`);
-    lines.push(`Subject: ${inlineValue(m.subject, MAX_SUBJECT_CHARS) || "(no subject)"}`);
+    lines.push(`Subject: ${maskSecrets(inlineValue(m.subject, MAX_SUBJECT_CHARS)).text || "(no subject)"}`);
     if (attachments) lines.push(attachments);
     if (m.direction === "outbound" && m.isAutomated) lines.push("Note: sent by a bulk or automated sending tool.");
     if (body.source === "preview_stub") lines.push("Note: only a short preview of this message's text is stored; it may be cut off.");

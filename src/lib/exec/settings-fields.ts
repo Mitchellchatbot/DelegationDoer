@@ -56,7 +56,9 @@ export const SETTINGS_FIELDS: readonly SettingsFieldDef[] = Object.freeze([
     label: "DD text triage",
     help:
       "Every 10 minutes Claude Haiku reads new task comments (including the notes on status changes), handoff notes, extension reasons and submitted EOD/SOD blocker notes, with up to five earlier comments and the task's title and client for context, and flags possible blockers, " +
-      "waits, decisions and mentions of you. Only short AI summaries are stored. Turning it off deletes them within 10 minutes."
+      // P9 fixer ui-4 (F17's honest copy, as the confirm bodies say): the brief and chat keep their own copies until they expire.
+      "waits, decisions and mentions of you. Only short AI summaries are stored. Turning it off deletes them within 10 minutes; " +
+      "morning-brief lines and chat answers that already used them stay until those expire."
   },
   {
     key: "retentionDaysEmail",
@@ -127,9 +129,10 @@ export const SETTINGS_FIELDS: readonly SettingsFieldDef[] = Object.freeze([
     group: "chat",
     kind: "boolean",
     label: "Use the assistant for Ask AI",
+    // P9 fixer ui-3: the step-up is his password AND his authenticator code since P9 F1/F2.
     help:
-      "When on, Ask AI on DD pages answers with the assistant while you're signed in with your password or a second factor. " +
-      "Other people, and sign-in links, keep the current Ask AI."
+      "When on, Ask AI on DD pages answers with the assistant while you're signed in with your password and your authenticator code. " +
+      "Other people, sign-in links and sign-ins without the code keep the current Ask AI."
   },
   {
     key: "chatDailyCapUsd",

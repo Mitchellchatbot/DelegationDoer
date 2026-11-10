@@ -40,7 +40,8 @@ function SourceChip({ source }: { source: SourceRef }) {
       </span>
     );
   }
-  const linkClass = cn(CHIP, "transition-colors hover:border-slate-300 hover:text-ink");
+  // P9 F25: a link chip is a 40 px tap target below sm.
+  const linkClass = cn(CHIP, "min-h-10 transition-colors hover:border-slate-300 hover:text-ink sm:min-h-0");
   if (link.external) {
     return (
       <a href={link.href} target="_blank" rel="noopener noreferrer" className={linkClass} title={source.label}>
@@ -82,7 +83,7 @@ export function SourceLinks({
       ))}
       {rest.length > 0 && (
         <details className="open:basis-full">
-          <summary className="inline-flex cursor-pointer list-none items-center rounded-full px-2 py-0.5 text-[11px] font-medium text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+          <summary className="inline-flex min-h-10 cursor-pointer list-none items-center rounded-full px-2 py-0.5 text-[11px] font-medium text-muted hover:text-ink sm:min-h-0 [&::-webkit-details-marker]:hidden">
             {`+${pluralize(rest.length, "more source")}`}
           </summary>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">

@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 
 vi.mock("next/cache", () => ({ unstable_cache: <T>(fn: T) => fn }));
 vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
+// P9 (F2): the step-up case below runs the REAL gate (vi.importActual) over a faked session; every other test mocks it.
+vi.mock("@/lib/supabase-server", () => ({ getSupabaseServer: vi.fn() }));
 vi.mock("@/lib/exec/access", () => ({ requireExecPrincipal: vi.fn() }));
 // Area A's helpers are mocked at the module boundary with the contract's
 // behaviour (§3.2): the real ones have their own suite (http.test.ts).
@@ -30,6 +32,10 @@ import { DEFAULT_SETTINGS, loadSettings, principalFromRows, type SettingsSnapsho
 import { getSettingsView, updateSettings, type UpdateSettingsResult } from "@/lib/exec/settings";
 import type { AuditEntry, ExecPrincipal, ExecSettings } from "@/lib/exec/types";
 import type { SettingsView } from "@/lib/exec/view-types";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { getSupabaseServer } from "@/lib/supabase-server";
+import { OWNER_AUTH_ID, fakeFactorAdmin, passwordOnlyToken, pinFactors, settle } from "@/lib/exec/__tests__/step-up-fixtures";
 
 // The Settings routes (P5a contract §3.7.3, §3.7.4; tests 25 and 25b's route
 // half). Every collaborator is a mock that records the order it was called
@@ -338,6 +344,52 @@ describe("PATCH /api/exec/settings (test 25)", () => {
 // ---------------------------------------------------------------------------
 // POST /api/exec/settings/voice-reset (test 25b)
 // ---------------------------------------------------------------------------
+
+// P9 F2 (owner decisions Q1, Q2): the route's own gate call, run for real. A password sign-in without his authenticator
+// code (aal1) is what a link session gets after setting a new password from DD's Settings: it must never reach the write.
+describe("PATCH /api/exec/settings: the P9 step-up, run for real (F2)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("an aal1 password token (pin set) → the gate's 404: no body read, no settings read, no audit, no write; one refusal row", async () => {
+    const real = await vi.importActual<typeof import("@/lib/exec/access")>("@/lib/exec/access");
+    vi.mocked(requireExecPrincipal).mockReset().mockImplementation(real.requireExecPrincipal);
+    vi.stubEnv("EXEC_ENABLED", "true");
+    pinFactors();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const auth = {
+      getUser: vi.fn(async () => ({ data: { user: { id: OWNER_AUTH_ID } }, error: null })),
+      getSession: vi.fn(async () => ({ data: { session: { access_token: passwordOnlyToken("sess-pw", OWNER_AUTH_ID) } }, error: null }))
+    };
+    vi.mocked(getSupabaseServer).mockReturnValue({ auth } as unknown as ReturnType<typeof getSupabaseServer>);
+    const logRows: Record<string, unknown>[] = [];
+    const factors = fakeFactorAdmin();
+    vi.mocked(getSupabaseAdmin).mockReturnValue({
+      auth: factors.auth,
+      from(table: string) {
+        if (table === "users") {
+          const b = { select: () => b, eq: () => b, maybeSingle: async () => ({ data: { id: "u_1", email: "mitchell@scaledai.org" }, error: null }) };
+          return b;
+        }
+        if (table === "exec_access_log") return { insert: async (row: Record<string, unknown>) => (logRows.push(row), { error: null }) };
+        throw new Error(`unexpected table ${table}`);
+      }
+    } as unknown as SupabaseClient);
+
+    const res = await settingsRoute.PATCH(patchReq(GOOD));
+    expect(res.status).toBe(404);
+    expect(await bodyOf(res)).toEqual({ error: "not found" });
+    expect(calls).toEqual([]);
+    expect(readJsonBodyOrError).not.toHaveBeenCalled();
+    expect(loadSettings).not.toHaveBeenCalled();
+    expect(runAudited).not.toHaveBeenCalled();
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(factors.listFactors).not.toHaveBeenCalled();
+    await settle();
+    expect(logRows).toEqual([expect.objectContaining({ route: "PATCH /api/exec/settings step_up_refused", session_id: "sess-pw" })]);
+  });
+});
 
 describe("POST /api/exec/settings/voice-reset (test 25b)", () => {
   it("runs gate → same-origin → no body → installed → limit → audit → reset, and answers { reset, hadProfile }", async () => {

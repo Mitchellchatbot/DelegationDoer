@@ -224,7 +224,7 @@ export function ConfirmSendContent({
           data-confirm="cancel"
           onClick={onCancel}
           disabled={busy}
-          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:border-slate-300 disabled:opacity-50"
+          className="inline-flex min-h-10 items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:border-slate-300 disabled:opacity-50 sm:min-h-0"
         >
           Cancel
         </button>
@@ -235,7 +235,7 @@ export function ConfirmSendContent({
               data-confirm="send"
               onClick={onSend}
               disabled={busy || !allAcked || expired}
-              className="rounded-lg bg-indigo-600 px-3.5 py-1.5 text-[12.5px] font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex min-h-10 items-center rounded-lg bg-indigo-600 px-3.5 py-1.5 text-[12.5px] font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0"
             >
               {busy ? "Sending…" : sendButtonLabel(review)}
             </button>

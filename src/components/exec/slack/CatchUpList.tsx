@@ -1,5 +1,5 @@
 import { MessagesSquare } from "lucide-react";
-import { formatInZone } from "@/lib/exec/format";
+import { formatCount, formatInZone } from "@/lib/exec/format";
 import { SLACK_INTEL_COPY } from "@/lib/exec/slack-intel-copy";
 import type { SlackPageView } from "@/lib/exec/slack-page";
 import { BasisLabel } from "../BasisLabel";
@@ -15,9 +15,14 @@ import { SlackPrivacyChip } from "./SlackPrivacyChip";
 
 type CatchUp = SlackPageView["catchUp"];
 
+/** P9 F30: "Showing the newest 50 of 73". */
+export function catchUpShownText(shown: number, total: number): string {
+  return `Showing the newest ${formatCount(shown)} of ${formatCount(total)}`;
+}
+
 export function CatchUpList({ section, tz, now }: { section: CatchUp; tz: string; now: string }) {
   if (!section.ok) return <SectionCard title={SLACK_INTEL_COPY.catchUpTitle} icon={MessagesSquare} error />;
-  const { rows, hiddenMuted } = section.data;
+  const { rows, hiddenMuted, total } = section.data;
   return (
     <SectionCard title={SLACK_INTEL_COPY.catchUpTitle} icon={MessagesSquare} padded={false}>
       <div data-catchup>
@@ -61,6 +66,12 @@ export function CatchUpList({ section, tz, now }: { section: CatchUp; tz: string
               </li>
             ))}
           </ul>
+        )}
+        {/* P9 F30: the list stops at the newest 50; say how many there are in all. */}
+        {total > rows.length && rows.length > 0 && (
+          <p data-catchup-shown className="border-t border-slate-100 px-4 py-2 text-[12px] text-slate-600">
+            {catchUpShownText(rows.length, total)}
+          </p>
         )}
         {hiddenMuted > 0 && (
           <p data-catchup-hidden-muted className="border-t border-slate-100 px-4 py-2 text-[12px] text-slate-600">

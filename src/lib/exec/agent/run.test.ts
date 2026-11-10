@@ -332,6 +332,23 @@ describe("limits (tests 44-47)", () => {
     expect([result.status, result.statusReason, result.answer]).toEqual(["capped", "daily_budget", CHAT_PAUSED_TEXT]);
     expect(result.usage.partialRoundUncounted).toBe(false);
   });
+
+  it("P9 F22: every model call carries the turn's settings, so the real callModel's daily cap check never reloads them", async () => {
+    const { result, model } = await run({ steps: [toolsStep(1), { text: ["Done."] }] });
+    expect(result.status).toBe("complete");
+    expect(model.callModel).toHaveBeenCalledTimes(2);
+    for (const [arg] of model.callModel.mock.calls) expect(arg.settings).toEqual(SETTINGS);
+    // Through the real callModel: the cap check gets the settings (the two-argument call, no loadSettings inside it).
+    const fake = fakeAnthropicClient([turnEvents({ text: ["Done."] })]);
+    vi.mocked(getAnthropic).mockResolvedValue(fake.client as never);
+    const real = await runAgentTurn(principal, input(), {
+      signal: new AbortController().signal,
+      deps: { executeToolCall: fakeExecutor().executeToolCall, chatSpentTodayUsd: async () => 0 }
+    });
+    results.push(real);
+    expect(real.status).toBe("complete");
+    expect(vi.mocked(assertWithinDailyCap).mock.calls).toEqual([[principal, SETTINGS]]);
+  });
 });
 
 describe("refusals, aborts, deadlines (tests 48-50)", () => {

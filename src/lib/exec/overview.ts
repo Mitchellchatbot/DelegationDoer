@@ -50,9 +50,10 @@ import {
 import { EMAIL_ATTENTION_JOB_KIND, EMAIL_RECONCILE_JOB_KIND, EMAIL_TRIAGE_JOB_KIND } from "@/lib/exec/jobs";
 import { refusalsSince, spentTodayUsd } from "@/lib/exec/llm/usage";
 import { DD_ATTENTION_KINDS } from "@/lib/exec/producers/dd";
-import { slackSystemSummary } from "@/lib/exec/slack-install";
+import { currentKeyIds } from "@/lib/exec/crypto";
+import { slackSystemSummary, slackTokenKeyIds } from "@/lib/exec/slack-install";
 import type { SlackSystemSummary } from "@/lib/exec/slack-types";
-import { listAllReplyArtifacts, loadScreeningPolicy } from "@/lib/exec/sources/mail";
+import { eaTokenConfigured, listAllReplyArtifacts, loadScreeningPolicy } from "@/lib/exec/sources/mail";
 import { spendTodayByFeature } from "@/lib/exec/settings";
 import { getSyncState, parseAccountsState, parseEaTokenState, parseSendTokenState, parseSocketState, parseTokenHealthState } from "@/lib/exec/sync-state";
 import {
@@ -299,6 +300,10 @@ export interface OverviewSystem {
   /** P8 (C40): AI spend today against the cap, by feature, and model refusals in the last 24 hours. Present while the brief
    *  is on (the P8 System rows come with it); null = a read failed. */
   ai?: { spentTodayUsd: number; capUsd: number; byFeature: Record<string, number>; refusals24h: number } | null;
+  /** P9 seed S3 (contract F13; Area C fills it, Area A renders "Slack tokens on the previous key: N"): how many stored Slack
+   *  token blobs are sealed under EXEC_TOKEN_KEY_PREVIOUS's key id (previousKey) or under a key id neither key has
+   *  (unknownKey), compared by stored key ids only (never decrypted). Absent = no installation; null = the read failed. */
+  tokenKeys?: { previousKey: number; unknownKey: number } | null;
 }
 
 /** P8 (§3.17.6, M12): the System card's "Morning brief" row (ids, enums, times and counts only). */
@@ -913,6 +918,8 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
   const draftsSystem = draftsSystemReads(principal, now, read, emailGate, jobs);
   const slackTile = slackTileRead(principal, now, signal, emailGate);
   const slackSystem = slackSystemRead(principal, read, emailGate);
+  // P9 F13 (seed S3): how many of his stored Slack token blobs are still on the previous (or an unknown) key.
+  const tokenKeys = tokenKeysRead(principal, read, emailGate);
   // P8 (§3.17.6, M12): the brief, check-in token and AI rows, read only while the brief is on.
   const briefSystem = briefSystemReads(principal, now, read, emailGate);
   // P8 (§3.17.2, C41): the brief card, only when the page asks for it. getBriefCardView takes no signal: it races the deadline.
@@ -931,7 +938,9 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
     const drafts = await draftsSystem;
     const slack = await slackSystem;
     const brief = await briefSystem;
-    return { ...health, ...(drafts === undefined ? {} : { drafts }), ...(slack === undefined ? {} : { slack }), ...brief };
+    const keys = await tokenKeys;
+    return { ...health, ...(drafts === undefined ? {} : { drafts }), ...(slack === undefined ? {} : { slack }), ...brief,
+      ...(keys === undefined ? {} : { tokenKeys: keys }) };
   });
 
   const [tilesResult, attentionResult, approvalsResult, deadlinesResult, projectsResult, systemResult, emailResult, slackResult, briefResult] = await Promise.all([
@@ -1042,7 +1051,10 @@ async function draftsSystemReads(
     draftsEnabled: draftsOnFor(settings),
     sendEnabled: draftsOnFor(settings) && settings.sendEnabled,
     voiceEnabled: settings.voiceEnabled,
-    eaToken: tokenVerdict(ea),
+    // P9 fixer correctness-2: the process drawing this card is the one that serves drafts (L1, P4 R13). Without the EA
+    // token it says token_missing itself: since F18 no token-less process writes clone-ea/ea-token, so the stored row
+    // would stay another process's (or an old) "ok" while every draft request here fails.
+    eaToken: eaTokenConfigured() ? tokenVerdict(ea) : { ok: false, reason: "token_missing", checkedAt: null, expiresAt: null },
     sendToken: tokenVerdict(send),
     cl2: { ready: eaState?.cl2Ready ?? null, send: eaState?.cl2Send ?? null },
     counts: countsValue,
@@ -1078,6 +1090,38 @@ async function slackSystemRead(
   const summary = await read("slack status", () => slackSystemSummary(principal));
   if (!summary.ok) return null;
   return summary.value ?? undefined;
+}
+
+/**
+ * P9 F13 (seed S3's producer; Area A renders "Slack tokens on the previous key: N"): the key ids inside his active installation's
+ * stored token blobs (the bot and the user half), compared with EXEC_TOKEN_KEY's and EXEC_TOKEN_KEY_PREVIOUS's: previousKey =
+ * blobs on the previous key, unknownKey = blobs on a key neither has. Nothing is decrypted. undefined (no row) while P5b's chat
+ * schema (which P6's needs) isn't installed or there is no active installation; null when the settings, the read or the keys
+ * (EXEC_TOKEN_KEY missing or invalid) fail. Counts only.
+ */
+async function tokenKeysRead(principal: ExecPrincipal, read: OverviewRead, gateRead: Promise<Settled<EmailGate>>):
+  Promise<{ previousKey: number; unknownKey: number } | null | undefined> {
+  const gate = await gateRead;
+  if (!gate.ok) return null;
+  if (gate.value.settings.chatSchemaReady !== true) return undefined;
+  const ids = await read("token key ids", (o) => slackTokenKeyIds(principal, o));
+  if (!ids.ok) return null;
+  if (ids.value === null) return undefined;
+  let keys: { current: string; previous: string | null };
+  try {
+    keys = currentKeyIds();
+  } catch (err) {
+    console.error(`[exec-overview] token keys unavailable (${err instanceof Error && /^[A-Za-z]{1,40}$/.test(err.name) ? err.name : "error"})`);
+    return null;
+  }
+  let previousKey = 0;
+  let unknownKey = 0;
+  for (const kid of [ids.value.bot, ids.value.user]) {
+    if (kid === null || kid === keys.current) continue;
+    if (kid === keys.previous) previousKey += 1;
+    else unknownKey += 1;
+  }
+  return { previousKey, unknownKey };
 }
 
 // ---------------------------------------------------------------------------

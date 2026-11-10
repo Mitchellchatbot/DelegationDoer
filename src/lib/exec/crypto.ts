@@ -207,6 +207,16 @@ export function openSecret(sealed: string, context: string): string {
 }
 
 /**
+ * P9 F13: the key ids of EXEC_TOKEN_KEY (current) and, while it is set, EXEC_TOKEN_KEY_PREVIOUS (previous): the first 8 hex of
+ * sha256 of each key, the same kid every blob names. Never key material. Throws SecretUnavailableError when the keys are
+ * missing or invalid (as sealSecret / openSecret do).
+ */
+export function currentKeyIds(): { current: string; previous: string | null } {
+  const { current, all } = keyring();
+  return { current: current.kid, previous: all.length > 1 ? all[1].kid : null };
+}
+
+/**
  * True when `sealed` isn't a v1 blob under the CURRENT key: sealed under
  * EXEC_TOKEN_KEY_PREVIOUS (or an older key), or not a blob at all. Open it and
  * seal it again to move it to the current key. Throws SecretUnavailableError

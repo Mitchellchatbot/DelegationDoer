@@ -126,9 +126,29 @@ describe("the legacy files reach exec code only lazily, on Node.js (B-P8-4)", ()
     expect(at('import { getSupabaseAdmin } from "@/lib/supabase-admin";\nimport { OWNER_EMAIL } from "@/lib/access";')).toEqual([]);
   });
 
-  it("EG03 cron-bootstrap.ts is byte-identical to the base (line endings aside): no new exec import there", () => {
+  it("EG03 cron-bootstrap.ts is byte-identical to the pin (line endings aside); its exec imports are the two runtime ones and P9's jobs one, all lazy and Node-only", () => {
+    // P9 F19 (an expectation flip §1 implies): the SIGTERM drain changed the file (P8's pin was 2aaafc67…86c9). Re-pinned,
+    // and the rule the pin stood for is now checked directly: no static exec import, and each import() of exec code sits
+    // in the then branch of an if (process.env.NEXT_RUNTIME === "nodejs"), so webpack drops it from the Edge build.
     const text = readFileSync(path.join(ROOT, "src/lib/cron-bootstrap.ts"), "utf8").replace(/\r\n/g, "\n");
-    expect(createHash("sha256").update(text, "utf8").digest("hex")).toBe("2aaafc67e205425800f9b66dc9a458232aacfea5bfa7d3c9e3759200a31086c9");
+    expect(createHash("sha256").update(text, "utf8").digest("hex")).toBe("68f3063debe1983e65729cd3b14c950ae96101769c33b57f83aa9149425730aa");
+    const f = legacyImports(sourceOf("src/lib/cron-bootstrap.ts"));
+    expect(f.staticExec).toEqual([]);
+    expect(f.dynamic.map((d) => [d.spec, d.guarded])).toEqual([
+      ["@/lib/exec/runtime", true],
+      ["@/lib/exec/runtime", true],
+      ["@/lib/exec/jobs", true]
+    ]);
+  });
+
+  it("EG05 (P9 F19) src/instrumentation.ts names no exec module, and installs the shutdown drain inside the NEXT_RUNTIME branch", () => {
+    const file = "src/instrumentation.ts";
+    const f = legacyImports(sourceOf(file));
+    expect(f.staticExec).toEqual([]);
+    expect(f.dynamic.every((d) => d.spec !== null && !/(?:^@\/|\/)lib\/exec\//.test(d.spec))).toBe(true);
+    // The drain's import of cron-bootstrap is the guarded one; the five bootstraps keep their early-return shape.
+    expect(f.dynamic.filter((d) => d.guarded).map((d) => d.spec)).toEqual(["@/lib/cron-bootstrap"]);
+    expect(readFileSync(path.join(ROOT, file), "utf8")).toContain("installShutdownDrain();");
   });
 
   it("EG04 no non-exec file under src/ statically imports @/lib/exec/brief*", () => {

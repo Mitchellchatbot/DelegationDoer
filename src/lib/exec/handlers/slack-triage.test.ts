@@ -7,6 +7,11 @@ vi.mock("@/lib/exec/slack-rate", async (orig) => ({ ...(await orig<typeof import
 vi.mock("@/lib/exec/dd-bot", () => ({ getDdBotIdentity: vi.fn() }));
 vi.mock("@/lib/exec/llm/client", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/llm/client")>()), callModel: vi.fn() }));
 vi.mock("@/lib/exec/llm/usage", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/llm/usage")>()), featureSpentTodayUsd: vi.fn() }));
+// P9 §3.2 (Area C): the real writer, behind a pass-through spy (its own answer, refusedMissing, isn't in the job's result).
+vi.mock("@/lib/exec/slack-read-store", async (orig) => {
+  const actual = await orig<typeof import("@/lib/exec/slack-read-store")>();
+  return { ...actual, writeTriageResult: vi.fn(actual.writeTriageResult) };
+});
 
 import { createFakeSlackReadDb, type FakeSlackReadDb, type FakeSlackReadDbSeed } from "@/lib/exec/__tests__/fake-slack-read-db";
 import type { Row } from "@/lib/exec/__tests__/fake-slack-db";
@@ -477,5 +482,41 @@ describe("XC09 / XC10 / PG17: Slack Connect and opt-outs at triage", () => {
     imDb();
     expect(await slackTriageJobHandler.run(jobCtx("exec.slack-triage", { installation_id: INST, channel: "bad", root: "c", mode: "window" }))).toEqual({ skipped: "bad_payload" });
     expect(HIM).toBe("U0MITCH");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 §3.2 (Area C; owner question Q5, deferred): his own commitments the model finds are counted in the result
+// (ownCommitments, ownCommitmentsDue), and the writer still refuses them: his own message has no message row (N7).
+
+describe("P9 §3.2 his own commitments: counted, never stored (refused_missing pinned)", () => {
+  const HIS = "Sure, I will send the signed budget by Friday afternoon";
+  const his = (over: Record<string, unknown> = {}) => item("M2", { kind: "commitment", commitment_direction: "mitchell_owes", addressed_to_you: false,
+    needs_response: false, urgency: "normal", summary: "You will send the budget.", evidence: "I will send the signed budget by Friday", ...over });
+
+  it("TS-P9-1 a commitment he made in the window with a due date → ownCommitments 1, ownCommitmentsDue 1; the writer refuses it (refusedMissing 1); only her request is stored", async () => {
+    imDb([cand(T1)]);
+    slack({}, [say(T1, DEFAULT_TEXT), say(T2, HIS, { user: HIM })]);
+    modelSays([item("M1"), his({ due_date: "2026-11-13", due_text: "by Friday" })]);
+    const r = await run();
+    expect(r).toMatchObject({ written: 1, model: "ok", ownCommitments: 1, ownCommitmentsDue: 1 });
+    // The handler sent his commitment to the writer (refs only checked here), which refused it: no message row for his ts.
+    const call = vi.mocked(writeTriageResult).mock.calls.at(-1)!;
+    expect(call[2].filter((x) => x.kind === "commitment")).toEqual([expect.objectContaining({ ts: T2, direction: "mitchell_owes", due_at: expect.any(String) })]);
+    expect(await vi.mocked(writeTriageResult).mock.results.at(-1)!.value).toMatchObject({ written: 1, refusedMissing: 1 });
+    expect(items().map((i) => [i.ts, i.kind])).toEqual([[T1, "request"]]);
+    expect(msgRow(T2)).toBeUndefined();
+    assertNoSlackText(r, { label: "result" });
+  });
+
+  it("TS-P9-2 without a due date → ownCommitments 1, ownCommitmentsDue 0; only another person's item → 0 / 0", async () => {
+    imDb([cand(T1)]);
+    slack({}, [say(T1, DEFAULT_TEXT), say(T2, HIS, { user: HIM })]);
+    modelSays([item("M1"), his()]);
+    expect(await run()).toMatchObject({ written: 1, ownCommitments: 1, ownCommitmentsDue: 0 });
+    imDb([cand(T1)]);
+    slack({}, [say(T1, DEFAULT_TEXT), say(T2, HIS, { user: HIM })]);
+    modelSays([item("M1")]);
+    expect(await run()).toMatchObject({ written: 1, ownCommitments: 0, ownCommitmentsDue: 0 });
   });
 });

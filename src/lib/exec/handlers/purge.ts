@@ -22,6 +22,7 @@ import { deleteExpiredOAuthStates, deleteOldSlackEvents, installationFactsForSys
 import { purgeExpiredSlackIntel } from "@/lib/exec/slack-intel-store";
 import { purgeExpiredSlack } from "@/lib/exec/slack-read-store";
 import { purgeReading } from "@/lib/exec/slack-reading";
+import { resealSlackTokens } from "@/lib/exec/slack-token-reseal";
 import { SLACK_LIMITS, SLACK_RE } from "@/lib/exec/slack-types";
 import type { JobHandler } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -117,6 +118,12 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //                         deleted with the DD bot token (dd-bot.ts deleteDdBotDm), ≤ 50 a day;
 //                         message_not_found / channel_not_found count as done, other errors are tried
 //                         again the next day (C49, intel-18).
+//   slackReseal (P9 F13)  every active installation's Slack bot / user token sealed under an older key is re-sealed under
+//                         EXEC_TOKEN_KEY (slack-token-reseal.ts: open, seal, CAS on the old blob, one slack.token_resealed
+//                         audit row each), so EXEC_TOKEN_KEY_PREVIOUS can be removed once the System card shows 0 on the
+//                         previous key. A blob under an unknown key is counted, never overwritten. Fails alone.
+//   briefs (P9 §3.1)      RPC 7 v2 keeps a purged brief's refs while its DM may still be in Slack and releases them after
+//                         (briefRefsReleased); v1 (P9's migration not applied) as before.
 //
 // The deletes are global, not per principal. Rows with no principal (system
 // jobs, access attempts that never resolved to a principal) have to age out
@@ -195,6 +202,8 @@ export interface PurgeCounts {
   briefsDeleted: number;
   briefCheckinsDeleted: number;
   briefMentionsDeleted: number;
+  /** P9 (§3.1): purged briefs whose kept refs RPC 7 v2 released (their DM can't be in Slack any more). */
+  briefRefsReleased: number;
   /** P8 (M10 step 1): revoked reading halves purged with P7a's purgeReading (the revoked installations are slackRevocationsPurged). */
   revokedReadingPurged: number;
   /** P8 (M10 step 3): briefs whose Slack-derived lines were removed (the principal's reading half is gone). */
@@ -202,6 +211,12 @@ export interface PurgeCounts {
   /** P8 (C49): the watchdog's DD-bot mini-brief DMs deleted, and the ones left for the next day. */
   fallbackDmsDeleted: number;
   fallbackDmsRetry: number;
+  /** P9 F13 (resealSlackTokens): Slack token blobs moved to the current key; left on an unknown key; lost to a concurrent write;
+   *  not openable for another reason. */
+  slackResealed: number;
+  slackResealUnknownKey: number;
+  slackResealLost: number;
+  slackResealFailed: number;
 }
 
 function errMessage(err: unknown): string {
@@ -377,10 +392,15 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
     briefsDeleted: 0,
     briefCheckinsDeleted: 0,
     briefMentionsDeleted: 0,
+    briefRefsReleased: 0,
     revokedReadingPurged: 0,
     briefSlackScrubbed: 0,
     fallbackDmsDeleted: 0,
-    fallbackDmsRetry: 0
+    fallbackDmsRetry: 0,
+    slackResealed: 0,
+    slackResealUnknownKey: 0,
+    slackResealLost: 0,
+    slackResealFailed: 0
   };
   const one = (key: keyof PurgeCounts, run: () => Promise<number>) => async (): Promise<Partial<PurgeCounts>> => ({ [key]: await run() });
   const steps: readonly [string, () => Promise<Partial<PurgeCounts>>][] = [
@@ -464,13 +484,22 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
           briefContentPurged: c.contentPurged,
           briefsDeleted: c.briefsDeleted,
           briefCheckinsDeleted: c.checkinsDeleted,
-          briefMentionsDeleted: c.mentionsDeleted
+          briefMentionsDeleted: c.mentionsDeleted,
+          briefRefsReleased: c.refsReleased
         };
       }
     ],
     // P8 (M10's re-check, principal-agnostic): revoked reading halves, then the briefs of principals with no live reading half.
     ["revokedReading", one("revokedReadingPurged", () => purgeRevokedReading(signal))],
-    ["briefSlack", one("briefSlackScrubbed", () => scrubBriefSlackForRevoked(signal))]
+    ["briefSlack", one("briefSlackScrubbed", () => scrubBriefSlackForRevoked(signal))],
+    // P9 F13: the Slack token re-seal (an EXEC_TOKEN_KEY rotation finishes here), after every delete; fails alone.
+    [
+      "slackReseal",
+      async () => {
+        const c = await resealSlackTokens({ signal });
+        return { slackResealed: c.resealed, slackResealUnknownKey: c.unknownKey, slackResealLost: c.lost, slackResealFailed: c.failed };
+      }
+    ]
   ];
 
   const failures: string[] = [];
@@ -498,8 +527,10 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
       `slackMarkers=${counts.slackMarkers} slackLog=${counts.slackLog} slackChannels=${counts.slackChannels} slackAttention=${counts.slackAttention} ` +
       `slackDigests=${counts.slackDigests} slackDigestsFailed=${counts.slackDigestsFailed} ` +
       `briefContentPurged=${counts.briefContentPurged} briefsDeleted=${counts.briefsDeleted} briefCheckinsDeleted=${counts.briefCheckinsDeleted} ` +
-      `briefMentionsDeleted=${counts.briefMentionsDeleted} revokedReadingPurged=${counts.revokedReadingPurged} ` +
-      `briefSlackScrubbed=${counts.briefSlackScrubbed} fallbackDmsDeleted=${counts.fallbackDmsDeleted} fallbackDmsRetry=${counts.fallbackDmsRetry}` +
+      `briefMentionsDeleted=${counts.briefMentionsDeleted} briefRefsReleased=${counts.briefRefsReleased} revokedReadingPurged=${counts.revokedReadingPurged} ` +
+      `briefSlackScrubbed=${counts.briefSlackScrubbed} fallbackDmsDeleted=${counts.fallbackDmsDeleted} fallbackDmsRetry=${counts.fallbackDmsRetry} ` +
+      `slackResealed=${counts.slackResealed} slackResealUnknownKey=${counts.slackResealUnknownKey} slackResealLost=${counts.slackResealLost} ` +
+      `slackResealFailed=${counts.slackResealFailed}` +
       `${failures.length > 0 ? ` failed=${failures.length}` : ""}`
   );
   if (failures.length > 0) {

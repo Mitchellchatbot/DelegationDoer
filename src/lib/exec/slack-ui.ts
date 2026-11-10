@@ -595,16 +595,48 @@ function ownDraftStatus(view: DraftView): DraftCardStatus | null {
   return "ready";
 }
 
+/** At most this many recipients per list on the card, then "+N". */
+const HEADER_RECIPIENTS = 3;
+/** The recipients' share of the header line (escaped): an entry that would pass it is counted into "+N" instead, so a
+ *  run of hostile names full of & < > can't push the context element past Slack's 3,000 characters. */
+const HEADER_RECIPIENTS_CHARS = 2_000;
+
+/** P9 F10 (P4 C75, plan §2): one recipient as the card shows it: the address first (escaped, so it sits in a code span),
+ *  then the display name, which the sender controls, after it in parentheses, cleaned like DD's chips (invisible and
+ *  control characters out, whitespace collapsed) and left out when it is empty or is the address itself. */
+function recipientEntry(r: { address?: unknown; name?: unknown } | null | undefined): string {
+  const address = sanitizeChars(typeof r?.address === "string" ? r.address : "").replace(/\s+/g, "").trim();
+  if (address.length === 0) return "";
+  const name = sanitizeChars(typeof r?.name === "string" ? r.name : "").replace(/\s+/g, " ").trim();
+  const shown = safeMrkdwn(clipChars(address, 120));
+  return name.length > 0 && name.toLowerCase() !== address.toLowerCase() ? `${shown} (${safeMrkdwn(clipChars(name, 80))})` : shown;
+}
+
+/** "a, b, c +N" for one list (To or Cc); "" when it is empty. */
+function recipientList(list: readonly ({ address?: unknown; name?: unknown } | null | undefined)[], budget: { left: number }): string {
+  const entries = list.map(recipientEntry).filter((e) => e.length > 0);
+  const shown: string[] = [];
+  for (const e of entries) {
+    if (shown.length >= HEADER_RECIPIENTS || e.length > budget.left) break;
+    shown.push(e);
+    budget.left -= e.length;
+  }
+  const more = entries.length - shown.length;
+  if (shown.length === 0) return more > 0 ? `+${more}` : "";
+  return `${shown.join(", ")}${more > 0 ? ` +${more}` : ""}`;
+}
+
 function draftHeaderLine(view: DraftView): string {
-  const to = Array.isArray(view.to) ? view.to : [];
-  const names = to
-    .slice(0, 3)
-    .map((r) => safeMrkdwn(clipChars(String(r?.name ?? r?.address ?? "").replace(/\s+/g, " ").trim(), 80)))
-    .filter((n) => n.length > 0);
-  const recipients = names.length > 0 ? `${names.join(", ")}${to.length > 3 ? ` +${to.length - 3}` : ""}` : "—";
+  const budget = { left: HEADER_RECIPIENTS_CHARS };
+  const to = recipientList(Array.isArray(view.to) ? view.to : [], budget);
+  const cc = recipientList(Array.isArray(view.cc) ? view.cc : [], budget);
   const rawSubject = view.subject ?? view.threadSubject ?? "";
   const subject = safeMrkdwn(clipChars(String(rawSubject).replace(/\s+/g, " ").trim(), 250));
-  return `${escapeMrkdwn("To: ")}${recipients} · ${escapeMrkdwn("Subject: ")}${subject.length > 0 ? subject : "—"}`;
+  return [
+    `${escapeMrkdwn("To: ")}${to.length > 0 ? to : "—"}`,
+    ...(cc.length > 0 ? [`${escapeMrkdwn("Cc: ")}${cc}`] : []),
+    `${escapeMrkdwn("Subject: ")}${subject.length > 0 ? subject : "—"}`
+  ].join(" · ");
 }
 
 export function renderDraftCard(view: DraftView | null, opts: { status?: DraftCardStatus; draftId: string }): SlackMessageParts {

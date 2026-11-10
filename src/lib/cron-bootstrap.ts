@@ -48,6 +48,13 @@ import { runSupportInboxPoll } from "@/lib/support-inbox-poller";
 
 const globalKey = "__ddCronBootstrap" as const;
 const stateKey = "__ddCronHeartbeats" as const;
+// P9 F19: the loops' timer handles (so a shutdown can stop them), the stopped flag, and the drain handler's install guard.
+const timersKey = "__ddCronTimers" as const;
+const stoppedKey = "__ddCronStopped" as const;
+const drainKey = "__ddCronDrainInstalled" as const;
+// P9 F19: src/lib/exec/jobs.ts's EXEC_DRAINING_KEY. A literal here: this file is in the instrumentation hook's Edge build,
+// so it reaches exec code only through a lazy import inside a NEXT_RUNTIME === "nodejs" branch (see the exec loops).
+const execDrainingKey = "__ddExecDraining" as const;
 
 const MINUTE = 60 * 1_000;
 const HOUR = 60 * MINUTE;
@@ -69,9 +76,18 @@ export interface CronHeartbeat {
 
 type Heartbeats = Record<string, CronHeartbeat>;
 
+interface CronTimer {
+  kind: "interval" | "timeout";
+  handle: ReturnType<typeof setInterval>;
+}
+
 type GlobalWithBootstrap = typeof globalThis & {
   [globalKey]?: boolean;
   [stateKey]?: Heartbeats;
+  [timersKey]?: CronTimer[];
+  [stoppedKey]?: boolean;
+  [drainKey]?: boolean;
+  [execDrainingKey]?: boolean;
 };
 
 // Each job: a label, its cadence, a short delay before the boot-catchup run,
@@ -324,7 +340,10 @@ function scheduleJob(job: CronJob, heartbeats: Heartbeats): void {
   // than stack runs. Cross-process duplicate work is handled by each runner's
   // own idempotency.
   let running = false;
+  const g = globalThis as GlobalWithBootstrap;
   const runOnce = async (trigger: "interval" | "boot-catchup"): Promise<void> => {
+    // P9 F19: after stopScheduledCrons (SIGTERM) no tick starts, even one whose timer had already fired.
+    if (g[stoppedKey]) return;
     if (running) {
       console.log(`[cron:${job.name}] (${trigger}) skipped — previous run still in flight`);
       return;
@@ -358,12 +377,147 @@ function scheduleJob(job: CronJob, heartbeats: Heartbeats): void {
     return;
   }
 
-  setInterval(() => void runOnce("interval"), job.intervalMs);
+  const timers = (g[timersKey] ??= []);
+  timers.push({ kind: "interval", handle: setInterval(() => void runOnce("interval"), job.intervalMs) });
   hb.schedulerActive = true;
   hb.disabledReason = null;
   console.log(`[cron:${job.name}] internal loop scheduled (every ${describeInterval(job.intervalMs)})`);
   // Drain whatever came due while the server was down / since the last deploy.
-  setTimeout(() => void runOnce("boot-catchup"), job.bootCatchupDelayMs);
+  timers.push({ kind: "timeout", handle: setTimeout(() => void runOnce("boot-catchup"), job.bootCatchupDelayMs) });
+}
+
+/**
+ * P9 F19: stops every loop this bootstrap started, for a shutdown: their timers are cleared and no tick starts from now on
+ * (one already running finishes). Each active heartbeat shows schedulerActive false with `reason`. Idempotent; returns how
+ * many timers it cleared.
+ */
+export function stopScheduledCrons(reason: string): number {
+  const g = globalThis as GlobalWithBootstrap;
+  g[stoppedKey] = true;
+  const timers = (g[timersKey] ?? []).splice(0);
+  for (const t of timers) {
+    if (t.kind === "interval") clearInterval(t.handle);
+    else clearTimeout(t.handle);
+  }
+  for (const hb of Object.values(g[stateKey] ?? {})) {
+    if (!hb.schedulerActive) continue;
+    hb.schedulerActive = false;
+    hb.disabledReason = reason;
+  }
+  return timers.length;
+}
+
+/**
+ * P9 F19 (L5): how long the SIGTERM handler waits for in-flight exec runs, in ms: RAILWAY_DEPLOYMENT_DRAINING_SECONDS
+ * x 1000 - 5000 (Railway sends SIGKILL that many seconds after SIGTERM; 5 s are left to exit), clamped to 0..110 000.
+ * Unset, blank or not a number: 0. Pure.
+ */
+export function drainWaitMs(raw: string | undefined): number {
+  const text = typeof raw === "string" ? raw.trim() : "";
+  const seconds = text.length > 0 ? Number(text) : Number.NaN;
+  if (!Number.isFinite(seconds)) return 0;
+  return Math.min(110_000, Math.max(0, Math.floor(seconds * 1_000 - 5_000)));
+}
+
+export interface ShutdownDrainOptions {
+  /** Default: process.exit (Node only). */
+  exit?: (code: number) => void;
+  /** Default: src/lib/exec/jobs.ts's inFlightCount, loaded lazily on Node (0 when it can't be loaded). */
+  inFlight?: () => number | Promise<number>;
+  /** How often the wait re-counts, default 250 ms. */
+  pollMs?: number;
+}
+
+/** "next-exits": Next's own handler closes the server and exits (this never calls exit). "exited": this called exit(0). */
+export type ShutdownOutcome = "next-exits" | "exited";
+
+/**
+ * P9 F19 (L5, AM-P9-23): the SIGTERM handler's body. Always: the exec draining flag is set (a worker pass claims nothing,
+ * a kick is a no-op, the exec scheduler idles) and every loop here stops. Who exits then follows Next 14.2's own test, the
+ * truthiness of NEXT_MANUAL_SIG_HANDLE (start-server.js registers its SIGINT / SIGTERM handlers only when it is empty):
+ *   - unset or empty: Next's handler closes the server and exits; this returns "next-exits" and never calls exit, so DD
+ *     shuts down as before (inert);
+ *   - "true": Next registered no handler; this waits for the in-flight exec runs, at most
+ *     drainWaitMs(RAILWAY_DEPLOYMENT_DRAINING_SECONDS), then exits 0;
+ *   - any other non-empty value ("1", "yes"): Next registered no handler either, so this exits 0 at once (no wait), and
+ *     the process never hangs until Railway's SIGKILL.
+ * Logs counts only.
+ */
+export async function drainForShutdown(opts: ShutdownDrainOptions = {}): Promise<ShutdownOutcome> {
+  const g = globalThis as GlobalWithBootstrap;
+  g[execDrainingKey] = true;
+  const cleared = stopScheduledCrons("shutting down (SIGTERM)");
+  const manual = process.env.NEXT_MANUAL_SIG_HANDLE;
+  if (!manual) {
+    console.log(`[cron] SIGTERM: ${cleared} loop timers stopped, exec jobs draining; Next's own handler exits`);
+    return "next-exits";
+  }
+  const waitMs = manual === "true" ? drainWaitMs(process.env.RAILWAY_DEPLOYMENT_DRAINING_SECONDS) : 0;
+  const left = waitMs > 0 ? await waitForExecRuns(waitMs, opts) : 0;
+  console.log(`[cron] SIGTERM: ${cleared} loop timers stopped, exec jobs drained (${left} still running); exiting`);
+  (opts.exit ?? exitProcess)(0);
+  return "exited";
+}
+
+/** process.exit, on Node only (a compile-time branch: the Edge build of this file never names it). */
+function exitProcess(code: number): void {
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    process.exit(code);
+  }
+}
+
+/** Polls the in-flight count until it is 0 or `waitMs` passed; returns what was still running (0 = all done). */
+async function waitForExecRuns(waitMs: number, opts: ShutdownDrainOptions): Promise<number> {
+  const count = opts.inFlight ?? (await execInFlightCounter());
+  const pollMs = opts.pollMs !== undefined && opts.pollMs > 0 ? opts.pollMs : 250;
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    let n: number;
+    try {
+      n = await count();
+    } catch {
+      return 0;
+    }
+    if (!(n > 0)) return 0;
+    const left = deadline - Date.now();
+    if (left <= 0) return n;
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(pollMs, left)));
+  }
+}
+
+/** jobs.ts's inFlightCount, loaded lazily inside the Node-only branch (as the exec loops load the runtime). */
+async function execInFlightCounter(): Promise<() => number> {
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    try {
+      const { inFlightCount } = await import("@/lib/exec/jobs");
+      return inFlightCount;
+    } catch (err) {
+      console.error(`[cron] SIGTERM: the exec job module did not load (${err instanceof Error ? err.name : "error"}); not waiting`);
+    }
+  }
+  return () => 0;
+}
+
+/**
+ * P9 F19: registers the SIGTERM handler (drainForShutdown) once per process; src/instrumentation.ts calls it on the
+ * Node.js runtime. process.once: a second SIGTERM finds no listener here and gets Node's default (exit) unless Next's
+ * own handler is there. Returns whether it registered now.
+ */
+export function installShutdownDrain(): boolean {
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const g = globalThis as GlobalWithBootstrap;
+    if (g[drainKey]) return false;
+    g[drainKey] = true;
+    process.once("SIGTERM", () => {
+      drainForShutdown().catch((err: unknown) => {
+        console.error(`[cron] SIGTERM drain failed (${err instanceof Error ? err.name : "error"})`);
+        // With manual signal handling nobody else exits: do it here rather than hang until SIGKILL.
+        if (process.env.NEXT_MANUAL_SIG_HANDLE) exitProcess(0);
+      });
+    });
+    return true;
+  }
+  return false;
 }
 
 export function bootstrapScheduledCrons(): void {

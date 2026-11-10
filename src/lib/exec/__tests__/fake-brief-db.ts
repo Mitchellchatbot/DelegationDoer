@@ -32,27 +32,40 @@ import type { FakeSlackDbError, Row } from "./fake-slack-db";
 // Rows in `tables` are plain snake_case objects; tests read and mutate them directly. Areas B-E consume this fake; none
 // edits it. scrubBriefThreadRows (below) is the RPC 5 mirror, shared with fake-email-db.ts (the tombstone procedure's
 // brief step, §3.21.1 X1).
+//
+// P9 (contract §3.1; Area C, additive): the three _v2 functions of 20261111200000_exec_brief_dm_refs.sql, mirrored the same way
+// (brief-store.ts calls them first): RPC 7 v2 keeps a purged row's refs while its DM may exist (a P6 ledger row in
+// exec_slack_posts, or delivered / delivery started within least(exec_settings.retention_days_chat, 730) + 2 days), releases
+// them after, and holds the row until the local date + 740 days; RPCs 5 / 6 v2 also reach a purged delivered or
+// delivery_unknown row. exec_slack_posts and exec_settings are plain rows here (no DDL), read only by RPC 7 v2.
+// scrubBriefThreadRowsV2 is the RPC 5 v2 mirror fake-email-db.ts shares.
 
 /** The tables the fake holds (§5.19). */
 export type FakeBriefTable =
   | "exec_briefs" | "exec_brief_checkins" | "exec_brief_mentions"
-  | "daily_briefings" | "exec_jobs" | "exec_sync_state" | "exec_access_log" | "exec_ai_usage" | "users";
+  | "daily_briefings" | "exec_jobs" | "exec_sync_state" | "exec_access_log" | "exec_ai_usage" | "users"
+  // P9 (§3.1): what RPC 7 v2 reads (P6's post ledger and the chat retention).
+  | "exec_slack_posts" | "exec_settings";
 
 /** The ten P8 brief functions (§2.1.4-§2.1.10; exec_slack_accept_action_v2 is P6's fake's, Area D). */
 export type FakeBriefRpc =
   | "exec_brief_item_hit" | "exec_brief_scrub_content" | "exec_brief_ref_array"
   | "exec_brief_claim_build" | "exec_brief_finish_build" | "exec_brief_delivery_step" | "exec_brief_claim_fallback"
-  | "exec_brief_scrub_threads" | "exec_brief_scrub_slack" | "exec_brief_purge_expired";
+  | "exec_brief_scrub_threads" | "exec_brief_scrub_slack" | "exec_brief_purge_expired"
+  // P9 (§3.1): the versioned RPCs 7, 5 and 6.
+  | "exec_brief_purge_expired_v2" | "exec_brief_scrub_threads_v2" | "exec_brief_scrub_slack_v2";
 
 export const FAKE_BRIEF_TABLES: readonly FakeBriefTable[] = Object.freeze([
   "exec_briefs", "exec_brief_checkins", "exec_brief_mentions",
-  "daily_briefings", "exec_jobs", "exec_sync_state", "exec_access_log", "exec_ai_usage", "users"
+  "daily_briefings", "exec_jobs", "exec_sync_state", "exec_access_log", "exec_ai_usage", "users",
+  "exec_slack_posts", "exec_settings"
 ] as FakeBriefTable[]);
 
 export const FAKE_BRIEF_RPCS: readonly FakeBriefRpc[] = Object.freeze([
   "exec_brief_item_hit", "exec_brief_scrub_content", "exec_brief_ref_array",
   "exec_brief_claim_build", "exec_brief_finish_build", "exec_brief_delivery_step", "exec_brief_claim_fallback",
-  "exec_brief_scrub_threads", "exec_brief_scrub_slack", "exec_brief_purge_expired"
+  "exec_brief_scrub_threads", "exec_brief_scrub_slack", "exec_brief_purge_expired",
+  "exec_brief_purge_expired_v2", "exec_brief_scrub_threads_v2", "exec_brief_scrub_slack_v2"
 ] as FakeBriefRpc[]);
 
 export type FakeBriefFilter =
@@ -123,7 +136,8 @@ const SS = "exec_sync_state";
 
 const WRITE_RPCS: ReadonlySet<string> = new Set([
   "exec_brief_claim_build", "exec_brief_finish_build", "exec_brief_delivery_step", "exec_brief_claim_fallback",
-  "exec_brief_scrub_threads", "exec_brief_scrub_slack", "exec_brief_purge_expired"
+  "exec_brief_scrub_threads", "exec_brief_scrub_slack", "exec_brief_purge_expired",
+  "exec_brief_purge_expired_v2", "exec_brief_scrub_threads_v2", "exec_brief_scrub_slack_v2"
 ]);
 
 const TS = /^[0-9]{1,12}\.[0-9]{1,8}$/;
@@ -380,11 +394,17 @@ export function briefRefArray(content: unknown, key: string): string[] {
 
 const ARR = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
-/** The shared scrub rewrite of RPCs 5 and 6 over a briefs table: the rows hit, rewritten in place; returns how many. */
-function scrubRows(rows: Row[], principal: unknown, select: (b: Row) => boolean, scrub: (content: unknown) => Json | null, nowIso: string): number {
+/** P9 (§3.1): the rows a v2 scrub reaches beyond v1's (content is not null): a purged delivered or delivery_unknown row. */
+export function briefV2Reaches(b: Row): boolean {
+  return !isNull(b.content) || (!isNull(b.content_purged_at) && (b.status === "delivered" || b.status === "delivery_unknown"));
+}
+
+/** The shared scrub rewrite of RPCs 5 and 6 over a briefs table: the rows hit, rewritten in place; returns how many. v2: P9's reach. */
+function scrubRows(rows: Row[], principal: unknown, select: (b: Row) => boolean, scrub: (content: unknown) => Json | null, nowIso: string,
+  v2 = false): number {
   let n = 0;
   for (const b of rows) {
-    if (b.principal_id !== principal || isNull(b.content) || !select(b)) continue;
+    if (b.principal_id !== principal || !(v2 ? briefV2Reaches(b) : !isNull(b.content)) || !select(b)) continue;
     const c = scrub(b.content);
     b.content = c;
     b.ref_thread_ids = briefRefArray(c, "threadIds");
@@ -397,15 +417,22 @@ function scrubRows(rows: Row[], principal: unknown, select: (b: Row) => boolean,
   return n;
 }
 
-/** RPC 5 (exec_brief_scrub_threads), over any table set holding exec_briefs rows (this fake's, or fake-email-db's). */
-export function scrubBriefThreadRows(tables: Record<string, Row[] | undefined>, args: Row, now: Date): number {
+/** RPC 5 (exec_brief_scrub_threads), over any table set holding exec_briefs rows (this fake's, or fake-email-db's). v2: P9's reach. */
+export function scrubBriefThreadRows(tables: Record<string, Row[] | undefined>, args: Row, now: Date, v2 = false): number {
+  const fn = v2 ? "exec_brief_scrub_threads_v2" : "exec_brief_scrub_threads";
   const principal = args.p_principal;
-  if (isNull(principal)) throw raise("exec_brief_scrub_threads: p_principal is required");
+  if (isNull(principal)) throw raise(`${fn}: p_principal is required`);
   const ids = ARR(args.p_thread_ids);
   if (isNull(args.p_thread_ids) || ids.length === 0) return 0;
-  if (ids.length > 500) throw raise("exec_brief_scrub_threads: at most 500 thread ids per call");
+  if (ids.length > 500) throw raise(`${fn}: at most 500 thread ids per call`);
   return scrubRows(tables[EB] ?? [], principal, (b) => ARR(b.ref_thread_ids).some((t) => ids.includes(t)),
-    (c) => briefScrubContent(c, ids, [], [], false, "[Removed: restricted sender]"), now.toISOString());
+    (c) => briefScrubContent(c, ids, [], [], false, "[Removed: restricted sender]"), now.toISOString(), v2);
+}
+
+/** P9 (§3.1): RPC 5 v2 (exec_brief_scrub_threads_v2): v1's rewrite, reaching a purged delivered / delivery_unknown row too (its
+ *  refs all go and scrubbed_at is set; the content stays null). Shared with fake-email-db.ts. */
+export function scrubBriefThreadRowsV2(tables: Record<string, Row[] | undefined>, args: Row, now: Date): number {
+  return scrubBriefThreadRows(tables, args, now, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -816,18 +843,62 @@ export function createFakeBriefDb(seed?: FakeBriefDbSeed): FakeBriefDb {
     return { outcome: "claimed", id: v.id, status: v.status };
   }
 
-  function scrubSlack(a: Row): number {
+  function scrubSlack(a: Row, v2 = false): number {
+    const fn = v2 ? "exec_brief_scrub_slack_v2" : "exec_brief_scrub_slack";
     const p = a.p_principal;
-    if (isNull(p)) throw raise("exec_brief_scrub_slack: p_principal is required");
+    if (isNull(p)) throw raise(`${fn}: p_principal is required`);
     const keys = ARR(a.p_slack_keys);
     const channels = ARR(a.p_channels);
     const all = a.p_all === true;
-    if (keys.length > 500 || channels.length > 500) throw raise("exec_brief_scrub_slack: at most 500 keys and 500 channels per call");
+    if (keys.length > 500 || channels.length > 500) throw raise(`${fn}: at most 500 keys and 500 channels per call`);
     if (!all && keys.length === 0 && channels.length === 0) return 0;
     return scrubRows(rowsOf(EB), p,
       (b) => ARR(b.ref_slack_keys).some((k) => keys.includes(k)) || ARR(b.ref_slack_channels).some((c) => channels.includes(c))
         || (all && card(b.ref_slack_channels) > 0),
-      (c) => briefScrubContent(c, [], keys, channels, all, "[Removed: no longer available in Slack]"), now().toISOString());
+      (c) => briefScrubContent(c, [], keys, channels, all, "[Removed: no longer available in Slack]"), now().toISOString(), v2);
+  }
+
+  /** P9 (§3.1) dm_live: the DM may still exist (its P6 ledger row, or the retention window + 2 days, the window at most 730). */
+  function dmLive(b: Row, nowMs: number): boolean {
+    const s = rowsOf("exec_settings").find((x) => x.principal_id === b.principal_id);
+    const days = Math.min(typeof s?.retention_days_chat === "number" ? s.retention_days_chat : 90, 730) + 2;
+    const since = nowMs - days * 86_400_000;
+    if (b.status === "delivered" && !isNull(b.slack_ts)) {
+      const ledger = rowsOf("exec_slack_posts").some((p) => p.principal_id === b.principal_id && p.channel_id === b.slack_channel_id && p.ts === b.slack_ts);
+      return ledger || ms(b.delivered_at) > since;
+    }
+    return b.status === "delivery_unknown" && ms(b.delivery_started_at) > since;
+  }
+
+  /** P9 (§3.1): RPC 7 v2 (content expiry keeping a live DM's refs, the release, the row delete's wait and ceiling; v1's other steps). */
+  function purgeExpiredV2(a: Row): Row {
+    if (isNull(a.p_now) || isNull(a.p_mention_cutoff)) throw raise("exec_brief_purge_expired_v2: now and the mention cutoff are required");
+    const lim = Math.min(Math.max(isNull(a.p_limit) ? 1000 : Number(a.p_limit), 1), 5000);
+    const nowMs = ms(isoOf(a.p_now));
+    const cutoff = ymd(a.p_mention_cutoff) as string;
+    const stamp = now().toISOString();
+    const byTime = (col: string) => (x: Row, y: Row) => ms(x[col]) - ms(y[col]);
+    const c = rowsOf(EB).filter((b) => !isNull(b.content) && ms(b.content_expires_at) < nowMs).sort(byTime("content_expires_at")).slice(0, lim);
+    for (const b of c) {
+      const keep = dmLive(b, nowMs);
+      updateRows(EB, [b], { content: null, content_purged_at: isoOf(a.p_now), updated_at: stamp,
+        ...(keep ? {} : { ref_thread_ids: [], ref_slack_keys: [], ref_slack_channels: [] }) });
+    }
+    const r = rowsOf(EB).filter((b) => isNull(b.content) && (card(b.ref_thread_ids) > 0 || card(b.ref_slack_keys) > 0 || card(b.ref_slack_channels) > 0)
+      && (!dmLive(b, nowMs) || (!isNull(b.delivered_at) && !isNull(b.scrubbed_at) && ms(b.scrubbed_at) > ms(b.delivered_at)
+        && !isNull(b.dm_followed_at) && ms(b.dm_followed_at) >= ms(b.scrubbed_at))))
+      .sort(byTime("content_expires_at")).slice(0, lim);
+    updateRows(EB, r, { ref_thread_ids: [], ref_slack_keys: [], ref_slack_channels: [], updated_at: stamp });
+    const d = rowsOf(EB).filter((b) => ms(b.expires_at) < nowMs
+      && (isNull(b.fallback_slack_ts) || !isNull(b.fallback_deleted_at) || ms(b.expires_at) < nowMs - 7 * 86_400_000)
+      && (!dmLive(b, nowMs) || ms(b.expires_at) < nowMs - 560 * 86_400_000))
+      .sort(byTime("expires_at")).slice(0, lim);
+    deleteRows(EB, d);
+    const k = rowsOf(CK).filter((x) => ms(x.purge_at) < nowMs).sort(byTime("purge_at")).slice(0, lim);
+    deleteRows(CK, k);
+    const m = rowsOf(MN).filter((x) => String(ymd(x.last_mentioned_on)) < cutoff).slice(0, lim);
+    deleteRows(MN, m);
+    return { contentPurged: c.length, refsReleased: r.length, briefsDeleted: d.length, checkinsDeleted: k.length, mentionsDeleted: m.length };
   }
 
   function purgeExpired(a: Row): Row {
@@ -862,8 +933,11 @@ export function createFakeBriefDb(seed?: FakeBriefDbSeed): FakeBriefDb {
     exec_brief_delivery_step: deliveryStep,
     exec_brief_claim_fallback: claimFallback,
     exec_brief_scrub_threads: (a) => scrubBriefThreadRows(tables as Record<string, Row[]>, a, now()),
-    exec_brief_scrub_slack: scrubSlack,
-    exec_brief_purge_expired: purgeExpired
+    exec_brief_scrub_slack: (a) => scrubSlack(a),
+    exec_brief_purge_expired: purgeExpired,
+    exec_brief_purge_expired_v2: purgeExpiredV2,
+    exec_brief_scrub_threads_v2: (a) => scrubBriefThreadRowsV2(tables as Record<string, Row[]>, a, now()),
+    exec_brief_scrub_slack_v2: (a) => scrubSlack(a, true)
   };
 
   // --- one request ------------------------------------------------------------

@@ -32,12 +32,24 @@ export const SETTINGS_PAGE_COPY = {
   feedbackNotInstalled: "Not available yet: the team needs to apply the database update.",
   voiceNotInstalled: "Not available yet: the team needs to apply the database update.",
   voiceNone: "No profile yet. It builds once a week from your sent email.",
-  teamSet: "Set by the team. Shown here for reference."
+  teamSet: "Set by the team. Shown here for reference.",
+  // P9 (F2 step 6): a session on his account the step-up turned away (a sign-in link, or a password without his code).
+  stepUpRefused: "Refused: not your password and code"
   // P8 (AM-P8-15): the morning brief has its own section now (BriefSettingsSection); the read-only "Not set up yet"
   // row is gone. The Slack app (P6) has its own section (SlackSection); the old Slack check-in columns stay unshown.
 } as const;
 
 const usd = (n: number) => (Number.isFinite(n) ? `$${n.toFixed(2)}` : MISSING);
+
+/** P9 (F2 step 3): what access.ts appends to the gate's route on a refused step-up's row (its STEP_UP_REFUSED_SUFFIX). */
+export const STEP_UP_REFUSED_ROUTE_SUFFIX = " step_up_refused";
+
+/** The route without the refusal suffix, and whether it was a refusal. */
+export function accessRouteView(route: string): { route: string; refused: boolean } {
+  return route.endsWith(STEP_UP_REFUSED_ROUTE_SUFFIX)
+    ? { route: route.slice(0, -STEP_UP_REFUSED_ROUTE_SUFFIX.length), refused: true }
+    : { route, refused: false };
+}
 const onOff = (on: boolean) => (on ? "On" : "Off");
 
 const FEATURE_LABEL: Readonly<Record<string, string>> = {
@@ -172,7 +184,10 @@ function ReadOnly({ view }: { view: SettingsView }) {
         <Row label="Email intelligence">{s.emailSchemaReady ? onOff(s.emailEnabled) : "Not set up yet"}</Row>
         <Row label="Pinned mailbox">
           {!mailbox.ok ? (
-            <span title="Couldn't load">{MISSING}</span>
+            <span title="Couldn't load" data-failed-cell>
+              <span aria-hidden="true">{MISSING}</span>
+              <span className="sr-only">Couldn&apos;t load</span>
+            </span>
           ) : mailbox.data.emails.length > 0 ? (
             mailbox.data.emails.join(", ")
           ) : mailbox.data.accountIds.length > 0 ? (
@@ -280,10 +295,21 @@ function RecentAccess({ view }: { view: SettingsView }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {r.data.map((a, i) => (
-              <tr key={`${a.at}:${i}`} className="align-top">
+            {r.data.map((a, i) => {
+              const shown = accessRouteView(a.route);
+              return (
+              <tr key={`${a.at}:${i}`} className="align-top" data-access-refused={shown.refused ? "" : undefined}>
                 <td className="whitespace-nowrap px-3 py-1.5 tabular-nums text-slate-700">{formatInZone(a.at, tz, "datetime", now)}</td>
-                <td className="px-3 py-1.5 font-mono text-[11px] text-slate-700">{a.route}</td>
+                <td className="px-3 py-1.5 font-mono text-[11px] text-slate-700">
+                  {shown.refused ? (
+                    <>
+                      <span className="block font-sans text-[12px] font-medium text-rose-700">{SETTINGS_PAGE_COPY.stepUpRefused}</span>
+                      <span className="block">{shown.route}</span>
+                    </>
+                  ) : (
+                    a.route
+                  )}
+                </td>
                 <td className="px-3 py-1.5 text-slate-700">{a.surface}</td>
                 <td className="px-3 py-1.5 font-mono text-[11px] text-slate-700">{a.ip ?? MISSING}</td>
                 <td className="max-w-[16rem] px-3 py-1.5 text-slate-600">
@@ -291,7 +317,8 @@ function RecentAccess({ view }: { view: SettingsView }) {
                 </td>
                 <td className="px-3 py-1.5 font-mono text-[11px] text-slate-600">{a.sessionTag ?? MISSING}</td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>

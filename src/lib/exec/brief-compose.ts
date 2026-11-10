@@ -8,6 +8,8 @@ import { validateBriefOutput } from "@/lib/exec/brief-validate";
 import { callModel, type CallModelResult } from "@/lib/exec/llm/client";
 import { buildExecRequest } from "@/lib/exec/llm/request";
 import { messageText } from "@/lib/exec/llm/stream";
+import { notifyOps } from "@/lib/exec/ops";
+import { localDateString } from "@/lib/exec/time";
 import { clipForModel, neutralizeDdText, renderUntrustedBlock, sanitizeText, type UntrustedEntry } from "@/lib/exec/text/untrusted";
 import { BudgetExceededError, type ExecPrincipal } from "@/lib/exec/types";
 
@@ -229,15 +231,28 @@ function abortError(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException("The brief build was aborted", "AbortError");
 }
 
+/** P9 F21: the brief's local date for the timeout alert's key: meta.localDate when given, else builtAt's date in tz. */
+function alertDate(meta: { builtAt: string; tz: string; localDate?: string }): string {
+  if (typeof meta.localDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(meta.localDate)) return meta.localDate;
+  try {
+    return localDateString(new Date(meta.builtAt), meta.tz);
+  } catch {
+    return "unknown-date";
+  }
+}
+
 /**
  * One call: buildExecRequest({ feature: "brief", system: BRIEF_SYSTEM_PROMPT_V1, messages: [user], outputSchema: BRIEF_OUTPUT_SCHEMA })
  * (effort "high", max_tokens 32000, streamed, system cached), then callModel({ principal, feature: "brief", request, signal })
  * with signal = opts.signal linked to a 150 s timer. Outcome map: BudgetExceededError → deterministic "budget"; result.refused →
  * "refused"; result.truncated → "truncated"; the 150 s timer → "timeout"; LlmCallError or any other throw → "model_error";
  * validateBriefOutput not ok → "invalid_output". opts.signal itself aborting (the job's timeout) rethrows. Never retried.
+ * P9 F21 (lead decision L3): a timeout also raises the ops alert brief-compose-timeout:<local date> (no content, not awaited),
+ * so the team can count timed-out briefs before deciding on effort "medium". meta.localDate (additive) names the day.
  */
 export async function composeBrief(principal: ExecPrincipal, input: ComposeInput,
-  meta: { rev: number; builtAt: string; trigger: BriefTrigger; prettyDate: string; tz: string }, opts: { signal: AbortSignal }): Promise<ComposeOutcome> {
+  meta: { rev: number; builtAt: string; trigger: BriefTrigger; prettyDate: string; tz: string; localDate?: string }, opts: { signal: AbortSignal }):
+  Promise<ComposeOutcome> {
   const signal = opts.signal;
   if (signal.aborted) throw abortError(signal);
   const contentMeta = { rev: meta.rev, builtAt: meta.builtAt, trigger: meta.trigger };
@@ -265,7 +280,14 @@ export async function composeBrief(principal: ExecPrincipal, input: ComposeInput
     result = await callModel({ principal, feature: "brief", request, signal: timer.signal });
   } catch (err) {
     if (signal.aborted) throw abortError(signal);
-    if (timer.timedOut()) return deterministic("timeout");
+    if (timer.timedOut()) {
+      // P9 F21: counted per day (notifyOps rate-limits by key); the alert names the day only. Not awaited: the build goes on.
+      void notifyOps({
+        key: `brief-compose-timeout:${alertDate(meta)}`,
+        title: "Morning brief: the AI summary timed out; the deterministic version was used"
+      });
+      return deterministic("timeout");
+    }
     if (err instanceof BudgetExceededError) return deterministic("budget");
     return deterministic("model_error");
   } finally {

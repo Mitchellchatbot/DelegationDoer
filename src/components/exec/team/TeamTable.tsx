@@ -117,10 +117,12 @@ export function HeaderLabel({ label, icon }: { label: string; icon: ReactNode })
   );
 }
 
+// P9 F36: the state is text a screen reader reads (an aria-label on a plain span isn't announced reliably).
 function Failed() {
   return (
-    <span title={COULDNT_LOAD} aria-label={COULDNT_LOAD} className="text-muted">
-      {MISSING}
+    <span title={COULDNT_LOAD} className="text-muted" data-failed-cell>
+      <span aria-hidden="true">{MISSING}</span>
+      <span className="sr-only">{COULDNT_LOAD}</span>
     </span>
   );
 }

@@ -5,6 +5,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OverviewView } from "@/components/exec/overview/OverviewView";
+import { OTHER_JOBS_LABEL, SLACK_READING_JOBS_LABEL, jobLabel, systemJobRows } from "@/components/exec/overview/job-labels";
 import type { AttentionFeedItem } from "@/lib/exec/attention-types";
 import type { ProjectHealth } from "@/lib/exec/analysis/projects";
 import type {
@@ -359,10 +360,43 @@ describe("OverviewView: full", () => {
     expect(text).toContain("1 failed");
     expect(text).toContain("Retention cleanup");
     expect(text).toContain("No success in the last 48 h");
-    // A kind without a label shows its id.
-    expect(text).toContain("exec.system-check");
+    // P9 F26 (flip): a kind without a label reads "Other background jobs", never its id (it used to show "exec.system-check").
+    expect(text).toContain("Other background jobs");
+    expect(text).not.toMatch(/\bexec\./);
     expect(text).toContain("2 (1 due)");
     expect(text).toContain("2 min ago");
+  });
+
+  it("P9 F26: every kind runtime.ts registers has a label, and a card listing every kind shows no raw kind", async () => {
+    const { BUILT_IN_JOB_KINDS } = await import("@/lib/exec/runtime");
+    expect(BUILT_IN_JOB_KINDS.length).toBeGreaterThanOrEqual(40);
+    for (const kind of BUILT_IN_JOB_KINDS) {
+      const label = jobLabel(kind);
+      expect(label, kind).not.toBe(OTHER_JOBS_LABEL);
+      expect(label, kind).not.toMatch(/\bexec\./);
+    }
+    const every: OverviewSystem = { ...SYSTEM, kinds: [...BUILT_IN_JOB_KINDS, "exec.some-later-kind"].map((kind) => ({ kind, lastSuccessAt: "2026-11-04T14:00:00Z", dead24h: 0 })) };
+    const card = render(overview({ system: ok(every) }));
+    expect(textOf(card)).not.toMatch(/\bexec\./);
+    expect(card).not.toMatch(/\bexec\.[a-z]/);
+  });
+
+  it("P9 F26: the Slack reading jobs fold into one row with the worst status; unlabelled kinds into one 'Other' row", () => {
+    const rows = systemJobRows([
+      { kind: "exec.purge", lastSuccessAt: "2026-11-04T14:00:00Z", dead24h: 0 },
+      { kind: "exec.slack-triage", lastSuccessAt: "2026-11-04T14:50:00Z", dead24h: 1 },
+      { kind: "exec.slack-digest", lastSuccessAt: "2026-11-04T09:00:00Z", dead24h: 2 },
+      { kind: "exec.slack-discover", lastSuccessAt: "2026-11-04T12:00:00Z", dead24h: 0 },
+      { kind: "exec.later-a", lastSuccessAt: "2026-11-04T10:00:00Z", dead24h: 0 },
+      { kind: "exec.later-b", lastSuccessAt: null, dead24h: 1 }
+    ]);
+    expect(rows).toEqual([
+      { key: "exec.purge", label: "Retention cleanup", lastSuccessAt: "2026-11-04T14:00:00Z", dead24h: 0 },
+      { key: `group:${SLACK_READING_JOBS_LABEL}`, label: SLACK_READING_JOBS_LABEL, lastSuccessAt: "2026-11-04T09:00:00Z", dead24h: 3 },
+      { key: `group:${OTHER_JOBS_LABEL}`, label: OTHER_JOBS_LABEL, lastSuccessAt: null, dead24h: 1 }
+    ]);
+    // A member with no success in the look-back makes the whole group "no success".
+    expect(systemJobRows([{ kind: "exec.slack-probe", lastSuccessAt: "2026-11-04T14:00:00Z", dead24h: 0 }, { kind: "exec.slack-rekey", lastSuccessAt: null, dead24h: 0 }])[0].lastSuccessAt).toBeNull();
   });
 
   it("links only to DD paths or allowlisted sources, and never injects HTML", () => {

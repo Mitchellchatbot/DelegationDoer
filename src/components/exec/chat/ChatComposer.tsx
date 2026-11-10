@@ -68,7 +68,7 @@ export const ChatComposer = forwardRef<HTMLTextAreaElement, ChatComposerProps>(f
             type="button"
             data-chat-stop
             onClick={onStop}
-            className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:border-slate-300 hover:text-ink"
+            className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:border-slate-300 hover:text-ink sm:min-h-0"
           >
             <Square className="h-3 w-3 fill-current" aria-hidden />
             {STOP_BUTTON}
@@ -79,7 +79,7 @@ export const ChatComposer = forwardRef<HTMLTextAreaElement, ChatComposerProps>(f
             data-chat-send
             disabled={!sendable}
             onClick={onSend}
-            className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-indigo-600 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-xl bg-indigo-600 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0"
           >
             <ArrowUp className="h-3.5 w-3.5" aria-hidden />
             {SEND_BUTTON}

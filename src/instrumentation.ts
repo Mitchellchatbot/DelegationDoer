@@ -38,4 +38,16 @@ export async function register() {
   } catch (err) {
     console.error("[instrumentation] scheduled-crons bootstrap failed to load:", err);
   }
+  // P9 F19: on SIGTERM (a Railway deploy or restart) the exec job runner stops claiming and the in-process loops stop
+  // scheduling ticks. Inert until NEXT_MANUAL_SIG_HANDLE is set: Next's own handler still closes the server and exits.
+  // With NEXT_MANUAL_SIG_HANDLE=true the handler waits (bounded by RAILWAY_DEPLOYMENT_DRAINING_SECONDS) for the
+  // assistant's in-flight job runs, then exits. Its own try/catch, and the Node-only branch keeps it out of the Edge build.
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    try {
+      const { installShutdownDrain } = await import("@/lib/cron-bootstrap");
+      installShutdownDrain();
+    } catch (err) {
+      console.error("[instrumentation] shutdown drain failed to install:", err);
+    }
+  }
 }

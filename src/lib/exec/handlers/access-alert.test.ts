@@ -222,6 +222,8 @@ describe("exec.access-alert (§3.13.10)", () => {
       filters: [
         { op: "eq", column: "principal_id", value: "ep_1" },
         { op: "eq", column: "surface", value: "web" },
+        // P9 (AM-P9-13): a refused step-up's row never teaches the new-network check its network or browser.
+        { op: "notLike", column: "route", value: "% step_up_refused" },
         { op: "gte", column: "created_at", value: new Date(AT_MS - 30 * DAY).toISOString() },
         { op: "lt", column: "created_at", value: new Date(AT_MS - 10 * MIN).toISOString() }
       ],

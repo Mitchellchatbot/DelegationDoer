@@ -97,6 +97,17 @@ export function requestFor(action: DraftUiAction, ctx: ActionContext): PanelRequ
 export const outlookOpenedRequest = (id: string): PanelRequest => ({ method: "POST", path: draftPath(id, "/outlook-opened"), body: {} });
 /** The live send probe (R9; display only). */
 export const sendProbeRequest = (id: string): PanelRequest => ({ method: "GET", path: draftPath(id, "/send") });
+
+/**
+ * P9 F24: the send probe's answer (GET …/send: { sendReady, reason, draftsReady }) as the panel keeps it. sendReady null =
+ * unknown (not a 200, or no boolean); reason only when sendReady is false and it is a short code (the hint's words).
+ */
+export function sendProbeAnswer(status: number, json: unknown): { sendReady: boolean | null; reason: string | null } {
+  const o = typeof json === "object" && json !== null ? (json as Record<string, unknown>) : {};
+  const sendReady = status === 200 && typeof o.sendReady === "boolean" ? o.sendReady : null;
+  const reason = sendReady === false && typeof o.reason === "string" && /^[a-z_]{1,40}$/.test(o.reason) ? o.reason : null;
+  return { sendReady, reason };
+}
 export const viewRequest = (id: string): PanelRequest => ({ method: "GET", path: draftPath(id) });
 
 /** An autosave PATCH (R4): the editor's JSON and the recipient fields its kind allows. */
@@ -291,6 +302,21 @@ export function outcomeOf(action: DraftUiAction | "send" | "outlook_opened" | "e
   }
   const navigate = typeof o.newDraftId === "string" && o.newDraftId !== "" ? draftPageHref(o.newDraftId) : null;
   return { ...EMPTY, ok: true, status, view, refetch: view === null, lines, readBack, navigate, code };
+}
+
+/**
+ * P9 F27: where focus goes when an action or a send finishes. A send's dialog closing (sending went false) → the
+ * banner's headline; an action ending (busy went false) with focus lost with the pressed button (focus on <body> or
+ * nothing) → the headline; anything else → leave it where it is (null). Pure.
+ */
+export function draftFocusTarget(
+  prev: { busy: boolean; sending: boolean },
+  next: { busy: boolean; sending: boolean },
+  focusWasLost: boolean
+): "headline" | null {
+  if (prev.sending && !next.sending) return "headline";
+  if (prev.busy && !next.busy && focusWasLost) return "headline";
+  return null;
 }
 
 /** Statuses whose view a successful save, discard or send can leave mid-flight (the panel keeps polling). */

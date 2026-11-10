@@ -52,7 +52,7 @@ export function RecipientChip({ recipient, onRemove }: { recipient: RecipientVie
         </span>
       ))}
       {onRemove ? (
-        <button type="button" onClick={onRemove} aria-label={`Remove ${recipient.address}`} className="ml-0.5 rounded-full p-0.5 text-muted hover:bg-slate-100 hover:text-ink">
+        <button type="button" onClick={onRemove} aria-label={`Remove ${recipient.address}`} className="-my-2 ml-0.5 grid h-10 w-10 place-items-center rounded-full text-muted hover:bg-slate-100 hover:text-ink sm:my-0 sm:h-auto sm:w-auto sm:p-0.5">
           <X className="h-3 w-3" aria-hidden />
         </button>
       ) : (

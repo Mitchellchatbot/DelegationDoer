@@ -89,7 +89,7 @@ function EmptyChat({ starters, isTop, emailOn, onStarter }: { starters: readonly
               type="button"
               data-starter
               onClick={() => onStarter(s)}
-              className="max-w-full rounded-full border border-slate-200 bg-white px-3 py-1.5 text-left text-[12.5px] font-medium text-slate-700 [overflow-wrap:anywhere] hover:border-indigo-300 hover:text-indigo-800"
+              className="inline-flex min-h-10 max-w-full items-center rounded-full border border-slate-200 bg-white px-3 py-1.5 text-left text-[12.5px] font-medium text-slate-700 [overflow-wrap:anywhere] hover:border-indigo-300 hover:text-indigo-800 sm:min-h-0"
             >
               {s}
             </button>
@@ -127,13 +127,13 @@ function LiveTurnView({ live, nowMs }: { live: LiveTurn; nowMs: number }) {
         {shown.trim() !== "" && <SafeMarkdown content={shown} links="none" />}
         {live.phase === "connecting" && (
           <p data-chat-connecting className="inline-flex items-center gap-1.5 text-[12.5px] text-muted">
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" aria-hidden />
+            <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin text-indigo-500" aria-hidden />
             {CONNECTING_TEXT}
           </p>
         )}
         {quiet && (
           <p data-chat-quiet className="inline-flex items-center gap-1.5 text-[12px] text-muted">
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" aria-hidden />
+            <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin text-slate-400" aria-hidden />
             <span aria-hidden>{stillWorkingText((nowMs - live.startedAtMs) / 1000)}</span>
             <span className="sr-only">{STILL_WORKING_SR}</span>
           </p>
@@ -154,7 +154,7 @@ function Banner({ banner, isTop, onRetry, canRetry }: { banner: ChatBanner; isTo
         tone === "rose" ? "border-rose-200 bg-rose-50 text-rose-900" : "border-amber-200 bg-amber-50 text-amber-900"
       )}
     >
-      {banner.kind === "lost" ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden /> : <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />}
+      {banner.kind === "lost" ? <Loader2 className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" aria-hidden /> : <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />}
       <span className="min-w-0 flex-1">{bannerText(banner)}</span>
       {banner.kind === "send_failed" && isTop && canRetry && onRetry && (
         <button
@@ -176,7 +176,7 @@ export function ContextChip({ label, isTop, onClear }: { label: string; isTop: b
     <div data-context-chip className="inline-flex max-w-full items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 py-0.5 pl-2.5 pr-1 text-[12px] font-medium text-indigo-900">
       <span className="min-w-0 truncate">{contextChipText(label)}</span>
       {isTop && onClear && (
-        <button type="button" data-context-clear aria-label={CHAT_VIEW_COPY.clearContext} title={CHAT_VIEW_COPY.clearContext} onClick={onClear} className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-indigo-700 hover:bg-indigo-100">
+        <button type="button" data-context-clear aria-label={CHAT_VIEW_COPY.clearContext} title={CHAT_VIEW_COPY.clearContext} onClick={onClear} className="-my-2 -mr-1 grid h-10 w-10 shrink-0 place-items-center rounded-full text-indigo-700 hover:bg-indigo-100 sm:my-0 sm:mr-0 sm:h-5 sm:w-5">
           <X className="h-3 w-3" aria-hidden />
         </button>
       )}

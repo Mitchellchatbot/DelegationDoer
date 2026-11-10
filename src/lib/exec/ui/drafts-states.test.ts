@@ -4,15 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn(), push: vi.fn(), refresh: vi.fn() }) }));
 
-import { actionsFor, DraftActions, showsCheckedBox } from "@/components/exec/drafts/DraftActions";
+import { actionsFor, DraftActions, sendHintText, showsCheckedBox } from "@/components/exec/drafts/DraftActions";
+import { sendProbeAnswer } from "@/components/exec/drafts/panel-logic";
 import { DraftBodyPreview, previewParagraphs } from "@/components/exec/drafts/DraftBodyPreview";
 import { DraftStatusBanner } from "@/components/exec/drafts/DraftStatusBanner";
 import { NewDraft } from "@/components/exec/drafts/DraftPanel";
 import { bodyModeFor } from "@/components/exec/drafts/body-mode";
-import { COPY, GENERATION_FAILED_SENTENCE } from "@/components/exec/drafts/copy";
+import { COPY, GENERATION_FAILED_SENTENCE, reasonWords } from "@/components/exec/drafts/copy";
 import { openInOutlookFlow, openNow } from "@/components/exec/drafts/open-in-outlook";
 import { pollErrorCopy, pollIntervalFor } from "@/components/exec/drafts/poll";
-import type { DraftView, GenerationError } from "@/lib/exec/drafts-types";
+import type { DraftView, GenerationError, SendUnavailable } from "@/lib/exec/drafts-types";
 import { formatInZone } from "@/lib/exec/format";
 import { actionsIn, caps, draftView, NOW_ISO, restrictedView, textOf, TZ, WEB_LINK } from "../__tests__/drafts-ui-fixtures";
 
@@ -382,11 +383,39 @@ describe("UI01: DraftStatusBanner + DraftActions for every §3.13.4 row", () => 
     expect(textOf(html)).toContain("Saving…");
   });
 
-  it("the live send probe saying no hides Review & send and shows the hint", () => {
+  // P9 F24 (flip): the probe's "no" names its reason; "isn't switched on yet" is for send_off only.
+  it("the live send probe saying no hides Review & send and shows the hint with the probe's reason", () => {
     const view = draftView({ status: "saved", savedVersion: 3, outlook: LINKED, capabilities: { canReview: true, canOpenInOutlook: true } });
     expect(actionsIn(buttons(view, { sendReady: false }))).toEqual(["open_in_outlook"]);
-    expect(textOf(buttons(view, { sendReady: false }))).toContain("Sending from here isn't switched on yet.");
+    expect(textOf(buttons(view, { sendReady: false }))).toContain("Sending is unavailable: the reason isn't known. Open it in Outlook to send.");
+    expect(textOf(buttons(view, { sendReady: false }))).not.toContain("switched on yet");
+    expect(textOf(buttons(view, { sendReady: false, sendReason: "send_token" }))).toContain("Sending is unavailable: the sending key is missing or wrong. Open it in Outlook to send.");
+    expect(textOf(buttons(view, { sendReady: false, sendReason: "send_off" }))).toContain("Sending from here isn't switched on yet.");
     expect(actionsIn(buttons(view, { sendReady: true }))).toEqual(["review", "open_in_outlook"]);
+  });
+
+  it("P9 F24: one render per SendUnavailable value; 'switched on yet' only for send_off, the reason's words otherwise", () => {
+    const reasons: SendUnavailable[] = ["send_off", "clone_send_off", "send_token", "clone_unreachable", "token_missing", "wrong_accounts", "cl2_not_ready"];
+    for (const reason of reasons) {
+      const view = draftView({ status: "saved", savedVersion: 3, outlook: LINKED, capabilities: { canOpenInOutlook: true, sendUnavailable: reason } });
+      const text = textOf(buttons(view, { sendReady: null }));
+      if (reason === "send_off") expect(text, reason).toContain("Sending from here isn't switched on yet. Open it in Outlook to send.");
+      else {
+        expect(text, reason).not.toContain("switched on yet");
+        expect(text, reason).toContain(`Sending is unavailable: ${reasonWords(reason)}. Open it in Outlook to send.`);
+      }
+      // Visible text, not only a title.
+      expect(buttons(view, { sendReady: null })).not.toMatch(/<p[^>]*title="Sending is unavailable/);
+    }
+    expect(sendHintText("send_off")).toBe(COPY.sendOffHint);
+  });
+
+  it("P9 F24: sendProbeAnswer keeps the probe's reason when it says no (the panel used to drop it)", () => {
+    expect(sendProbeAnswer(200, { sendReady: false, reason: "send_token", draftsReady: true })).toEqual({ sendReady: false, reason: "send_token" });
+    expect(sendProbeAnswer(200, { sendReady: true, reason: null })).toEqual({ sendReady: true, reason: null });
+    expect(sendProbeAnswer(503, { sendReady: false, reason: "send_token" })).toEqual({ sendReady: null, reason: null });
+    expect(sendProbeAnswer(200, { sendReady: false, reason: "<b>x</b>" })).toEqual({ sendReady: false, reason: null });
+    expect(sendProbeAnswer(200, null)).toEqual({ sendReady: null, reason: null });
   });
 
   it("a blocked popup offers 'Open it now' (C69)", () => {

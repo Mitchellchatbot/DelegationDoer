@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 // labels are the server's fixed registry labels, shown as text.
 
 const ICON = {
-  running: { Icon: Loader2, className: "animate-spin text-indigo-500" },
+  running: { Icon: Loader2, className: "motion-safe:animate-spin text-indigo-500" },
   done: { Icon: Check, className: "text-emerald-600" },
   error: { Icon: TriangleAlert, className: "text-amber-600" },
   skipped: { Icon: CircleSlash, className: "text-slate-400" }

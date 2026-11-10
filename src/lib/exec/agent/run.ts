@@ -493,6 +493,9 @@ export async function runAgentTurn(principal: ExecPrincipal, input: AgentTurnInp
           feature: "chat",
           request,
           signal: turn.signal,
+          // P9 F22: the turn's settings, so the daily cap check doesn't reload them every round (the chat cap's own
+          // fresh spend read below stays, C17).
+          settings: input.settings,
           // b-agent-6: the buffer grows FIRST; the sink can't stop it (its calls are guarded).
           onTextDelta: (t: string) => {
             roundText += t;

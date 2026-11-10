@@ -31,6 +31,7 @@ import { ddClientRef, ddPageRef, ddProjectRef, ddTaskRef, execEmailThreadRef, sl
 import { listDigestViews, requestTodayDigests, sinceLastBrief, slackDigestRef } from "@/lib/exec/slack-digests";
 import { SLACK_INTEL_COPY } from "@/lib/exec/slack-intel-copy";
 import { getDigests, getDigestsByIds, listChannelLinks, slackIntelState } from "@/lib/exec/slack-intel-store";
+import { parseSlackMsgFingerprint } from "@/lib/exec/slack-read-types";
 import { getSlackItemsByIds, getSlackReadingState, listIntelChannels, readOpenSlackItems } from "@/lib/exec/slack-reading";
 import { searchSlack, slackChannelLabel, type SlackSearchHit } from "@/lib/exec/slack-search";
 import {
@@ -57,6 +58,7 @@ import { getTaskDescriptions, listMeetingBriefRisks, listSubmittedNotesText, lis
 import type { ApprovalMechanism, DdClient, DdDepartment, DdProject, DdTask, DdUser, DdUserSchedule } from "@/lib/exec/sources/dd-types";
 import {
   CloneHttpError,
+  isPinnedAccount,
   listAllReplyArtifacts,
   loadHisBodies,
   loadScreeningPolicy,
@@ -192,6 +194,9 @@ const SLACK_ATTENTION_OFF_NOTE = "Slack reading isn't on, so there are no Slack 
 const SLACK_COMMITMENTS_NOTE = "Commitments others made to him in Slack are found with search_slack kind commitment; commitments he makes in Slack aren't recorded, so say so if he asks about his own.";
 const CONSULTED_NOTE = "This question has read as much email as one answer may; some items were left out.";
 const SCREEN_UNAVAILABLE_NOTE = "Email items couldn't be screened just now, so none are shown; say email couldn't be checked.";
+/** P9 F3: a Slack Needs Attention item that couldn't be recorded as a Slack consult (no Slack budget this turn, or a
+ *  fingerprint that doesn't parse) is left out, and the result says so. */
+export const SLACK_ATTENTION_WITHHELD = "Some Slack items were left out of this answer.";
 const TASK_ID_SHAPE = /^[A-Za-z0-9_.:-]{1,100}$/;
 const REF_SHAPE = /^r[0-9]{1,5}$/;
 const PROJECT_ID_SHAPE = /^(?:proj_[a-z0-9]{1,20}_[a-z0-9]{1,20}|p_[0-9]{1,9})$/;
@@ -254,9 +259,11 @@ export function createTurnMemo(principal: ExecPrincipal, settings: ExecSettings,
     openTasks: once(() => listOpenTasks(principal, { signal })),
     schedules: once(() => listUserSchedules(principal, { signal })),
     email,
+    // P9 F7 (P3 ui-3): only rows of the mailboxes pinned to him now, before any screen or count, as every page surface
+    // reads them (email-view's pinnedRows): a row of a mailbox he no longer has pinned is in no list, count or item.
     bucketRows: once(async () => {
       const access = await email();
-      return access.state === "on" ? listBucketRows(principal, now, { signal }) : [];
+      return access.state === "on" ? (await listBucketRows(principal, now, { signal })).filter((r) => isPinnedAccount(principal, r.accountId)) : [];
     }),
     intakePolicy: once(() => loadIntakeScreeningPolicy(principal, { signal })),
     // P7b (§3.15.2): the intel state (C1; never throws: a failed read is "not_installed"), and only when it is "ok" the
@@ -358,6 +365,96 @@ function threadRef(out: Out, threadId: string, subject: string | null): string |
 async function rosterMaps(ctx: ToolContext): Promise<{ users: Map<string, DdUser>; departments: Map<string, DdDepartment> }> {
   const [users, departments] = await Promise.all([ctx.memo.users(), ctx.memo.departments()]);
   return { users: new Map(users.map((u) => [u.id, u])), departments: new Map(departments.map((d) => [d.id, d])) };
+}
+
+/** P3's reading of clients.status (correlate.ts isActiveClientStatus): no status or "active". */
+const isActiveClient = (c: Pick<DdClient, "status">): boolean => c.status === null || c.status === undefined || c.status === "" || c.status === "active";
+
+/**
+ * P9 F8 (P5b C24(c), owner decision Q4): the clients whose task records this result carries. Each task's client name
+ * maps to the DD client of that exact name (its active ones; an inactive client's id only when no active client has the
+ * name) and goes into consultedClients, so a draft on another client's thread after reading these tasks asks for the
+ * second confirmation (other_clients). Called only for tasks whose title reaches the result: a count alone doesn't.
+ */
+async function admitTaskClients(ctx: ToolContext, tasks: readonly Pick<DdTask, "clientName">[]): Promise<void> {
+  if (taskClientNames(tasks).size === 0) return;
+  recordTaskClients(ctx, await ctx.memo.clients(), tasks);
+}
+
+function taskClientNames(tasks: readonly Pick<DdTask, "clientName">[]): Set<string> {
+  return new Set(tasks.map((t) => t.clientName).filter((n): n is string => typeof n === "string" && n.trim() !== ""));
+}
+
+/** admitTaskClients over a client list already read (synchronous: P9 fixer security-3's attention items record theirs as shown). */
+function recordTaskClients(ctx: ToolContext, clients: readonly DdClient[], tasks: readonly Pick<DdTask, "clientName">[]): void {
+  for (const name of taskClientNames(tasks)) {
+    const exact = clients.filter((c) => c.name === name);
+    const active = exact.filter(isActiveClient);
+    for (const c of active.length > 0 ? active : exact) ctx.consultedClients.add(c.id);
+  }
+}
+
+/** P9 fixer security-3 (F8, owner decision Q4): the task ids an attention item cites, in its refs and in its facts' refs. */
+function attentionTaskIds(item: Pick<AttentionFeedItem, "refs" | "facts">): string[] {
+  const ids = new Set<string>();
+  const add = (r: SourceRef) => {
+    const t = targetFromSourceRef(r);
+    if (t.type === "task") ids.add(t.id);
+  };
+  for (const r of Array.isArray(item.refs) ? item.refs : []) add(r);
+  for (const f of Array.isArray(item.facts) ? item.facts : []) for (const r of Array.isArray(f.refs) ? f.refs : []) add(r);
+  return [...ids];
+}
+
+/** A shown attention item's task clients, recorded synchronously; covers() is false for an item whose tasks weren't read. */
+interface AttentionClientAdmitter {
+  covers(item: AttentionFeedItem): boolean;
+  admit(item: AttentionFeedItem): void;
+}
+
+/**
+ * P9 fixer security-3 (F8, Q4): a DD Needs Attention item carries task titles (its title, its fact lines) from any client,
+ * so a result that shows it records those tasks' clients in consultedClients, as search_tasks does: a draft on another
+ * client's thread afterwards gets other_clients and its second confirmation. Everything is read BEFORE any item renders
+ * (the turn's open tasks, one read of the rest, the client list), so the per-item admit is synchronous and a failed read
+ * throws first: the caller withholds the items and no task title goes out unrecorded. An item whose tasks weren't among
+ * `candidates` (past the window the caller passed) isn't covered; the caller leaves it out.
+ */
+async function attentionClientAdmitter(ctx: ToolContext, candidates: readonly AttentionFeedItem[]): Promise<AttentionClientAdmitter> {
+  const ids = [...new Set(candidates.flatMap(attentionTaskIds))];
+  const looked = new Set(ids);
+  const tasks = new Map<string, DdTask>();
+  if (ids.length > 0) {
+    for (const t of await ctx.memo.openTasks()) if (looked.has(t.id)) tasks.set(t.id, t);
+    const missing = ids.filter((id) => !tasks.has(id));
+    for (let i = 0; i < missing.length; i += 200) {
+      for (const t of await listTasksByIds(ctx.principal, missing.slice(i, i + 200), { signal: ctx.signal })) tasks.set(t.id, t);
+    }
+  }
+  const clients = taskClientNames([...tasks.values()]).size > 0 ? await ctx.memo.clients() : [];
+  return {
+    covers: (item) => attentionTaskIds(item).every((id) => looked.has(id)),
+    admit: (item) => recordTaskClients(ctx, clients, attentionTaskIds(item).map((id) => tasks.get(id)).filter((t): t is DdTask => t !== undefined))
+  };
+}
+
+/** attentionSummary for an item whose task clients were read: null (left out) when not covered; recorded once it is shown. */
+function attentionShown(out: Out, item: AttentionFeedItem, injected: ReadonlySet<string>, clients: AttentionClientAdmitter): J | null {
+  if (!clients.covers(item)) return null;
+  const summary = attentionSummary(out, item, injected);
+  if (summary !== null) clients.admit(item);
+  return summary;
+}
+
+/** admitTaskClients for task ids (rows that carry a title but no client): the turn's open tasks first, then one read of the
+ *  rest. A failed read throws, so the result that would carry the titles fails rather than go out unrecorded. */
+async function admitTaskIdClients(ctx: ToolContext, taskIds: readonly string[]): Promise<void> {
+  const ids = [...new Set(taskIds.filter((id) => typeof id === "string" && id !== ""))];
+  if (ids.length === 0) return;
+  const open = new Map((await ctx.memo.openTasks()).map((t) => [t.id, t]));
+  const missing = ids.filter((id) => !open.has(id));
+  const read = missing.length > 0 ? await listTasksByIds(ctx.principal, missing.slice(0, 200), { signal: ctx.signal }) : [];
+  await admitTaskClients(ctx, [...ids.map((id) => open.get(id)).filter((t): t is DdTask => t !== undefined), ...read]);
 }
 
 function assigneeLabel(out: Out, t: DdTask, users: ReadonlyMap<string, DdUser>, departments: ReadonlyMap<string, DdDepartment>): string | null {
@@ -514,7 +611,31 @@ async function injectedThreadIds(ctx: ToolContext): Promise<ReadonlySet<string>>
 
 const AI_ATTENTION_KINDS: ReadonlySet<string> = new Set(DDTEXT_AI_KINDS);
 
+/** P9 F3 (N15, C24): a Slack attention item's consult privacy, from its ref's class: public only when the ref says public,
+ *  finance when it says finance, private otherwise (a missing ref or class included), so nothing unknown passes as public. */
+function attentionSlackPrivacy(item: Pick<AttentionFeedItem, "refs">): SlackPrivacy {
+  const cls = Array.isArray(item.refs) ? item.refs[0]?.class : undefined;
+  return cls === "public" ? "public" : cls === "finance" ? "finance" : "private";
+}
+
 function attentionSummary(out: Out, item: AttentionFeedItem, injected: ReadonlySet<string>): J | null {
+  // P9 F3 (N15, P7b C24): a Slack Needs Attention item is a Slack consult like any search_slack hit. It is admitted to the
+  // turn's Slack budget (synchronously, before the push) under its message key and channel, so a draft or a task after
+  // it is private_slack, the finish records it and its deletion redacts the answer; its text goes in an <untrusted_slack>
+  // block. An item that can't be admitted (no budget, a fingerprint that doesn't parse, a full budget) is left out.
+  const isSlack = item.source === "slack";
+  if (isSlack) {
+    const fp = parseSlackMsgFingerprint(item.fingerprint);
+    const budget = out.ctx.consultedSlack;
+    if (fp === null || !budget) {
+      out.note(SLACK_ATTENTION_WITHHELD);
+      return null;
+    }
+    if (!budget.admit([slackMessageKey(fp.channelId, fp.ts)], fp.channelId, attentionSlackPrivacy(item))) {
+      out.note(SLACK_INTEL_COPY.slackBudgetFull);
+      return null;
+    }
+  }
   const parsed = item.source === "email" ? parseEmailFingerprint(item.fingerprint) : null;
   const threadId = parsed?.threadId ?? null;
   if (threadId !== null && out.ctx.consulted.admit([threadId]).length === 0) {
@@ -523,7 +644,8 @@ function attentionSummary(out: Out, item: AttentionFeedItem, injected: ReadonlyS
   }
   const source = item.refs[0] ?? ddPageRef("/executive", "Needs Attention");
   const ref = out.ref({ type: "attention", id: item.id, threadId }, source);
-  const isAi = AI_ATTENTION_KINDS.has(item.kind) || (parsed !== null && (parsed.kind === "thread" || parsed.kind === "commitment"));
+  // Slack items render like the AI kinds, through a Slack block: the JSON keeps metadata only.
+  const isAi = isSlack || AI_ATTENTION_KINDS.has(item.kind) || (parsed !== null && (parsed.kind === "thread" || parsed.kind === "commitment"));
   const facts = item.facts.slice(0, 6);
   const json: J = {
     ref,
@@ -538,7 +660,7 @@ function attentionSummary(out: Out, item: AttentionFeedItem, injected: ReadonlyS
   if (isAi) {
     const lines = [`What happened: ${item.whatHappened}`, `Why it matters: ${item.whyItMatters}`];
     for (const f of facts) if (f.basis === "ai") lines.push(`Fact (AI-assessed): ${f.text}`);
-    Object.assign(json, out.block({ kind: "attention_text", ref, author: null, at: null, text: lines.join("\n") }));
+    Object.assign(json, out.block({ kind: isSlack ? "slack_text" : "attention_text", ref, author: null, at: null, text: lines.join("\n") }));
   } else {
     json.what_happened = out.t(item.whatHappened, 600);
     json.why_it_matters = out.t(item.whyItMatters, 600);
@@ -924,12 +1046,25 @@ async function getOverviewTool(args: J, ctx: ToolContext): Promise<ToolResultDra
   if (nowPart.email_buckets === null) delete nowPart.email_buckets;
 
   const roster = maps === "unavailable" ? null : maps;
+  let completedSorted =
+    completed === "unavailable"
+      ? null
+      : [...completed].sort((a, b) => (Date.parse(b.completedAt ?? "") || 0) - (Date.parse(a.completedAt ?? "") || 0) || cmpId(a.id, b.id));
+  // P9 F8 (C24): the clients of the completed tasks whose titles this result lists. When they can't be recorded (the
+  // client list can't be read) the list is left out as unavailable: no title goes out unrecorded.
+  if (completedSorted !== null && (await soft(out, "completed", () => admitTaskClients(ctx, (completedSorted as DdTask[]).slice(0, 10)), ctx.signal)) === "unavailable") {
+    completedSorted = null;
+  }
+  // P9 fixer security-3: the new attention items' task clients, read before any of them renders (one page of candidates);
+  // a failed read leaves the part out as unavailable, so no task title goes out unrecorded.
+  const attentionClients =
+    attention === "unavailable" ? null : await soft(out, "new_attention", () => attentionClientAdmitter(ctx, attention.items.slice(0, ATTENTION_PAGE)), ctx.signal);
   const windowPart: J = {
     completed:
-      completed === "unavailable"
-        ? completed
+      completedSorted === null
+        ? "unavailable"
         : (() => {
-            const sorted = [...completed].sort((a, b) => (Date.parse(b.completedAt ?? "") || 0) - (Date.parse(a.completedAt ?? "") || 0) || cmpId(a.id, b.id));
+            const sorted = completedSorted;
             return capList(
               sorted.slice(0, 10).map((t) => ({
                 ref: taskRef(out, t),
@@ -945,22 +1080,24 @@ async function getOverviewTool(args: J, ctx: ToolContext): Promise<ToolResultDra
     new_attention:
       attention === "unavailable"
         ? attention
-        : (() => {
-            const kept: J[] = [];
-            for (const item of attention.items) {
-              if (kept.length >= 10) break;
-              const s = attentionSummary(out, item, injected);
-              if (s) kept.push(s);
-            }
-            if (attention.screen === "unavailable") out.note(SCREEN_UNAVAILABLE_NOTE);
-            return {
-              ...capList(kept, 10, attention.items.length),
-              total_is_lower_bound: attention.lowerBound,
-              ...(attention.lowerBound ? { truncated: true } : {}),
-              email_screen: attention.screen,
-              email_hidden: attention.hidden
-            };
-          })()
+        : attentionClients === null || attentionClients === "unavailable"
+          ? "unavailable"
+          : (() => {
+              const kept: J[] = [];
+              for (const item of attention.items) {
+                if (kept.length >= 10) break;
+                const s = attentionShown(out, item, injected, attentionClients);
+                if (s) kept.push(s);
+              }
+              if (attention.screen === "unavailable") out.note(SCREEN_UNAVAILABLE_NOTE);
+              return {
+                ...capList(kept, 10, attention.items.length),
+                total_is_lower_bound: attention.lowerBound,
+                ...(attention.lowerBound ? { truncated: true } : {}),
+                email_screen: attention.screen,
+                email_hidden: attention.hidden
+              };
+            })()
   };
 
   const system = sections?.system.ok
@@ -1012,7 +1149,9 @@ async function listAttentionTool(args: J, ctx: ToolContext): Promise<ToolResultD
   };
   const page = await listScreenedAttention(ctx.principal, filters, { now: ctx.now, signal: ctx.signal, surface: screenSurface(ctx) });
   const injected = await injectedThreadIds(ctx);
-  const items = page.items.map((i) => attentionSummary(out, i, injected)).filter((x): x is J => x !== null);
+  // P9 fixer security-3: the items' task clients are read before any item renders; a failed read fails the call.
+  const clients = await attentionClientAdmitter(ctx, page.items);
+  const items = page.items.map((i) => attentionShown(out, i, injected, clients)).filter((x): x is J => x !== null);
   if (page.emailScreen === "unavailable") out.note(SCREEN_UNAVAILABLE_NOTE);
   return out.done({
     filters: filtersEcho,
@@ -1057,6 +1196,8 @@ async function completedItems(out: Out, ctx: ToolContext, taskIds: readonly stri
   const byId = new Map<string, J>();
   if (ids.length === 0) return byId;
   const [tasks, roster] = await Promise.all([listTasksByIds(ctx.principal, ids, { signal: ctx.signal }), withAssignee ? rosterMaps(ctx) : Promise.resolve(null)]);
+  // P9 F8 (C24): every task read here is listed under its row.
+  await admitTaskClients(ctx, tasks);
   for (const t of tasks) {
     byId.set(t.id, {
       ref: taskRef(out, t),
@@ -1208,6 +1349,15 @@ async function workingNow(out: Out, ctx: ToolContext, dept: DdDepartment | null,
   const pairs = shown.map((r) => ({ userId: r.userId, noteDate: localDateString(ctx.now, userById.get(r.userId)?.workTimezone ?? DEFAULT_ZONE) }));
   const notes = pairs.length > 0 ? await listSubmittedNotesText(ctx.principal, { kind: "sod", pairs }, { signal: ctx.signal }) : [];
   const sodBy = new Map(notes.map((n) => [`${n.userId}|${n.noteDate}`, n]));
+  // Each person's in-progress tasks, newest activity first; the row lists the first 5.
+  const inProgressOf = (r: (typeof shown)[number]) =>
+    [...r.inProgress].sort((a, b) => {
+      const x = taskById.get(a.taskId);
+      const y = taskById.get(b.taskId);
+      return (y ? activityMs(y) : 0) - (x ? activityMs(x) : 0) || cmpId(a.taskId, b.taskId);
+    });
+  // P9 F8 (C24): the clients of the in-progress tasks whose titles the rows list.
+  await admitTaskIdClients(ctx, shown.flatMap((r) => inProgressOf(r).slice(0, 5).map((t) => t.taskId)));
   const people = shown.map((r, i) => {
     const pair = pairs[i];
     const note = sodBy.get(`${pair.userId}|${pair.noteDate}`) ?? null;
@@ -1225,11 +1375,7 @@ async function workingNow(out: Out, ctx: ToolContext, dept: DdDepartment | null,
         sod = { ref, submitted_at: out.time(note.submittedAt), ...out.block({ kind: "sod_note", ref, author: r.name, at: formatInZone(note.submittedAt, ctx.principal.timezone, "datetime", ctx.now), text }) };
       }
     }
-    const inProgress = [...r.inProgress].sort((a, b) => {
-      const x = taskById.get(a.taskId);
-      const y = taskById.get(b.taskId);
-      return (y ? activityMs(y) : 0) - (x ? activityMs(x) : 0) || cmpId(a.taskId, b.taskId);
-    });
+    const inProgress = inProgressOf(r);
     return {
       ref: out.ref({ type: "person", id: r.userId }, personSource({ id: r.userId, name: r.name })),
       name: out.t(r.name, 120),
@@ -1284,6 +1430,8 @@ async function searchTasksTool(args: J, ctx: ToolContext): Promise<ToolResultDra
   const c = settle(out, "client", clientIn, resolveClient(clientIn, clients, { allowAny: true, strict: false }), (x) => out.ref({ type: "client", id: x.id }, ddClientRef(x)));
   if (c.kind === "answer") return c.draft;
   const clientName = c.kind === "value" ? c.value.name : null;
+  // P9 F8 (C24): a search scoped to a client consulted that client, whatever it finds.
+  if (c.kind === "value") ctx.consultedClients.add(c.value.id);
 
   const done = includeDone && status === "any" ? await listTasksCompletedBetween(ctx.principal, new Date(ctx.now.getTime() - 90 * DAY_MS).toISOString(), ctx.now.toISOString(), { signal: ctx.signal }) : [];
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -1313,6 +1461,8 @@ async function searchTasksTool(args: J, ctx: ToolContext): Promise<ToolResultDra
     .sort((a, b) => (Date.parse(b.completedAt ?? "") || 0) - (Date.parse(a.completedAt ?? "") || 0) || cmpId(a.id, b.id));
   const all = [...openHits, ...doneHits];
   const projectName = new Map(projects.map((p) => [p.id, p.name]));
+  // P9 F8 (C24): the clients of the tasks whose titles this result carries.
+  await admitTaskClients(ctx, all.slice(0, limit));
   const shown = all.slice(0, limit).map((t) => ({
     ref: taskRef(out, t),
     id: t.id,
@@ -1364,6 +1514,8 @@ async function taskDetail(out: Out, ctx: ToolContext, taskId: string): Promise<J
     }
   }
   if (withheld !== null && !out.notes.includes(CONSULTED_NOTE)) out.note(WITHHELD_NOTE);
+  // P9 F8 (C24): the task's title (and its text, when shown) reach the result: its client was consulted.
+  await admitTaskClients(ctx, [task]);
 
   const ref = taskRef(out, task);
   const at = (iso: string) => formatInZone(iso, ctx.principal.timezone, "datetime", ctx.now);
@@ -1512,6 +1664,18 @@ async function projectList(out: Out, ctx: ToolContext, onlyProblems: boolean): P
 async function projectDetail(out: Out, ctx: ToolContext, projectId: string): Promise<J> {
   const d = await getProjectDetail(ctx.principal, projectId, { now: ctx.now, signal: ctx.signal });
   if (d === null) throw notFound(`No project has id ${out.t(projectId, 100)}. Call project_health with '' to list them.`);
+  // P9 F8 (C24): the clients of the tasks whose titles this result lists: the delays (≤ 10 each), the updates feed's task
+  // events (≤ 10) and the derived blockers' task refs; and the project's derived client, whose name the summary shows.
+  const taskIdOf = (r: SourceRef | null): string[] => {
+    const t = r === null ? null : targetFromSourceRef(r);
+    return t !== null && t.type === "task" ? [t.id] : [];
+  };
+  await admitTaskIdClients(ctx, [
+    ...(d.delays.ok ? [...d.delays.data.overdue.slice(0, 10), ...d.delays.data.extensions.slice(0, 10)].map((x) => x.taskId) : []),
+    ...(d.updates.ok ? d.updates.data.slice(0, 10).flatMap((u) => taskIdOf(u.ref)) : []),
+    ...(d.blockers.ok ? d.blockers.data.derived.slice(0, 10).flatMap((b) => b.refs.slice(0, 5).flatMap((r) => taskIdOf(r))) : [])
+  ]);
+  if (d.summary.ok && d.summary.data.derivedClient !== null) ctx.consultedClients.add(d.summary.data.derivedClient.clientId);
   const tz = ctx.principal.timezone;
   const pref = out.ref({ type: "project", id: d.project.id }, d.project.ref);
   const summary = d.summary.ok
@@ -1661,6 +1825,8 @@ async function approvalsFor(out: Out, ctx: ToolContext, mechanism: string): Prom
           supported = false;
           items = capList([], limit, list.total);
         } else {
+          // P9 F8 (C24): the clients of the items whose titles this result lists.
+          await admitTaskClients(ctx, list.items.slice(0, limit));
           items = capList(
             list.items.slice(0, limit).map((i) => ({
               ref: out.ref({ type: "approval", mechanism: m, id: i.id }, i.taskId !== null ? ddTaskRef({ id: i.taskId, title: i.title }) : (pages[0] ?? ddPageRef("/approvals", "Approvals"))),
@@ -1726,6 +1892,8 @@ async function recurringIssuesTool(args: J, ctx: ToolContext): Promise<ToolResul
   const titleOf = new Map(tasks.map((t) => [t.id, t.title]));
   const nameOf = new Map(users.map((u) => [u.id, u.name]));
   const incidentTasks = open.filter((t) => isIncident(t)).sort((a, b) => activityMs(b) - activityMs(a) || cmpId(a.id, b.id));
+  // P9 F8 (C24): the clients of the re-dated and incident tasks whose titles this result lists.
+  await admitTaskClients(ctx, [...tasks, ...incidentTasks.slice(0, 10)]);
   out.note("Extension groups by person count who filed them (filed_by), not who is assigned.");
   return out.done({
     window_days: windowDays,
@@ -1866,15 +2034,23 @@ async function clientDetail(out: Out, ctx: ToolContext, client: DdClient): Promi
     projectsPart = capList(named.slice(0, 10).map((p) => ({ ref: out.ref({ type: "project", id: p.id }, ddProjectRef(p)), name: out.t(p.name, 200) })), 10, named.length);
   }
   let attentionPart: unknown = attention;
+  // P9 fixer security-3: the items' task clients (an item about this client can still cite another client's task), read
+  // before any item renders; a failed read leaves the part out as unavailable.
+  const attentionClients =
+    attention === "unavailable" ? null : await soft(out, "attention", () => attentionClientAdmitter(ctx, attention.items.slice(0, ATTENTION_PAGE)), ctx.signal);
   if (attention !== "unavailable") {
-    const kept: J[] = [];
-    for (const i of attention.items) {
-      if (kept.length >= 5) break;
-      const summary = attentionSummary(out, i, injected);
-      if (summary) kept.push(summary);
+    if (attentionClients === null || attentionClients === "unavailable") {
+      attentionPart = "unavailable";
+    } else {
+      const kept: J[] = [];
+      for (const i of attention.items) {
+        if (kept.length >= 5) break;
+        const summary = attentionShown(out, i, injected, attentionClients);
+        if (summary) kept.push(summary);
+      }
+      if (attention.screen === "unavailable") out.note(SCREEN_UNAVAILABLE_NOTE);
+      attentionPart = { ...capList(kept, 5, attention.items.length), email_screen: attention.screen, email_hidden: attention.hidden };
     }
-    if (attention.screen === "unavailable") out.note(SCREEN_UNAVAILABLE_NOTE);
-    attentionPart = { ...capList(kept, 5, attention.items.length), email_screen: attention.screen, email_hidden: attention.hidden };
   }
   let meetingsPart: unknown = meetings === "unavailable" ? meetings : null;
   if (meetings !== "unavailable") {
@@ -2175,6 +2351,9 @@ async function emailThreadDetail(out: Out, ctx: ToolContext, threadId: string): 
   // P3 L2: the stored screen, then the live read, then the live screen, and only then any body.
   const stored = await getEmailThread(ctx.principal, threadId, { signal: ctx.signal });
   if (stored !== null && (stored.state === "gone" || screenStoredRow(stored, access.rules, access.policyHash).verdict === "restricted")) return { ...UNAVAILABLE_THREAD };
+  // P9 F7 (P3 ui-3): a stored row of a mailbox he no longer has pinned is not his thread here (its page 404s): unavailable,
+  // before any live read, so its stored triage can't stand in when the clone fails.
+  if (stored !== null && !isPinnedAccount(ctx.principal, stored.accountId)) return { ...UNAVAILABLE_THREAD };
   let thread: PrincipalMailThread | null = null;
   try {
     const read = await ctx.cloneSlots.run(() => readPrincipalThread(ctx.principal, threadId, { usable: access.usable, timeoutMs: LIVE_READ_MS, signal: ctx.signal }));
@@ -2282,6 +2461,8 @@ async function screenCommitments(ctx: ToolContext, access: OnAccess, list: reado
   let hidden = 0;
   for (const c of list) {
     const row = rows.get(c.threadId);
+    // P9 F7 (P3 ui-3): a commitment of a mailbox he no longer has pinned is neither shown nor counted.
+    if (row && !isPinnedAccount(ctx.principal, row.accountId)) continue;
     if (!row || row.state === "gone" || screenStoredRow(row, access.rules, access.policyHash).verdict === "restricted") hidden += 1;
     else kept.push(c);
   }
@@ -2603,8 +2784,12 @@ async function getSourceTool(args: J, ctx: ToolContext): Promise<ToolResultDraft
       if (!res.ok) {
         return wrap({ note: res.reason === "screen_unavailable" ? "This item couldn't be checked just now; say email wasn't checked." : "No longer available." });
       }
-      const summary = attentionSummary(out, res.item, await injectedThreadIds(ctx));
-      return wrap(summary === null ? { note: CONSULTED_NOTE } : { item: summary });
+      // P9 fixer security-3: the item's task clients are read first; a failed read fails the call (nothing goes out unrecorded).
+      const clients = await attentionClientAdmitter(ctx, [res.item]);
+      const summary = attentionShown(out, res.item, await injectedThreadIds(ctx), clients);
+      if (summary !== null) return wrap({ item: summary });
+      // P9 F3: a withheld Slack item already carries its own note (SLACK_ATTENTION_WITHHELD or slackBudgetFull), not the email cap's.
+      return wrap(res.item.source === "slack" ? {} : { note: CONSULTED_NOTE });
     }
     case "email_thread":
       return wrap(await emailThreadDetail(out, ctx, t.id));
@@ -2664,6 +2849,8 @@ async function personDetail(out: Out, ctx: ToolContext, userId: string): Promise
   const deptName = new Map([...roster.departments.values()].map((d) => [d.id, d.name]));
   const row = team.people.ok ? team.people.data.find((p) => p.userId === userId) : undefined;
   const tasks = open.filter((t) => t.assigneeId === userId).sort((a, b) => activityMs(b) - activityMs(a) || cmpId(a.id, b.id));
+  // P9 F8 (C24): the clients of the open tasks whose titles this result lists.
+  await admitTaskClients(ctx, tasks.slice(0, 10));
   return {
     person: row ? personRow(out, row, deptName, false, new Map(), () => undefined, () => undefined) : team.people.ok ? { note: "No longer available." } : out.gone("person"),
     open_tasks: capList(

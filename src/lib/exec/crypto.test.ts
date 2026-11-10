@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SecretUnavailableError,
   cryptoConfigured,
+  currentKeyIds,
   needsReseal,
   openSecret,
   sealSecret,
@@ -224,5 +225,20 @@ describe("needsReseal", () => {
     expect(needsReseal(TOKEN)).toBe(true);
     expect(needsReseal("")).toBe(true);
     expect(needsReseal(null as unknown as string)).toBe(true);
+  });
+});
+
+describe("currentKeyIds (P9 F13: the System card compares stored key ids, never key material)", () => {
+  it("the kid of EXEC_TOKEN_KEY and, while set, of EXEC_TOKEN_KEY_PREVIOUS (the same kid a sealed blob names); not configured → throws", () => {
+    setKeys(KEY_A);
+    expect(currentKeyIds()).toEqual({ current: kidOf(KEY_A), previous: null });
+    expect(sealSecret(TOKEN, CTX).split(".")[1]).toBe(currentKeyIds().current);
+    setKeys(KEY_B, KEY_A);
+    expect(currentKeyIds()).toEqual({ current: kidOf(KEY_B), previous: kidOf(KEY_A) });
+    expect(JSON.stringify(currentKeyIds())).not.toContain(KEY_A);
+    setKeys(undefined, KEY_A);
+    failure(() => currentKeyIds(), "not_configured");
+    setKeys("not base64 at all!");
+    failure(() => currentKeyIds(), "misconfigured");
   });
 });

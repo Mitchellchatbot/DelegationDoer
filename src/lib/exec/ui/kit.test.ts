@@ -1,17 +1,30 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BASIS_META, BasisLabel } from "@/components/exec/BasisLabel";
-import { CATEGORY_META, CategoryBadge } from "@/components/exec/CategoryBadge";
+import { TONE as BRIEF_PILL_TONE } from "@/components/exec/brief/BriefPill";
+import { BRIEF_WITHHELD_TEXT } from "@/components/exec/brief/BriefView";
+import { CATEGORY_FALLBACK_CLASS, CATEGORY_META, CategoryBadge } from "@/components/exec/CategoryBadge";
+import { prefersReducedMotion } from "@/components/exec/chat/ExecChat";
+import { CHIP_TONE } from "@/components/exec/email/parts";
 import { EmptyState } from "@/components/exec/EmptyState";
-import { EXEC_TABS, ExecTabs } from "@/components/exec/ExecTabs";
+import { EXEC_GEAR, EXEC_TABS, EXEC_TAB_PILL, EXEC_TAB_STRIP, ExecTabs } from "@/components/exec/ExecTabs";
 import { ExecHeader } from "@/components/exec/ExecHeader";
 import { FactList } from "@/components/exec/FactList";
+import { ZERO_COUNT_TEXT } from "@/components/exec/overview/ApprovalsSection";
+import { STATUS_META as OVERVIEW_PROJECT_STATUS } from "@/components/exec/overview/ProjectsSection";
 import { BAND_META, PriorityBandBadge } from "@/components/exec/PriorityBandBadge";
+import { NEUTRAL_BADGE, PROJECT_STATUS_META } from "@/components/exec/projects/labels";
 import { SectionCard } from "@/components/exec/SectionCard";
+import { SWITCH_BUTTON, SWITCH_TRACK } from "@/components/exec/settings/SettingsForm";
 import { SourceLinks } from "@/components/exec/SourceLinks";
 import { Sparkline } from "@/components/exec/Sparkline";
-import { StatTile } from "@/components/exec/StatTile";
+import { StatTile, TINT as TILE_TINT, TONE as TILE_TONE } from "@/components/exec/StatTile";
+import { TWO_STEP_ALERT } from "@/components/TwoStepSection";
 import type { AttentionCategory, AttentionFact, FactBasis, PriorityBand } from "@/lib/exec/attention-types";
 import type { SourceRef } from "@/lib/exec/types";
 
@@ -184,7 +197,8 @@ describe("StatTile", () => {
   it("renders a delta in its tone and escapes text", () => {
     const out = html(createElement(StatTile, { label: SCRIPT, value: SCRIPT, delta: { text: "+3 vs yesterday", tone: "good" } }));
     expect(out).toContain("+3 vs yesterday");
-    expect(out).toContain("text-emerald-600");
+    // P9 F5 (flip): emerald-600 was 3.77:1 on white; emerald-700 is 5.48:1.
+    expect(out).toContain("text-emerald-700");
     expect(out).not.toContain("<script");
   });
 });
@@ -359,5 +373,246 @@ describe("EmptyState", () => {
 
   it("escapes its message", () => {
     expect(html(createElement(EmptyState, { message: SCRIPT }))).toContain(ESCAPED);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9 (contract §2.7, F5, F25, F33): contrast, tap targets, reduced motion
+// ---------------------------------------------------------------------------
+
+const P9_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
+const palette = createRequire(import.meta.url)("tailwindcss/colors") as Record<string, Record<string, string> | string>;
+
+/** The tailwind.config.ts tokens the exec classes use, read from the config file itself (so the test follows it). */
+function configTokens(): Record<string, string> {
+  const text = readFileSync(path.join(P9_ROOT, "tailwind.config.ts"), "utf8");
+  const out: Record<string, string> = {};
+  for (const m of text.matchAll(/^\s*"?([a-z0-9-]+)"?:\s*"(#[0-9A-Fa-f]{6})"/gm)) out[m[1]] = m[2];
+  return out;
+}
+const TOKENS = configTokens();
+
+function hex(token: string): string {
+  if (token === "white") return "#ffffff";
+  if (token === "black") return "#000000";
+  if (TOKENS[token]) return TOKENS[token];
+  const m = /^([a-z]+)-(\d{2,3})$/.exec(token);
+  const shades = m ? palette[m[1]] : undefined;
+  const value = m && typeof shades === "object" ? shades[m[2]] : undefined;
+  if (typeof value !== "string") throw new Error(`no color for ${token}`);
+  return value;
+}
+type Rgb = [number, number, number];
+const rgb = (h: string): Rgb => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)) as Rgb;
+const blend = (fg: Rgb, under: Rgb, alpha: number): Rgb => fg.map((c, i) => c * alpha + under[i] * (1 - alpha)) as Rgb;
+const channel = (c: number) => {
+  const s = c / 255;
+  return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+};
+const luminance = ([r, g, b]: Rgb) => 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+const contrast = (a: Rgb, b: Rgb) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+};
+/** "amber-50", "ok/10", "white/10" → a color, blended over `under` when it has an alpha. */
+function colorOf(spec: string, under: Rgb): Rgb {
+  const [token, alpha] = spec.split("/");
+  const c = rgb(hex(token));
+  return alpha === undefined ? c : blend(c, under, Number(alpha) / 100);
+}
+/** The text and background color classes of one class string (state and breakpoint variants ignored). */
+function colorClasses(classes: string): { text: string | null; bg: string | null } {
+  let text: string | null = null;
+  let bg: string | null = null;
+  for (const t of classes.split(/\s+/)) {
+    if (t.includes(":")) continue;
+    // A palette color ("amber-800"), a config token ("ok", "surface2", "accent"), each with an optional "/alpha".
+    const tm = /^text-([a-z]+[0-9]?(?:-\d{1,3})?(?:\/\d{1,3})?)$/.exec(t);
+    if (tm && !/^(?:left|right|center|justify|xs|sm|base|lg|xl|\d?xl)$/.test(tm[1])) text = tm[1];
+    const bm = /^bg-([a-z]+[0-9]?(?:-\d{1,3})?(?:\/\d{1,3})?)$/.exec(t);
+    if (bm && !/^(?:gradient|clip|fixed|cover|contain|center|none|repeat)$/.test(bm[1])) bg = bm[1];
+  }
+  return { text, bg };
+}
+const WHITE: Rgb = [255, 255, 255];
+/** text vs its own background (or `fallbackBg` when the class string has none), each alpha blended over `under`. */
+function ratioOf(classes: string, opts: { under?: Rgb; fallbackBg?: string } = {}): number {
+  const under = opts.under ?? WHITE;
+  const { text, bg } = colorClasses(classes);
+  if (text === null) throw new Error(`no text color in "${classes}"`);
+  const background = bg !== null ? colorOf(bg, under) : opts.fallbackBg ? colorOf(opts.fallbackBg, under) : under;
+  return contrast(colorOf(text, background), background);
+}
+
+describe("P9 F5: meaning-carrying tones meet WCAG AA (4.5:1 for text, 3:1 for the switch track)", () => {
+  const AA = 4.5;
+
+  it("the computation itself: known pairs from the audit (the old tones fail, the new ones pass)", () => {
+    expect(ratioOf("text-warn bg-warn/10")).toBeLessThan(3);
+    expect(ratioOf("text-ok bg-ok/10")).toBeLessThan(3);
+    expect(ratioOf("text-muted bg-surface2")).toBeLessThan(AA);
+    expect(ratioOf("text-slate-400")).toBeLessThan(3);
+    expect(ratioOf("text-amber-800 bg-amber-50")).toBeCloseTo(6.84, 1);
+    expect(ratioOf("text-slate-500")).toBeCloseTo(4.76, 1);
+  });
+
+  it("PriorityBandBadge: every band", () => {
+    for (const [band, meta] of Object.entries(BAND_META)) expect(ratioOf(meta.className), band).toBeGreaterThanOrEqual(AA);
+    expect(Object.values(BAND_META).map((m) => m.className).join(" ")).not.toMatch(/\bbadge-(?:high|critical|low)\b/);
+  });
+
+  it("CategoryBadge: every category and the unknown fallback", () => {
+    for (const [category, meta] of Object.entries(CATEGORY_META)) expect(ratioOf(meta.className), category).toBeGreaterThanOrEqual(AA);
+    expect(ratioOf(CATEGORY_FALLBACK_CLASS)).toBeGreaterThanOrEqual(AA);
+  });
+
+  it("project status (the Projects pages and the Overview section) and the neutral badge", () => {
+    for (const [status, meta] of Object.entries(PROJECT_STATUS_META)) expect(ratioOf(meta.className), status).toBeGreaterThanOrEqual(AA);
+    for (const [status, meta] of Object.entries(OVERVIEW_PROJECT_STATUS)) expect(ratioOf(meta.className), status).toBeGreaterThanOrEqual(AA);
+    expect(ratioOf(NEUTRAL_BADGE)).toBeGreaterThanOrEqual(AA);
+  });
+
+  it("the email chips", () => {
+    for (const [tone, classes] of Object.entries(CHIP_TONE)) expect(ratioOf(classes), tone).toBeGreaterThanOrEqual(AA);
+  });
+
+  it("StatTile: every delta tone on every tint (the tint's 60% wash over the page background)", () => {
+    const page = rgb(hex("bg"));
+    for (const [tint, tintClasses] of Object.entries(TILE_TINT)) {
+      const bg = colorClasses(tintClasses).bg;
+      for (const [tone, textClass] of Object.entries(TILE_TONE)) {
+        expect(ratioOf(textClass, { under: page, fallbackBg: bg ?? undefined }), `${tone} on ${tint}`).toBeGreaterThanOrEqual(AA);
+      }
+    }
+  });
+
+  it("BasisLabel: light on white, dark on the brief card's slate-900", () => {
+    const card = rgb(hex("slate-900"));
+    for (const [basis, meta] of Object.entries(BASIS_META)) {
+      expect(ratioOf(meta.light), `${basis} light`).toBeGreaterThanOrEqual(AA);
+      expect(ratioOf(meta.dark, { under: card }), `${basis} dark`).toBeGreaterThanOrEqual(AA);
+    }
+  });
+
+  it("a withheld brief line, a zero count, the header's Private pill and every brief pill state", () => {
+    expect(ratioOf(BRIEF_WITHHELD_TEXT)).toBeGreaterThanOrEqual(AA);
+    expect(ratioOf(ZERO_COUNT_TEXT)).toBeGreaterThanOrEqual(AA);
+    const header = html(createElement(ExecHeader, { updatedAt: "2026-11-04T13:02:00Z", tz: "UTC" }));
+    const pill = /<span class="([^"]*)">Private<\/span>/.exec(header)?.[1] ?? "";
+    expect(ratioOf(pill)).toBeGreaterThanOrEqual(AA);
+    for (const [state, classes] of Object.entries(BRIEF_PILL_TONE)) expect(ratioOf(classes), state).toBeGreaterThanOrEqual(AA);
+  });
+
+  it("P9 fixer ui-6: the two-step error text (login code step, Settings) is AA on the white card and on the login card's tint", () => {
+    // The old pair, text-urgent on urgent/10, is the F5 failure (4.13:1 on white).
+    expect(ratioOf("text-urgent bg-urgent/10")).toBeLessThan(AA);
+    expect(ratioOf(TWO_STEP_ALERT)).toBeGreaterThanOrEqual(AA);
+    expect(ratioOf(TWO_STEP_ALERT)).toBeCloseTo(5.72, 1);
+    // The login card is a blue/indigo wash: its darkest stop (blue-200 at 80%) under the alert, which is opaque either way.
+    const loginCard = colorOf("blue-200/80", rgb(hex("bg")));
+    expect(ratioOf(TWO_STEP_ALERT, { under: loginCard })).toBeGreaterThanOrEqual(AA);
+    expect(colorClasses(TWO_STEP_ALERT).bg, "an opaque background").not.toMatch(/\//);
+    // Every alert in the file uses it (no other urgent-on-urgent pair left there).
+    const src = readFileSync(path.join(P9_ROOT, "src/components/TwoStepSection.tsx"), "utf8");
+    expect(src).not.toMatch(/text-urgent/);
+  });
+
+  it("the switches' off track stands out from white (3:1, WCAG 1.4.11), and all three switches use it", () => {
+    expect(contrast(colorOf(SWITCH_TRACK.off.replace(/^bg-/, ""), WHITE), WHITE)).toBeGreaterThanOrEqual(3);
+    expect(contrast(colorOf(SWITCH_TRACK.on.replace(/^bg-/, ""), WHITE), WHITE)).toBeGreaterThanOrEqual(3);
+    for (const rel of ["settings/SettingsForm.tsx", "settings/BriefSettingsForm.tsx", "settings/SlackReadingControls.tsx"]) {
+      const src = readFileSync(path.join(P9_ROOT, "src/components/exec", rel), "utf8");
+      expect(src, rel).toMatch(/className=\{switchTrackClass\(on\)\}/);
+      expect(src, rel).not.toMatch(/bg-slate-300/);
+    }
+  });
+});
+
+describe("P9 F25: 40 px tap targets below sm", () => {
+  it("every tab pill carries a base (unprefixed) min-h-10, and the gear is 40x40 below sm", () => {
+    expect(EXEC_TAB_PILL.split(" ")).toEqual(expect.arrayContaining(["min-h-10", "sm:min-h-0"]));
+    expect(EXEC_GEAR.split(" ")).toEqual(expect.arrayContaining(["h-10", "w-10", "sm:h-8", "sm:w-8"]));
+    const out = html(createElement(ExecTabs, { active: "overview", tabs: EXEC_TABS }));
+    const links = [...out.matchAll(/<a [^>]*class="([^"]*)"/g)].map((m) => m[1].split(" "));
+    expect(links).toHaveLength(EXEC_TABS.length + 1);
+    for (const c of links.slice(0, EXEC_TABS.length)) expect(c).toContain("min-h-10");
+    expect(links[EXEC_TABS.length]).toEqual(expect.arrayContaining(["h-10", "w-10"]));
+  });
+
+  it("P9 fixer ui-2: below sm the strip wraps, so the current pill is on screen with no script; one row from sm up", () => {
+    const classes = EXEC_TAB_STRIP.split(" ");
+    // Below sm (unprefixed): wraps onto rows inside a rounded box; nothing forces one line.
+    expect(classes).toEqual(expect.arrayContaining(["flex-wrap", "rounded-2xl", "min-w-0", "max-w-full"]));
+    expect(classes).not.toContain("flex-nowrap");
+    expect(classes).not.toContain("whitespace-nowrap");
+    expect(classes).not.toContain("rounded-full");
+    // From sm up: the one-row pill as before.
+    expect(classes).toEqual(expect.arrayContaining(["sm:flex-nowrap", "sm:rounded-full", "sm:gap-0.5"]));
+    for (const active of ["overview", "projects", "chat"]) {
+      const out = html(createElement(ExecTabs, { active, tabs: EXEC_TABS }));
+      expect(/<div data-exec-tab-strip="true" class="([^"]*)"/.exec(out)?.[1], active).toBe(EXEC_TAB_STRIP);
+    }
+  });
+
+  it("the switches are a 40x56 px hit area below sm around the 24x44 track", () => {
+    expect(SWITCH_BUTTON.split(" ")).toEqual(expect.arrayContaining(["h-10", "w-14", "sm:h-6", "sm:w-11"]));
+  });
+
+  it("the draft page makes the shared editor's two format buttons 40x40 px with an 8 px gap below sm, the editor's own 28 px from sm", () => {
+    // DD's shared email editor (src/components/email-editor) draws them at 28x28 with a 4 px gap and stays unchanged; the
+    // exec draft panel's wrapper sizes its direct children, the two buttons, with Tailwind's child variant (the §2.7
+    // harness's TT01 at 390 px).
+    const src = readFileSync(path.join(P9_ROOT, "src/components/exec/drafts/DraftPanel.tsx"), "utf8");
+    const wrap = /export const FORMAT_BUTTONS_WRAP = "([^"]*)";/.exec(src)?.[1] ?? "";
+    expect(wrap.split(" ")).toEqual(expect.arrayContaining(["gap-2", "sm:gap-1", "*:h-10", "*:w-10", "sm:*:h-7", "sm:*:w-7"]));
+    expect(src).toMatch(/<span className=\{FORMAT_BUTTONS_WRAP\}>\s*<EmailFormatButtons /);
+    expect(src.match(/<EmailFormatButtons /g)).toHaveLength(1);
+  });
+});
+
+describe("P9 F33: reduced motion", () => {
+  const files = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(path.join(dir, e.name)) : e.name.endsWith(".tsx") ? [path.join(dir, e.name)] : []));
+  const EXEC_COMPONENTS = path.join(P9_ROOT, "src/components/exec");
+
+  /** Every string literal (quotes or backticks) in a source file: the class lists among them. */
+  const literals = (src: string) => [...src.matchAll(/"([^"\n]*)"|'([^'\n]*)'|`([^`]*)`/g)].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
+
+  /** The motion classes of one literal that have no reduced-motion partner. */
+  function unguarded(literal: string): string[] {
+    const tokens = literal.split(/\s+/);
+    const bad: string[] = [];
+    for (const t of tokens) {
+      if (/(?:^|:)animate-(?!none)/.test(t) && !t.startsWith("motion-safe:") && !tokens.includes("motion-reduce:animate-none")) bad.push(t);
+      if (/(?:^|:)transition-transform$/.test(t) && !t.startsWith("motion-safe:") && !tokens.includes("motion-reduce:transition-none")) bad.push(t);
+    }
+    return bad;
+  }
+
+  it("the check finds an unguarded spin and a bare transform transition (control)", () => {
+    expect(unguarded("h-3 w-3 animate-spin text-slate-400")).toEqual(["animate-spin"]);
+    expect(unguarded("transition-transform group-open:rotate-180")).toEqual(["transition-transform"]);
+    expect(unguarded("motion-safe:animate-spin")).toEqual([]);
+    expect(unguarded("transition-transform motion-reduce:transition-none")).toEqual([]);
+  });
+
+  it("every animate-* and transition-transform under components/exec has a motion-safe: / motion-reduce: partner", () => {
+    const found: string[] = [];
+    for (const file of files(EXEC_COMPONENTS)) {
+      const src = readFileSync(file, "utf8");
+      for (const lit of literals(src)) for (const t of unguarded(lit)) found.push(`${path.relative(EXEC_COMPONENTS, file)}: ${t}`);
+    }
+    expect(found).toEqual([]);
+  });
+
+  it("no smooth scroll that ignores prefers-reduced-motion", () => {
+    for (const file of files(EXEC_COMPONENTS)) {
+      const src = readFileSync(file, "utf8");
+      expect(src, path.relative(EXEC_COMPONENTS, file)).not.toMatch(/behavior:\s*["']smooth["']/);
+    }
+    expect(prefersReducedMotion({ matchMedia: () => ({ matches: true }) })).toBe(true);
+    expect(prefersReducedMotion({ matchMedia: () => ({ matches: false }) })).toBe(false);
+    expect(prefersReducedMotion(undefined)).toBe(false);
+    expect(prefersReducedMotion({})).toBe(false);
   });
 });

@@ -15,7 +15,8 @@ import { listSystemScheduledWork } from "@/lib/exec/scheduler";
 // job kind, holds no select-star and no SQL that reads content, sealed secrets or a factor secret, and that its §16
 // lockdown grid counts the exec tables, sequences and functions the migrations really create. The authenticator P9 added
 // (its code, the factor pin EXEC_OWNER_MFA_FACTOR_IDS) was removed on 2026-11-10: RB12 pins that the runbook names it
-// only in §4's removal note.
+// only in §4's removal note. The same day the step-up became a switch, EXEC_REQUIRE_PASSWORD_SIGNIN, off unless "true"
+// (sign-in link sessions on his account open the assistant): RB13 pins that the runbook documents it off by default.
 
 const SRC = fileURLToPath(new URL("../../../", import.meta.url));
 const ROOT = path.dirname(path.resolve(SRC));
@@ -175,10 +176,11 @@ describe("docs/exec-assistant.md (P9 contract §4)", () => {
     expect(acceptance).toMatch(/non-production Supabase project/);
     // Since the authenticator's removal (2026-11-10) only the F1 case is a proven refusal; the password case is §14's gap,
     // which §14 states (and no longer claims "either way"), with a link session's own authenticator still refused (F1).
+    // Both hold only while EXEC_REQUIRE_PASSWORD_SIGNIN=true (2026-11-10, RB13), so §14 states them for the switch on.
     expect(acceptance.replace(/\s+/g, " ")).toContain('the "sets a new password" case is a known gap (§14)');
     const gaps = section(14).replace(/\s+/g, " ");
     expect(gaps).not.toMatch(/either way/);
-    expect(gaps).toContain("can set a new password from DD Settings and then sign in with it");
+    expect(gaps).toContain("With the switch on, a sign-in link session on his account can set a new password from DD Settings and then sign in with it");
     expect(gaps).toContain("A link session that enrols an authenticator of its own is still refused");
     // ui-9 (a): the label the Settings page really renders, and the refusal alert's real title.
     const view = readFileSync(path.join(SRC, "components/exec/settings/SettingsPageView.tsx"), "utf8");
@@ -186,6 +188,8 @@ describe("docs/exec-assistant.md (P9 contract §4)", () => {
     expect(label).toBe("Refused: not a password sign-in");
     const monitoring = section(11).replace(/\s+/g, " ");
     expect(monitoring).toContain(`("${label}")`);
+    // 2026-11-10: a refused row is written only while the step-up is switched on (RB13).
+    expect(monitoring).toContain("Refused rows appear only while `EXEC_REQUIRE_PASSWORD_SIGNIN=true`");
     const access = readFileSync(path.join(SRC, "lib/exec/access.ts"), "utf8");
     const title = /STEP_UP_REFUSED_OPS = Object\.freeze\(\{[\s\S]*?title: "([^"]+)"/.exec(access)?.[1] ?? "";
     expect(title).toBe("A session on the owner's account that wasn't a password sign-in was refused");
@@ -267,5 +271,21 @@ describe("docs/exec-assistant.md (P9 contract §4)", () => {
     // ...and nothing under src/lib/exec raises the alerts the note calls gone.
     const code = sourceFiles(path.join(SRC, "lib/exec")).map((f) => readFileSync(f, "utf8")).join("\n");
     for (const key of ["exec-owner-unpinned-factor:", "exec-owner-mfa-misconfigured"]) expect(code, key).not.toContain(key);
+  });
+
+  it("RB13 (2026-11-10) EXEC_REQUIRE_PASSWORD_SIGNIN is off by default: §2 says so (sign-in link sessions admitted), as access.ts reads it, and §14 says what that leaves open", () => {
+    // The code: only "true" turns the step-up on, so unset (the default) is off.
+    const access = readFileSync(path.join(SRC, "lib/exec/access.ts"), "utf8");
+    expect(access).toMatch(/process\.env\.EXEC_REQUIRE_PASSWORD_SIGNIN === "true"/);
+    // §2's row: unset is off, the team's sign-in link sessions are admitted, and only `true` turns it on.
+    const row = section(2).split("\n").find((l) => l.startsWith("| `EXEC_REQUIRE_PASSWORD_SIGNIN` |")) ?? "";
+    expect(row).toContain(
+      "Unset (the default), the step-up is off: every session on Mitchell's account opens the assistant's pages and APIs, the team's sign-in link sessions included"
+    );
+    expect(row).toContain("Only `true` turns it on");
+    // §14: the consequence of the default, stated.
+    expect(section(14).replace(/\s+/g, " ")).toContain(
+      "With `EXEC_REQUIRE_PASSWORD_SIGNIN` off (the default since 2026-11-10, the team's choice), anyone who can sign in as Mitchell can open the assistant"
+    );
   });
 });

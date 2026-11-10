@@ -52,7 +52,7 @@ import { requireExecPrincipal } from "@/lib/exec/access";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getSupabaseServer } from "@/lib/supabase-server";
 import { loadPrincipalForUser } from "@/lib/exec/principal";
-import { OWNER_AUTH_ID, linkWithOwnFactorToken, settle, strongToken } from "./__tests__/step-up-fixtures";
+import { OWNER_AUTH_ID, linkWithOwnFactorToken, settle, stepUpToken, strongToken } from "./__tests__/step-up-fixtures";
 import { auditFinish, auditStart } from "@/lib/exec/audit";
 import { enqueueJob } from "@/lib/exec/jobs";
 import { notifyOps } from "@/lib/exec/ops";
@@ -99,6 +99,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  // Unstub first: the reset below then leaves exactly a copy of ENV, whatever values the stubs saved.
+  vi.unstubAllEnvs();
   process.env = { ...ENV };
 });
 
@@ -416,8 +418,10 @@ describe("RS13 what an answer may carry", () => {
 });
 
 // P9 F1: the route's own gate call, run for real (vi.importActual) over a faked session, in front of a reviewed, sendable
-// draft. A leader-minted link session that enrolled its own authenticator (aal2, amr [totp, otp]) must get the gate's 404:
-// no audit row, no CAS, and no /send to the clone. His password sign-in (aal1, amr [password]) is what the gate admits.
+// draft. With the step-up on (EXEC_REQUIRE_PASSWORD_SIGNIN=true), a leader-minted link session that enrolled its own
+// authenticator (aal2, amr [totp, otp]) must get the gate's 404: no audit row, no CAS, and no /send to the clone; his
+// password sign-in (aal1, amr [password]) is what it admits. Off (the default since 2026-11-10), the team's sign-in link
+// sessions pass the same gate and send.
 describe("P9 F1: the real step-up in front of POST /send", () => {
   async function realGate(token: string) {
     const real = await vi.importActual<typeof import("@/lib/exec/access")>("@/lib/exec/access");
@@ -446,7 +450,8 @@ describe("P9 F1: the real step-up in front of POST /send", () => {
     return { logRows };
   }
 
-  it("F1: a link session with its own second factor (aal2, amr [totp, otp]) → 404; no audit row, no CAS, no /send", async () => {
+  it("F1 (step-up on): a link session with its own second factor (aal2, amr [totp, otp]) → 404; no audit row, no CAS, no /send", async () => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
     const gate = await realGate(linkWithOwnFactorToken("sess-link-mfa", OWNER_AUTH_ID));
     env.fake.defaultAnswer("send", accepted);
     const res = await send();
@@ -460,13 +465,25 @@ describe("P9 F1: the real step-up in front of POST /send", () => {
     expect(gate.logRows).toEqual([expect.objectContaining({ route: "POST /api/exec/drafts/:id/send step_up_refused", session_id: "sess-link-mfa" })]);
   });
 
-  it("control: his password sign-in (aal1, amr [password]) passes the same gate, and the one /send goes out (202)", async () => {
+  it("control (step-up on): his password sign-in (aal1, amr [password]) passes the same gate, and the one /send goes out (202)", async () => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
     const gate = await realGate(strongToken("sess-his", OWNER_AUTH_ID));
     env.fake.answer("send", accepted);
     const res = await send();
     expect(res.status).toBe(202);
     expect(env.fake.of("send")).toHaveLength(1);
     expect(gate.logRows).toEqual([expect.objectContaining({ route: "POST /api/exec/drafts/:id/send", session_id: "sess-his" })]);
+  });
+
+  it("step-up off (the default): a sign-in link session (aal1, amr [otp]) passes the same gate, and the one /send goes out (202)", async () => {
+    const gate = await realGate(stepUpToken({ sessionId: "sess-link", aal: "aal1", methods: ["otp"] }));
+    env.fake.answer("send", accepted);
+    const res = await send();
+    expect(res.status).toBe(202);
+    expect(env.fake.of("send")).toHaveLength(1);
+    await settle();
+    // One ordinary access row with the session's own id: no refusal row.
+    expect(gate.logRows).toEqual([expect.objectContaining({ route: "POST /api/exec/drafts/:id/send", session_id: "sess-link" })]);
   });
 });
 

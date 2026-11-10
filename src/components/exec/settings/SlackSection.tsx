@@ -21,7 +21,7 @@ import { SlackReadingSection } from "./SlackReadingSection";
 //     read failed     settingsReadFailed, nothing to click
 //     !schema         settingsNotInstalled
 //     !configured     settingsNotConfigured
-//     not_connected   settingsIntro, settingsPasswordNote, Connect
+//     not_connected   settingsIntro, Connect
 //     connected/error the installation's rows (+ settingsError for error),
 //                     Reconnect (in place, C48) and Disconnect
 //     revoked         settingsRevoked (date, reason), Connect
@@ -182,7 +182,6 @@ export function SlackSection({
     body = (
       <div className="space-y-3">
         <Note tone="body">{SLACK_COPY.settingsIntro}</Note>
-        <Note>{SLACK_COPY.settingsPasswordNote}</Note>
         <SlackConnectControls mode="connect" onCanonicalHost={onCanonicalHost} />
       </div>
     );

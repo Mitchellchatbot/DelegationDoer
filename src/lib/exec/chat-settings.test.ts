@@ -129,8 +129,9 @@ describe("the three registry fields (T70)", () => {
     expect(settingsFieldFor("chatEnabled")?.help).toBe("Ask questions in DD. Answers use Opus and count toward the daily AI budget.");
     expect(settingsFieldFor("chatDailyCapUsd")?.help).toBe("Chat pauses for the day once it has used this much. The daily AI budget still applies.");
     expect(settingsFieldFor("askAiUsesExec")?.help).toBe(
-      // Re-pinned: the step-up is a password sign-in (P9 F1; the authenticator code P9 also asked for was removed 2026-11-10).
-      "When on, Ask AI on DD pages answers with the assistant while you're signed in with your password. Other people, and sign-in links, keep the current Ask AI."
+      // Re-pinned 2026-11-10: the step-up is off unless EXEC_REQUIRE_PASSWORD_SIGNIN=true (sign-in link sessions on his
+      // account get the assistant too), so the help names no sign-in method.
+      "When on, Ask AI on DD pages answers with the assistant on your account. Other people keep the current Ask AI."
     );
     // Chat ships: the retention field no longer says it isn't available (bindings AM4).
     expect(settingsFieldFor("retentionDaysChat")?.help).not.toMatch(/isn't available/);

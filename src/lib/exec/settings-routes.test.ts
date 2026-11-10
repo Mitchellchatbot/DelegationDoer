@@ -159,7 +159,7 @@ const gateFails = (status: 401 | 404 | 503) =>
 // ---------------------------------------------------------------------------
 
 describe("GET /api/exec/settings (test 25)", () => {
-  it("gates with a strong sign-in on its own route string, then answers the view, uncached", async () => {
+  it("gates asking for the step-up on its own route string, then answers the view, uncached", async () => {
     const res = await settingsRoute.GET(request("GET", "/api/exec/settings"));
     expect(res.status).toBe(200);
     expect(await bodyOf(res)).toEqual({ generatedAt: "2026-11-06T12:00:00.000Z", version: V1, marker: "the view" });
@@ -350,11 +350,14 @@ describe("PATCH /api/exec/settings (test 25)", () => {
 // POST /api/exec/settings/voice-reset (test 25b)
 // ---------------------------------------------------------------------------
 
-// P9 F1: the route's own gate call, run for real. A sign-in-link session (amr [otp]) gets the gate's 404 and never reaches
-// the write. Since the authenticator code was removed (2026-11-10), a password sign-in (aal1, amr [password]) is all the
-// step-up asks for: it reaches the write. A link session that sets a new password from DD's Settings can sign in that way
-// too; access.ts's header names that gap.
+// P9 F1: the route's own gate call, run for real. With the step-up on (EXEC_REQUIRE_PASSWORD_SIGNIN=true), a sign-in-link
+// session (amr [otp]) gets the gate's 404 and never reaches the write. Since the authenticator code was removed
+// (2026-11-10), a password sign-in (aal1, amr [password]) is all the step-up asks for: it reaches the write. A link
+// session that sets a new password from DD's Settings can sign in that way too; access.ts's header names that gap. Off
+// (the default since 2026-11-10), the same link session reaches the write as an ordinary access.
 describe("PATCH /api/exec/settings: the P9 step-up, run for real (F1)", () => {
+  const LINK = stepUpToken({ sessionId: "sess-link", aal: "aal1", methods: ["otp"] });
+
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -384,10 +387,11 @@ describe("PATCH /api/exec/settings: the P9 step-up, run for real (F1)", () => {
     return logRows;
   }
 
-  it("a sign-in-link token (aal1, amr [otp]) → the gate's 404: no body read, no settings read, no audit, no write; one refusal row", async () => {
+  it("step-up on: a sign-in-link token (aal1, amr [otp]) → the gate's 404: no body read, no settings read, no audit, no write; one refusal row", async () => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
     // The gate warns on a refusal (its log line names the sign-in methods only).
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const logRows = await realGate(stepUpToken({ sessionId: "sess-link", aal: "aal1", methods: ["otp"] }));
+    const logRows = await realGate(LINK);
 
     const res = await settingsRoute.PATCH(patchReq(GOOD));
     expect(res.status).toBe(404);
@@ -401,7 +405,8 @@ describe("PATCH /api/exec/settings: the P9 step-up, run for real (F1)", () => {
     expect(logRows).toEqual([expect.objectContaining({ route: "PATCH /api/exec/settings step_up_refused", session_id: "sess-link" })]);
   });
 
-  it("an aal1 password token → admitted: body read, settings read, audit, write (200); one access row, no refusal row", async () => {
+  it("step-up on: an aal1 password token → admitted: body read, settings read, audit, write (200); one access row, no refusal row", async () => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
     const logRows = await realGate(strongToken("sess-pw", OWNER_AUTH_ID));
 
     const res = await settingsRoute.PATCH(patchReq(GOOD));
@@ -413,6 +418,18 @@ describe("PATCH /api/exec/settings: the P9 step-up, run for real (F1)", () => {
     expect(updateSettings).toHaveBeenCalledWith(PRINCIPAL, { retentionDaysChat: 30 }, expect.objectContaining({ expectedVersion: V1 }));
     await settle();
     expect(logRows).toEqual([expect.objectContaining({ route: "PATCH /api/exec/settings", session_id: "sess-pw" })]);
+  });
+
+  it("step-up off (the default): the same sign-in-link token → admitted: body read, settings read, audit, write (200); one ordinary access row, no refusal row", async () => {
+    const logRows = await realGate(LINK);
+
+    const res = await settingsRoute.PATCH(patchReq(GOOD));
+    expect(res.status).toBe(200);
+    expect(await bodyOf(res)).toEqual({ settings: { generatedAt: "2026-11-06T12:00:00.000Z", version: V1, marker: "the view" } });
+    expect(calls).toEqual(["sameOrigin", "body", "settings", "limit", "audit", "update", "view"]);
+    expect(updateSettings).toHaveBeenCalledWith(PRINCIPAL, { retentionDaysChat: 30 }, expect.objectContaining({ expectedVersion: V1 }));
+    await settle();
+    expect(logRows).toEqual([expect.objectContaining({ route: "PATCH /api/exec/settings", session_id: "sess-link" })]);
   });
 });
 

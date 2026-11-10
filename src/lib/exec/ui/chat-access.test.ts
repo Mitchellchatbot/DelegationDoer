@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // P5b contract §5 test 88 (Area E; §3.19.10, B10, S1): execAskAiRoutingFor,
 // the one signal that routes the owner's Ask AI drawer through the assistant.
 // It runs the real access.ts; only the I/O around it is faked.
+//
+// The routing mirrors the page gate's step-up, which since 2026-11-10 runs
+// only with EXEC_REQUIRE_PASSWORD_SIGNIN=true (isStepUpOn). Off (the default
+// here), the session is never read and a sign-in link session is routed like
+// his own; the "step-up on" tests switch it on.
 
 vi.mock("next/headers", () => ({ headers: vi.fn() }));
 vi.mock("next/navigation", () => ({ notFound: vi.fn() }));
@@ -59,15 +64,28 @@ describe("execAskAiRoutingFor (test 88)", () => {
     expect(loadSettings).toHaveBeenCalledWith("ep_owner");
   });
 
+  // 2026-11-10: off, the routing asks only the flag, the owner, the principal and the settings.
+  it("step-up off (the default): a sign-in link session is routed too, without reading the session", async () => {
+    for (const t of [LINK, LINK_WITH_MFA]) {
+      const getSession = session({ token: t });
+      expect(await execAskAiRoutingFor(OWNER)).toBe(true);
+      expect(getSession).not.toHaveBeenCalled();
+    }
+    expect(loadPrincipalForUser).toHaveBeenCalledWith("u_owner");
+    expect(loadSettings).toHaveBeenCalledWith("ep_owner");
+  });
+
   // P9 F1 (flip): a second factor on top of a link is still a link session.
-  it("a one-time link session verified with its own second factor is not strong → false", async () => {
+  it("step-up on: a one-time link session verified with its own second factor is not strong → false", async () => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
     session({ token: LINK_WITH_MFA });
     expect(await execAskAiRoutingFor(OWNER)).toBe(false);
     expect(loadPrincipalForUser).not.toHaveBeenCalled();
   });
 
   // Flip of P9 F2 (his pinned authenticator code, removed 2026-11-10): a password sign-in alone is strong again.
-  it("a password sign-in → true without a second factor (aal1) or with one (aal2)", async () => {
+  it("step-up on: a password sign-in → true without a second factor (aal1) or with one (aal2)", async () => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
     session({ token: PASSWORD });
     expect(await execAskAiRoutingFor(OWNER)).toBe(true);
     session({ token: PASSWORD_WITH_MFA });
@@ -89,7 +107,8 @@ describe("execAskAiRoutingFor (test 88)", () => {
     expect(getSession).not.toHaveBeenCalled();
   });
 
-  it("a link session (or no session, or an unreadable one) → false, before any principal read", async () => {
+  it("step-up on: a link session (or no session, or an unreadable one) → false, before any principal read", async () => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
     for (const s of [{ token: LINK }, { token: null }, { error: true }]) {
       session(s);
       expect(await execAskAiRoutingFor(OWNER), JSON.stringify(s)).toBe(false);
@@ -110,7 +129,8 @@ describe("execAskAiRoutingFor (test 88)", () => {
     }
   });
 
-  it("any throw → false (never throws itself)", async () => {
+  it("step-up on: any throw → false (never throws itself)", async () => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
     session({ throws: true });
     expect(await execAskAiRoutingFor(OWNER)).toBe(false);
     session();

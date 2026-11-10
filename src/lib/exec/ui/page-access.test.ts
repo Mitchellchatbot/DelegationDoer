@@ -8,7 +8,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // anywhere in its record, whatever its aal (P9 also required his pinned
 // authenticator code; that was removed on 2026-11-10). The default session
 // here is that one; every refusal leaves one "<route> step_up_refused" access
-// row and an ops alert, without the 404 waiting on either.
+// row and an ops alert, without the 404 waiting on either. Since 2026-11-10
+// it runs only with EXEC_REQUIRE_PASSWORD_SIGNIN=true (isStepUpOn), which the
+// describes that test it set. Off (the default, and so everywhere else here),
+// the page gate admits every session on the owner's account, the team's
+// sign-in link sessions included.
 
 const requestScope = vi.hoisted(() => ({ memo: new Map<unknown, Map<unknown, unknown>>(), headers: new Headers() }));
 
@@ -59,7 +63,7 @@ const signedInWith = (...methods: string[]) => tokenWith(methods.map((method) =>
 const atAal2 = (...methods: string[]) => tokenWith(methods.map((method) => ({ method, timestamp: SIGNED_IN })), { aal: "aal2" });
 /** A password sign-in (aal1): what the step-up admits, with or without a second factor on top. */
 const PASSWORD_TOKEN = signedInWith("password");
-/** A leader-minted sign-in link (GoTrue records "otp"): what it refuses. */
+/** A leader-minted sign-in link (GoTrue records "otp"): what it refuses when switched on. */
 const LINK_TOKEN = signedInWith("otp");
 
 // Built as plain data: tests may stand in for the trusted loader.
@@ -287,9 +291,70 @@ describe("requireExecPrincipalForPage", () => {
 });
 
 // Any leader can mint a one-time sign-in link for the owner's account
-// (users/[id]/magic-link), and the session it opens passes every identity
-// check. The page gate also asks how the session was signed in.
-describe("requireExecPrincipalForPage: the sign-in step-up", () => {
+// (users/[id]/magic-link; the team signs in as him by agreement), and the
+// session it opens passes every identity check. Since 2026-11-10 the page
+// gate lets those sessions in: the step-up is off unless switched on.
+describe("requireExecPrincipalForPage: the sign-in step-up switched off (the default)", () => {
+  it.each<[string, string]>([
+    // DD's admin-minted owner links are implicit-flow magic links: GoTrue records "otp".
+    ["a leader-minted sign-in link (otp)", signedInWith("otp")],
+    ["a PKCE magic link", signedInWith("magiclink")],
+    ["a password-recovery link", signedInWith("recovery")],
+    ["a link session with its own second factor (aal2, amr [totp, otp])", atAal2("totp", "otp")],
+    ["a token with no amr", jwt({ sub: OWNER_AUTH_ID, session_id: "sess-1", aal: "aal1" })]
+  ])("lets the owner's account in on %s: its access row with that session's id; no refusal row, alert or log line", async (_label, accessToken) => {
+    fakeServer({ session: { access_token: accessToken } });
+    const { logRows } = fakeAdmin();
+    await expect(requireExecPrincipalForPage(ROUTE)).resolves.toBe(PRINCIPAL);
+    expect(notFound).not.toHaveBeenCalled();
+    await settle();
+    expect(logRows).toEqual([
+      expect.objectContaining({ principal_id: "ep_1", auth_user_id: OWNER_AUTH_ID, session_id: "sess-1", route: ROUTE, surface: "web" })
+    ]);
+    expect(notifyOps).not.toHaveBeenCalled();
+    expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining("step-up refused"));
+  });
+
+  // Switched on, each of these is a 404 or a 503 (below). Off, getUser has already verified him, and the session id is
+  // only for the access log.
+  it("lets him in when the session can't be read (none, refused, or an outage), logging a null session id", async () => {
+    for (const opts of [
+      { session: null },
+      { sessionError: { name: "AuthApiError", message: "Invalid Refresh Token", status: 400 } },
+      { sessionError: { name: "AuthRetryableFetchError", message: "fetch failed", status: 0 } },
+      { getSessionThrows: new Error("cookie parse") }
+    ] satisfies ServerOpts[]) {
+      newRequest();
+      fakeServer(opts);
+      const { logRows } = fakeAdmin();
+      await expect(requireExecPrincipalForPage(ROUTE)).resolves.toBe(PRINCIPAL);
+      expect(logRows).toEqual([expect.objectContaining({ route: ROUTE, session_id: null })]);
+    }
+    expect(notFound).not.toHaveBeenCalled();
+    await settle();
+    expect(notifyOps).not.toHaveBeenCalled();
+  });
+
+  it("still 404s anyone who isn't the owner, before any session read: no row, no alert", async () => {
+    const auth = fakeServer({ session: { access_token: LINK_TOKEN } });
+    const { logRows } = fakeAdmin({ email: "sam@scaledai.org" });
+    await expect(requireExecPrincipalForPage(ROUTE)).rejects.toMatchObject({ digest: NOT_FOUND });
+    expect(notFound).toHaveBeenCalledTimes(1);
+    expect(auth.getSession).not.toHaveBeenCalled();
+    await settle();
+    expect(loadPrincipalForUser).not.toHaveBeenCalled();
+    expect(logRows).toHaveLength(0);
+    expect(notifyOps).not.toHaveBeenCalled();
+  });
+});
+
+// Switched on (EXEC_REQUIRE_PASSWORD_SIGNIN=true), the page gate also asks how
+// the session was signed in.
+describe("requireExecPrincipalForPage: the sign-in step-up switched on", () => {
+  beforeEach(() => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
+  });
+
   // Flip of P9 F2 (his pinned authenticator code, removed 2026-11-10): a password sign-in at aal1 is enough again.
   it("lets a password sign-in (aal1) through, logging that session's id and no refusal row or alert", async () => {
     fakeServer();
@@ -400,8 +465,12 @@ describe("requireExecPrincipalForPage: the sign-in step-up", () => {
 });
 
 // P9 F2 step 3: what a refused step-up leaves behind. It outlived the rest of F2 (his pinned authenticator code), which
-// was removed on 2026-11-10.
+// was removed on 2026-11-10. Only a step-up that is switched on refuses anything, so these switch it on.
 describe("requireExecPrincipalForPage: a refused step-up's record", () => {
+  beforeEach(() => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
+  });
+
   it("a link session → 404 with one step_up_refused row and one daily-keyed alert (methods and aal only)", async () => {
     fakeServer({ session: { access_token: LINK_TOKEN } });
     const { logRows } = fakeAdmin();
@@ -458,8 +527,48 @@ describe("signInIsStrong", () => {
   });
 });
 
-describe("execNavItemFor (the Sidebar row)", () => {
+// Off (the default), the page gate admits every session on his account, so the row needs no session read at all.
+describe("execNavItemFor (the Sidebar row): the step-up switched off (the default)", () => {
   const OWNER = { email: "mitchell@scaledai.org" };
+  const ROW = { href: "/executive", label: "Executive AI" };
+
+  it("is the row for the owner on a sign-in link session, without reading the session", async () => {
+    for (const accessToken of [LINK_TOKEN, atAal2("totp", "otp")]) {
+      const auth = fakeServer({ session: { access_token: accessToken } });
+      await expect(execNavItemFor(OWNER)).resolves.toEqual(ROW);
+      expect(auth.getSession).not.toHaveBeenCalled();
+    }
+  });
+
+  it("is the row for the owner with no session it could read: none, an outage, or no auth client at all", async () => {
+    for (const opts of [{ session: null }, { sessionError: { name: "AuthRetryableFetchError", message: "fetch failed", status: 0 } }] satisfies ServerOpts[]) {
+      const auth = fakeServer(opts);
+      await expect(execNavItemFor(OWNER)).resolves.toEqual(ROW);
+      expect(auth.getSession).not.toHaveBeenCalled();
+    }
+    vi.mocked(getSupabaseServer).mockImplementation(() => {
+      throw new Error("NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are required");
+    });
+    await expect(execNavItemFor(OWNER)).resolves.toEqual(ROW);
+    expect(getSupabaseServer).not.toHaveBeenCalled();
+  });
+
+  it("is still null for anyone else, and while the flag is off", async () => {
+    fakeServer({ session: { access_token: LINK_TOKEN } });
+    await expect(execNavItemFor({ email: "sam@scaledai.org" })).resolves.toBeNull();
+    await expect(execNavItemFor(null)).resolves.toBeNull();
+    vi.stubEnv("EXEC_ENABLED", "false");
+    await expect(execNavItemFor(OWNER)).resolves.toBeNull();
+  });
+});
+
+// Switched on, the row follows the page gate's step-up (P9 F1, AM-P9-12).
+describe("execNavItemFor (the Sidebar row): the step-up switched on", () => {
+  const OWNER = { email: "mitchell@scaledai.org" };
+
+  beforeEach(() => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
+  });
 
   it("is the row for the owner on a password sign-in while the flag is on", async () => {
     fakeServer();

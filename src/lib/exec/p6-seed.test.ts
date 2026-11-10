@@ -79,7 +79,7 @@ describe("P6 seed: slack-types.ts (§3.1)", () => {
 });
 
 describe("P6 seed: slack-copy.ts (§3.14)", () => {
-  it("SLACK_COPY is the contract's text, exactly (sha256 pin over its JSON, 58 keys + the fixer's 2), and frozen at every level", () => {
+  it("SLACK_COPY is the contract's text, exactly (sha256 pin over its JSON, 57 keys + the fixer's 2), and frozen at every level", () => {
     const { SLACK_COPY } = slackCopy;
     expect(createHash("sha256").update(JSON.stringify(SLACK_COPY)).digest("hex")).toBe(SLACK_COPY_SHA256);
     expect(SLACK_COPY.fallbackText).toBe("New reply from your assistant");
@@ -128,7 +128,11 @@ describe("P6 seed: slack-copy.ts (§3.14)", () => {
 // need to be signed in with your password." and connectResult.session_unbound went back to P8's text ("Your session couldn't
 // be checked. Sign in again with your password, then connect."). P9's value before them:
 // 40a453252e8bdf1c3fca5262442ef23e0ab7b843095488cc7e751aad991bd09b.
-const SLACK_COPY_SHA256 = "cd3c6793532086da4bc495d59d9d015b635303a4875426bb49501c43be4b27cd";
+// 2026-11-10, later (the step-up is off unless EXEC_REQUIRE_PASSWORD_SIGNIN=true, so sign-in link sessions get in too):
+// settingsPasswordNote was removed (57 of the contract's 58 top-level keys remain, + the fixer's 2) and
+// connectResult.session_unbound became "Your session couldn't be checked. Sign in again, then connect." The value before
+// them: cd3c6793532086da4bc495d59d9d015b635303a4875426bb49501c43be4b27cd.
+const SLACK_COPY_SHA256 = "5d80afbbbe9c9f4f0dfa029ef631aa2e595a3de5ea16600f245662d6dc6827da";
 
 interface RoutingRow {
   name: string;

@@ -34,31 +34,40 @@ import { notifyOps } from "@/lib/exec/ops";
 //
 // The step-up: any leader can mint a one-time sign-in link for the owner's
 // account (users/[id]/magic-link; the team signs in as him by agreement), and
-// the session it opens passes every identity check above. A surface that asks
-// for the step-up (requireStrongSignIn; the page gate always asks) admits only
-// a password sign-in with no one-time link anywhere in its record
-// (signInIsStrong reads GoTrue's amr; a second factor can only add to a
-// password sign-in, never replace it, P9 F1).
-// P9 also required his authenticator code, pinned by factor id; that
-// requirement was removed on 2026-11-10. What it leaves open: a link session
-// can set a new password from DD's Settings and sign in with it (his old
-// password then stops working). docs/exec-assistant.md lists it under known gaps.
-// Every refusal leaves one access-log row (route + " step_up_refused") and a
-// daily-keyed ops alert, without waiting on either.
+// the session it opens passes every identity check above. Since 2026-11-10
+// the assistant opens for those sessions too (the team's call), so the
+// step-up is OFF unless EXEC_REQUIRE_PASSWORD_SIGNIN=true (isStepUpOn). When
+// on, a surface that asks for it (requireStrongSignIn; the page gate always
+// asks) admits only a password sign-in with no one-time link anywhere in its
+// record (signInIsStrong reads GoTrue's amr; a second factor can only add to a
+// password sign-in, never replace it, P9 F1), and every refusal leaves one
+// access-log row (route + " step_up_refused") and a daily-keyed ops alert,
+// without waiting on either. Even when on, a link session can set a new
+// password from DD's Settings and sign in with it (P9's authenticator closed
+// that; it was removed on 2026-11-10). docs/exec-assistant.md §14 has both.
 
 export function isExecEnabled(): boolean {
   return process.env.EXEC_ENABLED === "true";
+}
+
+/**
+ * Whether the step-up runs: only when EXEC_REQUIRE_PASSWORD_SIGNIN is "true". Off (the default since 2026-11-10), a
+ * surface that asks for it admits every session on the owner's account, the team's sign-in link sessions included.
+ */
+export function isStepUpOn(): boolean {
+  return process.env.EXEC_REQUIRE_PASSWORD_SIGNIN === "true";
 }
 
 export type ExecAccessResult = { ok: true; principal: ExecPrincipal } | { ok: false; response: NextResponse };
 
 export interface ExecGateOptions {
   /**
-   * The step-up (P9 F1): admit only a password sign-in with no one-time link
-   * (signInIsStrong). Anything else gets the same 404, plus a refusal row and
-   * an ops alert; a 503 when the session can't be read for an outage.
-   * requireExecPrincipalForPage always sets it. It is opt-in only because
-   * requireExecPrincipal predates it and P2a's tests pin its behaviour without it.
+   * This surface asks for the step-up (P9 F1). It runs only while isStepUpOn(): then only a password sign-in with no
+   * one-time link (signInIsStrong) is admitted, anything else gets the same 404 plus a refusal row and an ops alert, and
+   * a session that can't be read for an outage gets a 503. Either way, every admitted access to the surface goes
+   * through the P8 new-network check. requireExecPrincipalForPage always sets it, and so does every exec API route
+   * (boundary rule 13). It is opt-in only because requireExecPrincipal predates it and P2a's tests pin its behaviour
+   * without it.
    */
   requireStrongSignIn?: boolean;
 }
@@ -216,13 +225,14 @@ export async function requireExecSession(req: Request, route: string, opts: Exec
   // later means changing this line and nothing downstream.
   if (!isOwner({ email: userRow.email ?? "" })) return notFound();
 
-  // 5. Step-up, when asked for: how this session was signed in (P9 F1). Only
-  // the owner's account gets this far, so only a session on it ever sees this
-  // answer: 404 for anything but a password sign-in (or a session that can't
-  // be read), 503 when the session can't be read for an outage. Each refusal
-  // is recorded without holding the 404 (recordStepUpRefusal).
+  // 5. Step-up, when asked for and switched on (isStepUpOn): how this session
+  // was signed in (P9 F1). Only the owner's account gets this far, so only a
+  // session on it ever sees this answer: 404 for anything but a password
+  // sign-in (or a session that can't be read), 503 when the session can't be
+  // read for an outage. Each refusal is recorded without holding the 404
+  // (recordStepUpRefusal). Off, every session on his account goes on.
   let checkedToken: string | null = null;
-  if (opts.requireStrongSignIn) {
+  if (opts.requireStrongSignIn && isStepUpOn()) {
     const session = await readAccessToken(supabase, route);
     if (!session.ok) return session.outage ? authUnavailable() : notFound();
     if (!signInIsStrong(session.token, authUserId)) {
@@ -247,8 +257,8 @@ export async function requireExecSession(req: Request, route: string, opts: Exec
 
   // 7–8. Record the access. Both steps are best-effort and never deny: the
   // caller is already verified, and losing a log row must not lock the owner out.
-  const sessionId =
-    checkedToken !== null ? sessionIdFromAccessToken(checkedToken, authUserId) : await readSessionId(supabase, authUserId, route);
+  const token = checkedToken ?? (await readSessionToken(supabase, authUserId, route));
+  const sessionId = token !== null ? sessionIdFromAccessToken(token, authUserId) : null;
   const entry: AccessLogEntry = {
     principalId: principal.id,
     authUserId,
@@ -260,10 +270,13 @@ export async function requireExecSession(req: Request, route: string, opts: Exec
   };
   await logAccess(entry);
 
-  // 9. P8 (M13, C20): a strong session (the step-up ran) from a network or browser family not seen lately raises an
-  // alert. Fire-and-forget: the request never waits on it, and the module is loaded lazily (it imports jobs.ts, which
-  // imports this file). A failure is logged by route and error name only.
-  if (checkedToken !== null) noteStrongAccess(principal, entry);
+  // 9. P8 (M13, C20): an admitted password sign-in (signInIsStrong) on a surface that asks for the step-up, from a
+  // network or browser family not seen lately, raises an alert (an exec-bot DM to him and an ops alert), whether or not
+  // the step-up is switched on. The team's sign-in link sessions, admitted while it is off, never raise it: they are
+  // expected, and the alert carries nothing that would tell him who it was. Fire-and-forget: the request never waits
+  // on it, and the module is loaded lazily (it imports jobs.ts, which imports this file). A failure is logged by route
+  // and error name only.
+  if (opts.requireStrongSignIn && token !== null && signInIsStrong(token, authUserId)) noteWebAccess(principal, entry);
 
   return { ok: true, principal, authUserId, sessionId };
 }
@@ -307,7 +320,7 @@ function tokenAal(token: string, expectedSub: string): string {
   return typeof aal === "string" && /^[a-z0-9]{1,8}$/.test(aal) ? aal : "?";
 }
 
-function noteStrongAccess(principal: ExecPrincipal, entry: AccessLogEntry): void {
+function noteWebAccess(principal: ExecPrincipal, entry: AccessLogEntry): void {
   const sighting = { ip: entry.ip, userAgent: entry.userAgent, now: new Date() };
   void import("@/lib/exec/handlers/access-alert")
     .then((m) => m.noteStrongWebAccess(principal, sighting))
@@ -330,9 +343,10 @@ const PAGE_FORWARDED_HEADERS = ["user-agent", "x-forwarded-for", "x-real-ip"] as
  *
  *   const principal = await requireExecPrincipalForPage("GET /executive");
  *
- * Same checks as requireExecPrincipal, with the step-up on: a session on the
- * owner's account opened by a one-time sign-in link gets the 404 too, so he
- * opens these pages from a password sign-in. A 401 or 404 renders Next's
+ * Same checks as requireExecPrincipal, asking for the step-up: while it is
+ * switched on (isStepUpOn), a session on the owner's account opened by a
+ * one-time sign-in link gets the 404 too; off (the default), every session on
+ * his account opens these pages. A 401 or 404 renders Next's
  * not-found page, the one a missing route gets (a signed-out browser was
  * already sent to /login by the middleware, so a 401 here is a session
  * GoTrue refused). It doesn't hide that the route exists from signed-in
@@ -374,23 +388,25 @@ export interface ExecNavItem {
 const EXEC_NAV_ITEM: ExecNavItem = Object.freeze({ href: "/executive", label: "Executive AI" });
 
 /**
- * The session's access token and its user id, from the cookie session, when the token is a strong sign-in for that
- * user (signInIsStrong with the sub bound); else null. P9 (F1, AM-P9-12): the same check the page gate makes, so a
- * link session gets no nav row and no routing. Visibility only; the callers swallow every error.
+ * True when this request's session would pass the page gate's step-up: always while it is switched off (the
+ * default); on, when the cookie session's token is a strong sign-in for its user (signInIsStrong with the sub bound).
+ * P9 (F1, AM-P9-12): the same check the page gate makes, so with the step-up on a link session gets no nav row and no
+ * routing. Visibility only; the callers swallow every error.
  */
-async function strongOwnerSession(): Promise<{ token: string; userId: string } | null> {
+async function sessionPassesStepUp(): Promise<boolean> {
+  if (!isStepUpOn()) return true;
   const { data, error } = await getSupabaseServer().auth.getSession();
-  if (error) return null;
+  if (error) return false;
   const token = data.session?.access_token;
   const userId = data.session?.user?.id;
-  if (typeof token !== "string" || typeof userId !== "string" || userId === "") return null;
-  return signInIsStrong(token, userId) ? { token, userId } : null;
+  if (typeof token !== "string" || typeof userId !== "string" || userId === "") return false;
+  return signInIsStrong(token, userId);
 }
 
 /**
  * The Sidebar row for the exec pages, or null when this request shouldn't see
- * it: the flag is off, the user isn't the owner, or the session isn't one the
- * page gate admits (a password sign-in with no one-time link). The
+ * it: the flag is off, the user isn't the owner, or (with the step-up switched
+ * on) the session isn't one the page gate admits. The
  * Sidebar is a client component, so the row's label and link reach a browser
  * only in this value, sent with the page the server drew it on. Visibility
  * only: the page gate is the control. Never throws; a session it can't read
@@ -399,7 +415,7 @@ async function strongOwnerSession(): Promise<{ token: string; userId: string } |
 export async function execNavItemFor(user: Parameters<typeof isOwner>[0]): Promise<ExecNavItem | null> {
   if (!isExecEnabled() || !isOwner(user)) return null;
   try {
-    return (await strongOwnerSession()) !== null ? EXEC_NAV_ITEM : null;
+    return (await sessionPassesStepUp()) ? EXEC_NAV_ITEM : null;
   } catch {
     // The row is a convenience; a broken read just leaves it out.
     return null;
@@ -408,13 +424,13 @@ export async function execNavItemFor(user: Parameters<typeof isOwner>[0]): Promi
 
 /**
  * True when the AI drawer should answer through the assistant for this
- * request (P5b contract §3.19.10, B10): EXEC_ENABLED, the owner, a strong
- * session (the page gate's step-up: signInIsStrong, P9 F1), an enabled
- * principal, and chatSchemaReady ∧
+ * request (P5b contract §3.19.10, B10): EXEC_ENABLED, the owner, a session
+ * the page gate's step-up admits (any session while it is switched off; a
+ * strong sign-in when on, P9 F1), an enabled principal, and chatSchemaReady ∧
  * chatEnabled ∧ askAiUsesExec. Never throws (false on any error); never hands
  * out a principal. Visibility only: /api/exec/chat gates for real. The
- * (main) layout passes the answer to the drawer as one boolean, so link
- * sessions, everyone else and the legacy route are unchanged.
+ * (main) layout passes the answer to the drawer as one boolean, so everyone
+ * else and the legacy route are unchanged.
  */
 export async function execAskAiRoutingFor(user: Parameters<typeof isOwner>[0] & { id: string }): Promise<boolean> {
   return (await execAskAiRoutingStateFor(user)).routed;
@@ -428,7 +444,7 @@ export async function execAskAiRoutingStateFor(user: Parameters<typeof isOwner>[
   const off = { routed: false, emailOn: false };
   try {
     if (!isExecEnabled() || !isOwner(user) || typeof user?.id !== "string" || user.id === "") return off;
-    if ((await strongOwnerSession()) === null) return off;
+    if (!(await sessionPassesStepUp())) return off;
     const principal = await loadPrincipalForUser(user.id);
     if (!principal) return off;
     const settings = await loadSettings(principal.id);
@@ -513,10 +529,15 @@ function signInMethods(token: string, expectedSub: string): string {
   return methods.length > 0 ? (clip(methods.map((method) => method ?? "?").join(", "), 80) ?? "") : "none recorded";
 }
 
-// The session id is for the access log only (which device/session made the
-// call), never for identity, which step 2 already settled. It is read from
-// the session's access token because GoTrue's user object doesn't carry it.
-async function readSessionId(
+// The cookie session's access token, read when the step-up didn't already read
+// it: for the session id (which device/session made the call, for the access
+// log only) and the new-network check's sign-in method, never for identity,
+// which step 2 already settled. GoTrue's user object carries neither. Every
+// reader binds it to the verified user (sessionIdFromAccessToken and
+// signInIsStrong take authUserId), so a token for anyone else yields no
+// session id and no alert. Best effort: null (and a log line) when it can't
+// be read; never a denial.
+async function readSessionToken(
   supabase: ReturnType<typeof getSupabaseServer>,
   authUserId: string,
   route: string
@@ -529,11 +550,8 @@ async function readSessionId(
     }
     const token = data.session?.access_token;
     if (!token) return null;
-    // Bound to the verified user: a token for anyone else must not put its
-    // session id on the owner's access log.
-    const sessionId = sessionIdFromAccessToken(token, authUserId);
-    if (!sessionId) console.warn(`[exec-access] ${route}: access token carried no usable session_id`);
-    return sessionId;
+    if (!sessionIdFromAccessToken(token, authUserId)) console.warn(`[exec-access] ${route}: access token carried no usable session_id`);
+    return token;
   } catch (err) {
     console.warn(`[exec-access] ${route}: no session id for the access log: ${errMessage(err)}`);
     return null;

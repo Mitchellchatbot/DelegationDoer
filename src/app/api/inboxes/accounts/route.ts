@@ -4,15 +4,17 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { createAccount } from "@/lib/missive-client";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { canManageAssignments } from "@/lib/inbox-access";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// POST /api/inboxes/accounts — any signed-in user can connect their own
-// inbox. The created account is auto-assigned to the creator via
-// inbox_assignments so they can see it without a separate provisioning
-// step. Leaders + admins still bypass any per-user gating downstream
-// because visibleAccountIdsFor returns null for them.
+// POST /api/inboxes/accounts — leaders and admins only (canManageAssignments,
+// the same gate as the other inbox-management routes). No DD screen calls
+// it: mailboxes are connected through the clone's Microsoft OAuth flow
+// (ConnectInboxDialog -> /api/inboxes/oauth/microsoft/redirect). The created
+// account is auto-assigned to the creator via inbox_assignments so it shows
+// up without a separate provisioning step.
 //
 // Body shape — every field is optional except `email`:
 //   {
@@ -27,6 +29,9 @@ export async function POST(req: NextRequest) {
     const userId = await requireCurrentUserId();
     const me = await getUserById(userId);
     if (!me) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+    if (!canManageAssignments(me)) {
+      return NextResponse.json({ error: "Leader only" }, { status: 403 });
+    }
 
     const body = await req.json();
     const email = typeof body.email === "string" ? body.email.trim() : "";

@@ -19,7 +19,7 @@ import {
   type ExecAccessResult
 } from "@/lib/exec/access";
 import type { ExecPrincipal, ExecSettings } from "@/lib/exec/types";
-import { fakeFactorAdmin, linkWithOwnFactorToken, pinFactors, strongToken } from "@/lib/exec/__tests__/step-up-fixtures";
+import { linkWithOwnFactorToken, strongToken } from "@/lib/exec/__tests__/step-up-fixtures";
 
 const OWNER_AUTH_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_AUTH_ID = "22222222-2222-4222-8222-222222222222";
@@ -363,8 +363,8 @@ describe("requireExecPrincipal", () => {
   });
 });
 
-// P9 F1: the Sidebar row and the Ask AI routing make the page gate's checks (AM-P9-12): a link session that enrolled and
-// verified its own authenticator (aal2, amr [totp, otp]) gets neither, even with only pinned factors on the account.
+// P9 F1: the Sidebar row and the Ask AI routing make the page gate's check (AM-P9-12): a link session that enrolled and
+// verified its own authenticator (aal2, amr [totp, otp]) gets neither.
 describe("P9 F1: execNavItemFor and execAskAiRoutingStateFor refuse a link session with its own second factor", () => {
   const OWNER = { id: "u_1", email: "mitchell@scaledai.org" };
   const ON = { chatSchemaReady: true, chatEnabled: true, askAiUsesExec: true } as unknown as ExecSettings;
@@ -375,9 +375,6 @@ describe("P9 F1: execNavItemFor and execAskAiRoutingStateFor refuse a link sessi
   }
 
   beforeEach(() => {
-    pinFactors();
-    const factors = fakeFactorAdmin();
-    vi.mocked(getSupabaseAdmin).mockReturnValue({ auth: factors.auth } as unknown as SupabaseClient);
     vi.mocked(loadSettings).mockResolvedValue(ON);
   });
 
@@ -388,7 +385,7 @@ describe("P9 F1: execNavItemFor and execAskAiRoutingStateFor refuse a link sessi
     expect(loadPrincipalForUser).not.toHaveBeenCalled();
   });
 
-  it("his password plus his pinned code → the row and routed (the same helpers, the control case)", async () => {
+  it("his password sign-in (aal1) → the row and routed (the same helpers, the control case)", async () => {
     cookieSession(strongToken("sess-strong", OWNER_AUTH_ID));
     await expect(execNavItemFor(OWNER)).resolves.toEqual({ href: "/executive", label: "Executive AI" });
     await expect(execAskAiRoutingStateFor(OWNER)).resolves.toMatchObject({ routed: true });

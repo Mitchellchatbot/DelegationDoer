@@ -256,7 +256,7 @@ describe("SettingsPageView (test 75)", () => {
     expect(text).toContain("a1b2c3d4");
   });
 
-  it("P9 F2 step 6: a refused step-up's row reads 'Refused: not your password and code' with its route; others are unchanged", async () => {
+  it("P9 F2 step 6: a refused step-up's row reads 'Refused: not a password sign-in' with its route; others are unchanged", async () => {
     const view = settingsView();
     const base = view.recentAccess.ok ? view.recentAccess.data[0] : null;
     if (base === null) throw new Error("fixture has recent access");
@@ -264,7 +264,7 @@ describe("SettingsPageView (test 75)", () => {
     const html = page({ ...view, recentAccess: { ok: true, data: [refused, base] } });
     const rows = html.split("<tr").slice(2);
     expect(rows[0]).toContain("data-access-refused");
-    expect(textOf(rows[0])).toContain("Refused: not your password and code");
+    expect(textOf(rows[0])).toContain("Refused: not a password sign-in");
     expect(textOf(rows[0])).toContain("GET /executive");
     expect(textOf(rows[0])).not.toContain("step_up_refused");
     expect(rows[1]).not.toContain("data-access-refused");

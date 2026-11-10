@@ -24,7 +24,6 @@ import { SWITCH_BUTTON, SWITCH_TRACK } from "@/components/exec/settings/Settings
 import { SourceLinks } from "@/components/exec/SourceLinks";
 import { Sparkline } from "@/components/exec/Sparkline";
 import { StatTile, TINT as TILE_TINT, TONE as TILE_TONE } from "@/components/exec/StatTile";
-import { TWO_STEP_ALERT } from "@/components/TwoStepSection";
 import type { AttentionCategory, AttentionFact, FactBasis, PriorityBand } from "@/lib/exec/attention-types";
 import type { SourceRef } from "@/lib/exec/types";
 
@@ -501,20 +500,6 @@ describe("P9 F5: meaning-carrying tones meet WCAG AA (4.5:1 for text, 3:1 for th
     const pill = /<span class="([^"]*)">Private<\/span>/.exec(header)?.[1] ?? "";
     expect(ratioOf(pill)).toBeGreaterThanOrEqual(AA);
     for (const [state, classes] of Object.entries(BRIEF_PILL_TONE)) expect(ratioOf(classes), state).toBeGreaterThanOrEqual(AA);
-  });
-
-  it("P9 fixer ui-6: the two-step error text (login code step, Settings) is AA on the white card and on the login card's tint", () => {
-    // The old pair, text-urgent on urgent/10, is the F5 failure (4.13:1 on white).
-    expect(ratioOf("text-urgent bg-urgent/10")).toBeLessThan(AA);
-    expect(ratioOf(TWO_STEP_ALERT)).toBeGreaterThanOrEqual(AA);
-    expect(ratioOf(TWO_STEP_ALERT)).toBeCloseTo(5.72, 1);
-    // The login card is a blue/indigo wash: its darkest stop (blue-200 at 80%) under the alert, which is opaque either way.
-    const loginCard = colorOf("blue-200/80", rgb(hex("bg")));
-    expect(ratioOf(TWO_STEP_ALERT, { under: loginCard })).toBeGreaterThanOrEqual(AA);
-    expect(colorClasses(TWO_STEP_ALERT).bg, "an opaque background").not.toMatch(/\//);
-    // Every alert in the file uses it (no other urgent-on-urgent pair left there).
-    const src = readFileSync(path.join(P9_ROOT, "src/components/TwoStepSection.tsx"), "utf8");
-    expect(src).not.toMatch(/text-urgent/);
   });
 
   it("the switches' off track stands out from white (3:1, WCAG 1.4.11), and all three switches use it", () => {

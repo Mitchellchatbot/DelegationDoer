@@ -97,9 +97,9 @@ export const SLACK_COPY = Object.freeze({
   settingsNotInstalled: "Slack isn't installed yet (the P6 database update hasn't been applied).",
   settingsNotConfigured: "Slack isn't set up yet: the team needs to create the app and set its keys.",
   settingsIntro: "Connect the Executive Assistant to Slack to ask questions in a direct message. It can't read your channels or your messages with other people.",
-  // P9 fixer ui-3: since P9 F1/F2 the step-up is his password AND his authenticator code (a second factor no longer stands
-  // in for the password, and a password alone opens nothing).
-  settingsPasswordNote: "You need to be signed in with your password and the code from your authenticator app.",
+  // The step-up is a password sign-in (P9 F1: a second factor no longer stands in for the password; the authenticator
+  // code P9 also asked for was removed 2026-11-10).
+  settingsPasswordNote: "You need to be signed in with your password.",
   settingsConnect: "Connect Slack", settingsDisconnect: "Disconnect", settingsReconnect: "Reconnect Slack",
   settingsError: "Slack rejected the last request ({code}). Reconnect if this keeps happening.",
   settingsWrongHost: "Open DD at operations.scaledai.org to connect Slack. Your sign-in there is separate.",
@@ -117,7 +117,7 @@ export const SLACK_COPY = Object.freeze({
     state_expired: "That connection link expired. Start again from this page.",
     not_configured: "Slack isn't set up yet: the team needs to create the app and set its keys.",
     not_installed: "Slack isn't installed yet (the P6 database update hasn't been applied).",
-    session_unbound: "Your session couldn't be checked. Sign in again with your password and code, then connect.",
+    session_unbound: "Your session couldn't be checked. Sign in again with your password, then connect.",
     rate_limited: "Too many connection attempts. Try again in a few minutes.",
     unavailable: "Something went wrong on DD's side. Try again.",
     slack_unavailable: "Couldn't reach Slack. Try again.",

@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 
 vi.mock("next/cache", () => ({ unstable_cache: <T>(fn: T) => fn }));
 vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
-// P9 (F2): the step-up case below runs the REAL gate (vi.importActual) over a faked session; every other test mocks it.
+// P9 (F1): the step-up cases below run the REAL gate (vi.importActual) over a faked session; every other test mocks it.
 vi.mock("@/lib/supabase-server", () => ({ getSupabaseServer: vi.fn() }));
 vi.mock("@/lib/exec/access", () => ({ requireExecPrincipal: vi.fn() }));
 // Area A's helpers are mocked at the module boundary with the contract's
@@ -15,7 +15,12 @@ vi.mock("@/lib/exec/http", async (orig) => ({
   rateLimit: vi.fn(),
   runAudited: vi.fn()
 }));
-vi.mock("@/lib/exec/principal", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/principal")>()), loadSettings: vi.fn() }));
+vi.mock("@/lib/exec/principal", async (orig) => ({
+  ...(await orig<typeof import("@/lib/exec/principal")>()),
+  loadSettings: vi.fn(),
+  // The step-up cases below hand the real gate its principal; every other test's mocked gate returns one.
+  loadPrincipalForUser: vi.fn()
+}));
 vi.mock("@/lib/exec/settings", async (orig) => ({
   ...(await orig<typeof import("@/lib/exec/settings")>()),
   getSettingsView: vi.fn(),
@@ -28,14 +33,14 @@ import * as voiceResetRoute from "@/app/api/exec/settings/voice-reset/route";
 import { requireExecPrincipal } from "@/lib/exec/access";
 import { resetVoiceProfile } from "@/lib/exec/drafts-store";
 import { assertSameOrigin, jsonError, rateLimit, readJsonBodyOrError, runAudited, type AuditOutcomeSummary } from "@/lib/exec/http";
-import { DEFAULT_SETTINGS, loadSettings, principalFromRows, type SettingsSnapshot } from "@/lib/exec/principal";
+import { DEFAULT_SETTINGS, loadPrincipalForUser, loadSettings, principalFromRows, type SettingsSnapshot } from "@/lib/exec/principal";
 import { getSettingsView, updateSettings, type UpdateSettingsResult } from "@/lib/exec/settings";
 import type { AuditEntry, ExecPrincipal, ExecSettings } from "@/lib/exec/types";
 import type { SettingsView } from "@/lib/exec/view-types";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getSupabaseServer } from "@/lib/supabase-server";
-import { OWNER_AUTH_ID, fakeFactorAdmin, passwordOnlyToken, pinFactors, settle } from "@/lib/exec/__tests__/step-up-fixtures";
+import { OWNER_AUTH_ID, settle, stepUpToken, strongToken } from "@/lib/exec/__tests__/step-up-fixtures";
 
 // The Settings routes (P5a contract §3.7.3, §3.7.4; tests 25 and 25b's route
 // half). Every collaborator is a mock that records the order it was called
@@ -345,28 +350,27 @@ describe("PATCH /api/exec/settings (test 25)", () => {
 // POST /api/exec/settings/voice-reset (test 25b)
 // ---------------------------------------------------------------------------
 
-// P9 F2 (owner decisions Q1, Q2): the route's own gate call, run for real. A password sign-in without his authenticator
-// code (aal1) is what a link session gets after setting a new password from DD's Settings: it must never reach the write.
-describe("PATCH /api/exec/settings: the P9 step-up, run for real (F2)", () => {
+// P9 F1: the route's own gate call, run for real. A sign-in-link session (amr [otp]) gets the gate's 404 and never reaches
+// the write. Since the authenticator code was removed (2026-11-10), a password sign-in (aal1, amr [password]) is all the
+// step-up asks for: it reaches the write. A link session that sets a new password from DD's Settings can sign in that way
+// too; access.ts's header names that gap.
+describe("PATCH /api/exec/settings: the P9 step-up, run for real (F1)", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it("an aal1 password token (pin set) → the gate's 404: no body read, no settings read, no audit, no write; one refusal row", async () => {
+  /** The real gate over a faked session whose access token is `token`; returns the exec_access_log rows it writes. */
+  async function realGate(token: string): Promise<Record<string, unknown>[]> {
     const real = await vi.importActual<typeof import("@/lib/exec/access")>("@/lib/exec/access");
     vi.mocked(requireExecPrincipal).mockReset().mockImplementation(real.requireExecPrincipal);
     vi.stubEnv("EXEC_ENABLED", "true");
-    pinFactors();
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const auth = {
       getUser: vi.fn(async () => ({ data: { user: { id: OWNER_AUTH_ID } }, error: null })),
-      getSession: vi.fn(async () => ({ data: { session: { access_token: passwordOnlyToken("sess-pw", OWNER_AUTH_ID) } }, error: null }))
+      getSession: vi.fn(async () => ({ data: { session: { access_token: token } }, error: null }))
     };
     vi.mocked(getSupabaseServer).mockReturnValue({ auth } as unknown as ReturnType<typeof getSupabaseServer>);
     const logRows: Record<string, unknown>[] = [];
-    const factors = fakeFactorAdmin();
     vi.mocked(getSupabaseAdmin).mockReturnValue({
-      auth: factors.auth,
       from(table: string) {
         if (table === "users") {
           const b = { select: () => b, eq: () => b, maybeSingle: async () => ({ data: { id: "u_1", email: "mitchell@scaledai.org" }, error: null }) };
@@ -376,6 +380,14 @@ describe("PATCH /api/exec/settings: the P9 step-up, run for real (F2)", () => {
         throw new Error(`unexpected table ${table}`);
       }
     } as unknown as SupabaseClient);
+    vi.mocked(loadPrincipalForUser).mockResolvedValue(PRINCIPAL);
+    return logRows;
+  }
+
+  it("a sign-in-link token (aal1, amr [otp]) → the gate's 404: no body read, no settings read, no audit, no write; one refusal row", async () => {
+    // The gate warns on a refusal (its log line names the sign-in methods only).
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const logRows = await realGate(stepUpToken({ sessionId: "sess-link", aal: "aal1", methods: ["otp"] }));
 
     const res = await settingsRoute.PATCH(patchReq(GOOD));
     expect(res.status).toBe(404);
@@ -385,9 +397,22 @@ describe("PATCH /api/exec/settings: the P9 step-up, run for real (F2)", () => {
     expect(loadSettings).not.toHaveBeenCalled();
     expect(runAudited).not.toHaveBeenCalled();
     expect(updateSettings).not.toHaveBeenCalled();
-    expect(factors.listFactors).not.toHaveBeenCalled();
     await settle();
-    expect(logRows).toEqual([expect.objectContaining({ route: "PATCH /api/exec/settings step_up_refused", session_id: "sess-pw" })]);
+    expect(logRows).toEqual([expect.objectContaining({ route: "PATCH /api/exec/settings step_up_refused", session_id: "sess-link" })]);
+  });
+
+  it("an aal1 password token → admitted: body read, settings read, audit, write (200); one access row, no refusal row", async () => {
+    const logRows = await realGate(strongToken("sess-pw", OWNER_AUTH_ID));
+
+    const res = await settingsRoute.PATCH(patchReq(GOOD));
+    expect(res.status).toBe(200);
+    expect(await bodyOf(res)).toEqual({ settings: { generatedAt: "2026-11-06T12:00:00.000Z", version: V1, marker: "the view" } });
+    // The real gate records no "gate" step (only the mocked one does); everything after it runs.
+    expect(calls).toEqual(["sameOrigin", "body", "settings", "limit", "audit", "update", "view"]);
+    expect(loadPrincipalForUser).toHaveBeenCalledWith("u_1");
+    expect(updateSettings).toHaveBeenCalledWith(PRINCIPAL, { retentionDaysChat: 30 }, expect.objectContaining({ expectedVersion: V1 }));
+    await settle();
+    expect(logRows).toEqual([expect.objectContaining({ route: "PATCH /api/exec/settings", session_id: "sess-pw" })]);
   });
 });
 

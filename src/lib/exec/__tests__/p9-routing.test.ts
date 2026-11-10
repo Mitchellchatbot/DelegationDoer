@@ -31,7 +31,6 @@ import * as eventsRoute from "@/app/api/integrations/exec-slack/events/route";
 import * as interactionsRoute from "@/app/api/integrations/exec-slack/interactions/route";
 import { execAskAiRoutingStateFor } from "@/lib/exec/access";
 import { kickInteractive } from "@/lib/exec/jobs";
-import { __resetOwnerFactorCacheForTests } from "@/lib/exec/owner-mfa";
 import { loadPrincipalForUser, loadSettings } from "@/lib/exec/principal";
 import { __resetGateCacheForTests } from "@/lib/exec/slack-gate-cache";
 import { acceptAction, acceptEvent } from "@/lib/exec/slack-install";
@@ -45,19 +44,17 @@ import { createFakeSlackReadDb, type FakeSlackReadDb } from "./fake-slack-read-d
 import { settings as settingsFixture } from "./p5a-ui-fixtures";
 import { findSentinel, SENTINELS } from "./slack-assert";
 import { installationRow, routingRow, signedSlackRequest, slackEnv } from "./slack-route-helpers";
-import {
-  fakeFactorAdmin, linkWithOwnFactorToken, OWNER_AUTH_ID, passwordOnlyToken, PINNED_FACTOR_ID, pinFactors, stepUpToken, strongToken, unpinFactors, verifiedFactor
-} from "./step-up-fixtures";
+import { linkWithOwnFactorToken, OWNER_AUTH_ID, stepUpToken, strongToken } from "./step-up-fixtures";
 
 // P9 §2.3 (Area B): routing. Slack: his message in the assistant DM → one reply job; a colleague's DM to the bot → dropped
 // (silence); a channel message → never a reply; a retried event_id → one reply; an interaction from another user →
 // not_owner; with Slack reading (P7a's v2): a watched channel's message → the reading ingest only (no reply, no chat job),
 // a deny-class (FB lead) channel's message → dropped with nothing stored. Ask AI: routed only when every one of
-// (EXEC_ENABLED, the owner, a strong sign-in = his password plus his PINNED code, chat_enabled, ask_ai_uses_exec) holds;
-// any link session keeps DD's legacy Ask AI.
+// (EXEC_ENABLED, the owner, a strong sign-in = a password sign-in at any aal, chat_enabled, ask_ai_uses_exec) holds;
+// any link session keeps DD's legacy Ask AI, even one that verified a code of its own.
 
 // ---------------------------------------------------------------------------
-// The Ask AI routing matrix (with Area A's factor pin)
+// The Ask AI routing matrix
 // ---------------------------------------------------------------------------
 
 const OWNER = { id: "u_owner", email: "mitchell@scaledai.org" };
@@ -65,19 +62,20 @@ const LEADER = { id: "u_lead", email: "lead@scaledai.org" };
 const PRINCIPAL = Object.freeze({ id: "ep_owner", userId: "u_owner", email: OWNER.email, name: "Mitchell", timezone: "America/New_York" }) as unknown as ExecPrincipal;
 const ON: ExecSettings = settingsFixture({ chatSchemaReady: true, chatEnabled: true, askAiUsesExec: true });
 
-type SessionKind = "strong" | "password_only" | "link" | "link_with_own_factor" | "pin_unset" | "unpinned_factor";
-const SESSIONS: readonly SessionKind[] = ["strong", "password_only", "link", "link_with_own_factor", "pin_unset", "unpinned_factor"];
+// strong: his password sign-in (strongToken, aal1). strong_with_code: the same plus a verified code (aal2, amr
+// [totp, password]). Both are strong: the step-up reads how the session signed in, not its aal.
+type SessionKind = "strong" | "strong_with_code" | "link" | "link_with_own_factor";
+const SESSIONS: readonly SessionKind[] = ["strong", "strong_with_code", "link", "link_with_own_factor"];
+const STRONG_SESSIONS: ReadonlySet<SessionKind> = new Set<SessionKind>(["strong", "strong_with_code"]);
 
 function useSession(kind: SessionKind): void {
-  __resetOwnerFactorCacheForTests();
   const token =
-    kind === "password_only" ? passwordOnlyToken() : kind === "link" ? stepUpToken({ aal: "aal1", methods: ["otp"] }) : kind === "link_with_own_factor" ? linkWithOwnFactorToken() : strongToken();
+    kind === "strong" ? strongToken()
+    : kind === "strong_with_code" ? stepUpToken({ aal: "aal2", methods: ["totp", "password"] })
+    : kind === "link" ? stepUpToken({ aal: "aal1", methods: ["otp"] })
+    : linkWithOwnFactorToken();
   const getSession = vi.fn(async () => ({ data: { session: { access_token: token, user: { id: OWNER_AUTH_ID } } }, error: null }));
   vi.mocked(getSupabaseServer).mockReturnValue({ auth: { getSession } } as unknown as ReturnType<typeof getSupabaseServer>);
-  if (kind === "pin_unset") unpinFactors();
-  else pinFactors(PINNED_FACTOR_ID);
-  const factors = kind === "unpinned_factor" ? [verifiedFactor(PINNED_FACTOR_ID), verifiedFactor("e1e1e1e1-2222-4222-8222-0123456789ab")] : [verifiedFactor(PINNED_FACTOR_ID)];
-  vi.mocked(getSupabaseAdmin).mockReturnValue({ auth: fakeFactorAdmin({ factors }).auth } as unknown as SupabaseClient);
 }
 
 describe("§2.3 the Ask AI routing matrix", () => {
@@ -86,7 +84,6 @@ describe("§2.3 the Ask AI routing matrix", () => {
   });
   afterEach(() => {
     vi.unstubAllEnvs();
-    unpinFactors();
   });
 
   const cases: { flag: boolean; owner: boolean; session: SessionKind; chat: boolean; askAi: boolean }[] = [];
@@ -100,7 +97,7 @@ describe("§2.3 the Ask AI routing matrix", () => {
       useSession(c.session);
       vi.mocked(loadSettings).mockResolvedValue({ ...ON, chatEnabled: c.chat, askAiUsesExec: c.askAi });
       const state = await execAskAiRoutingStateFor(c.owner ? OWNER : LEADER);
-      const expected = c.flag && c.owner && c.session === "strong" && c.chat && c.askAi;
+      const expected = c.flag && c.owner && STRONG_SESSIONS.has(c.session) && c.chat && c.askAi;
       expect(state.routed, JSON.stringify(c)).toBe(expected);
       if (!state.routed) expect(state.emailOn, JSON.stringify(c)).toBe(false);
     }

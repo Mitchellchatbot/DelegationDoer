@@ -6,10 +6,6 @@ import Link from "next/link";
 import { Sparkles } from "lucide-react";
 import { getSupabaseBrowser } from "@/lib/supabase-browser";
 import { safeNextPath } from "@/lib/login-next";
-import { LoginCodeStep, TWO_STEP_COPY, loginCodeStepFor, verifyLoginCode, type TwoStepFactor } from "@/components/TwoStepSection";
-
-const CARD =
-  "relative overflow-hidden rounded-3xl border border-white/70 bg-gradient-to-br from-blue-200/80 via-indigo-100/65 to-blue-50/55 backdrop-blur-md shadow-soft p-7 space-y-5";
 
 // Wrapper exists so the inner form (which uses useSearchParams) is inside a
 // Suspense boundary. Next.js 14 build fails to prerender otherwise.
@@ -35,18 +31,6 @@ function LoginForm() {
   const [error, setError] = useState<string | null>(search.get("error"));
   const [resetSent, setResetSent] = useState(false);
   const [sendingReset, setSendingReset] = useState(false);
-  // P9 (F2 step 4): the code step, after a password sign-in on an account with a verified authenticator. null = not
-  // shown; factors null = the account has one but it couldn't be listed (Skip only). Users without one never see it.
-  const [codeStep, setCodeStep] = useState<{ factors: readonly TwoStepFactor[] | null } | null>(null);
-  const [factorId, setFactorId] = useState<string | null>(null);
-  const [code, setCode] = useState("");
-  const [codeError, setCodeError] = useState<string | null>(null);
-  const [verifying, setVerifying] = useState(false);
-
-  /** P9 fixer security-2: ?next= is resolved now and kept only as a same-origin path ("/" otherwise), every way out. */
-  function goNext() {
-    window.location.href = safeNextPath(next, window.location.origin);
-  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -60,42 +44,12 @@ function LoginForm() {
         setSubmitting(false);
         return;
       }
-      // P9 (F2 step 4): an account with a verified authenticator this session hasn't used yet gets the code step
-      // before it goes on; everyone else goes on exactly as before.
-      const step = await loginCodeStepFor(supabase.auth.mfa);
-      if (step.kind === "none") {
-        goNext();
-        return;
-      }
-      setPassword("");
-      setCodeError(step.kind === "unavailable" ? TWO_STEP_COPY.factorsUnavailable : null);
-      setFactorId(step.kind === "code" ? step.preselected : null);
-      setCodeStep({ factors: step.kind === "code" ? step.factors : null });
-      setSubmitting(false);
+      // ?next= is public, so only a path on this same origin is followed ("/" otherwise); see login-next.ts.
+      window.location.href = safeNextPath(next, window.location.origin);
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
       setSubmitting(false);
     }
-  }
-
-  async function submitCode(e: React.FormEvent) {
-    e.preventDefault();
-    if (codeStep === null || factorId === null) return;
-    setCodeError(null);
-    setVerifying(true);
-    const result = await verifyLoginCode(getSupabaseBrowser().auth.mfa, factorId, code);
-    if (result.ok) {
-      goNext();
-      return;
-    }
-    setCodeError(result.message);
-    setCode("");
-    setVerifying(false);
-  }
-
-  function skipCode() {
-    // Signed in without the code: the rest of DD works; pages that need it stay closed.
-    goNext();
   }
 
   async function sendReset() {
@@ -163,27 +117,10 @@ function LoginForm() {
     }
   }
 
-  if (codeStep !== null) {
-    return (
-      <LoginCodeStep
-        className={CARD}
-        factors={codeStep.factors}
-        factorId={factorId}
-        onFactorChange={setFactorId}
-        code={code}
-        onCodeChange={setCode}
-        error={codeError}
-        verifying={verifying}
-        onSubmit={submitCode}
-        onSkip={skipCode}
-      />
-    );
-  }
-
   return (
     <form
       onSubmit={submit}
-      className={CARD}
+      className="relative overflow-hidden rounded-3xl border border-white/70 bg-gradient-to-br from-blue-200/80 via-indigo-100/65 to-blue-50/55 backdrop-blur-md shadow-soft p-7 space-y-5"
     >
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-500 grid place-items-center shadow-sm">

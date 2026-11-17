@@ -755,9 +755,11 @@ export interface MissiveAttachment {
   content: Buffer;
 }
 
-// Disconnect a mailbox from the missiveclone backend. Removes the
-// stored OAuth tokens + cascades to messages/threads/sync state. The
-// caller still has to clean up DD's own inbox_assignments row.
+// Disconnect a mailbox from the missiveclone backend. Removes the mailbox
+// and its stored OAuth tokens; its sync state and scheduled sends go with
+// it. Its messages and threads stay in the clone, detached from any
+// mailbox (messages.account_id becomes NULL). The caller still has to
+// clean up DD's own inbox_assignments row.
 export async function deleteAccount(accountId: string): Promise<void> {
   await missiveFetch<{ ok: true }>(`/api/accounts/${encodeURIComponent(accountId)}`, {
     method: "DELETE"

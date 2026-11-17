@@ -10,14 +10,24 @@ vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
 import { createFakeSlackDb, type FakeSlackDb } from "@/lib/exec/__tests__/fake-slack-db";
 import { ROUTING_INSTALLATION as RI } from "@/lib/exec/__tests__/slack-assert";
 import { installationRow, TOKEN_KEY } from "@/lib/exec/__tests__/slack-route-helpers";
-import { __resetAcceptActionV2ForTests, acceptAction, installationFactsForSystem, SlackStoreError } from "@/lib/exec/slack-install";
+import {
+  __resetAcceptActionV2ForTests,
+  __resetAcceptActionV3ForTests,
+  acceptAction,
+  installationFactsForSystem,
+  SlackStoreError
+} from "@/lib/exec/slack-install";
 import type { SlackActionFacts } from "@/lib/exec/slack-types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 // P8 §5.11 CI32 (C43, coherence-6) and §3.21.3 installationFactsForSystem (AM-P8-17; Area D): P6's acceptAction calls P8's
 // exec_slack_accept_action_v2 first and falls back to P6's own RPC on 42883 / PGRST202, remembering the absence for 5 minutes
 // per process; the interactions route is not edited.
+// P10 (§3.5.10, H4, AM-P10-17): acceptAction now tries exec_slack_accept_action_v3 first. These are P8's cases on a P8 database
+// (v3 not installed: PGRST202, marked absent for 5 minutes), so v2 → v1 runs exactly as before; the v3 attempts are left out of
+// the call lists below (slack-install-p10.test.ts pins v3 → v2 → v1).
 
+const ACCEPT_V3 = "exec_slack_accept_action_v3";
 let db: FakeSlackDb;
 const NOW = new Date("2026-11-09T13:20:00.000Z");
 const signal = () => new AbortController().signal;
@@ -27,9 +37,10 @@ const facts = (over: Partial<SlackActionFacts> = {}): SlackActionFacts => ({
   teamId: RI.teamId, apiAppId: RI.appId, userId: RI.userId, triggerId: "t.1", actionId: "ea_draft_save", value: `d1.${ED}.3`, containerType: "message",
   channelId: RI.dmChannelId, messageTs: MESSAGE_TS, ...over
 });
-const rpcTargets = () => db.calls.filter((c) => c.kind === "rpc").map((c) => c.target);
+const rpcCalls = () => db.calls.filter((c) => c.kind === "rpc" && c.target !== ACCEPT_V3);
+const rpcTargets = () => rpcCalls().map((c) => c.target);
 function useDb(missing: string[] = []): void {
-  db = createFakeSlackDb({ tables: { exec_slack_installations: [installationRow()] }, missing });
+  db = createFakeSlackDb({ tables: { exec_slack_installations: [installationRow()] }, missing: [ACCEPT_V3, ...missing] });
   vi.mocked(getSupabaseAdmin).mockReturnValue(db.client as SupabaseClient);
 }
 
@@ -38,10 +49,12 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
   __resetAcceptActionV2ForTests();
+  __resetAcceptActionV3ForTests();
   useDb();
 });
 afterEach(() => {
   __resetAcceptActionV2ForTests();
+  __resetAcceptActionV3ForTests();
   vi.useRealTimers();
   vi.unstubAllEnvs();
 });
@@ -66,7 +79,7 @@ describe("CI32 acceptAction: v2, then v1", () => {
     useDb(["exec_slack_accept_action_v2"]);
     const s = signal();
     expect(await acceptAction(facts(), { signal: s })).toEqual({ outcome: "enqueued" });
-    expect(db.calls.filter((c) => c.kind === "rpc").map((c) => [c.target, c.signal === s])).toEqual([["exec_slack_accept_action_v2", true], ["exec_slack_accept_action", true]]);
+    expect(rpcCalls().map((c) => [c.target, c.signal === s])).toEqual([["exec_slack_accept_action_v2", true], ["exec_slack_accept_action", true]]);
     expect((globalThis as { __ddExecAcceptActionV2AbsentAt?: number }).__ddExecAcceptActionV2AbsentAt).toBe(NOW.getTime());
     db.calls.length = 0;
     vi.setSystemTime(new Date(NOW.getTime() + 4 * 60_000));

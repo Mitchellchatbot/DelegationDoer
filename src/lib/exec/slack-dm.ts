@@ -7,6 +7,7 @@ import { enqueueJob } from "@/lib/exec/jobs";
 import { getProposalView } from "@/lib/exec/proposals";
 import { deleteInDm, postInDm, setHomeView, SlackApiError, updateInDm, type SlackCallOptions, type SlackMessageMetadata } from "@/lib/exec/sources/slack";
 import { clearSlackError, deleteSlackPostRecord, enqueueRevokeCheck, recordSlackError, recordSlackPost } from "@/lib/exec/slack-install";
+import { postReplyCardOutcome } from "@/lib/exec/slack-reply-view";   // P10 (§3.5.11): the slack_reply card branch
 import { SLACK_JOB_KINDS, SLACK_LIMITS, SLACK_RE } from "@/lib/exec/slack-types";
 import type { DmTarget, OpenInstallation, SlackCardPayload, SlackHomeView, SlackMessageParts, SlackPostLedger } from "@/lib/exec/slack-types";
 import { renderDraftCard, renderProposalCard } from "@/lib/exec/slack-ui";
@@ -220,6 +221,13 @@ export async function postCards(principal: ExecPrincipal, inst: OpenInstallation
         if (readFailed || view?.status === "generating") {
           await scheduleCardRefresh(principal, inst, { id: card.draftId, ts }, GENERATING_REFRESH_DELAYS_MS, sched);
         }
+      } else if (card.kind === "slack_reply") {
+        // P10 (§3.5.11, C31 (a)): the reply-draft card in the DM thread, ledger kind "note" (AM-P8-2). It never posts a
+        // finance-class draft (H9) and never throws; a refusal counts as failed, and an auth failure still stops the loop.
+        const r = await postReplyCardOutcome(principal, inst, rootTs, messageId, card.draftId, "slack");
+        if (r.posted) posted += 1;
+        else failed += 1;
+        if (r.authFailed) dead = true;
       } else {
         failed += 1;
       }

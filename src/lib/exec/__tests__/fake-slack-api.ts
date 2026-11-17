@@ -527,3 +527,186 @@ export function fakeSlackWorkspace(seed: { tokens?: Record<string, FakeSlackIden
     inChannel: (channel) => messages.filter((m) => m.channel === channel)
   };
 }
+
+// --- P10 (§5.14; Area D): his DD token's posts into conversations, the lead readers' pages and Slack's read-back -----------
+//
+// A stateful workspace for the reply sender, the lead readers and the reply pack, keyed by the bearer token:
+//   * auth.test answers per token (FakeSlackIdentity) or a Slack error code;
+//   * chat.postMessage to ANY channel records { channel, text, thread_ts, unfurl_links, unfurl_media, link_names,
+//     reply_broadcast, blocks, metadata, as_user, parse, token } in `posts` (the body's own fields, as sent: a key the sender
+//     left out stays absent) and stores the message so conversations.history / replies read it back in Slack's wire form
+//     (wireText: VS16 stripped, bare e-mail addresses and domains auto-linked as <mailto:…|…> / <http://…|…>, the entities the
+//     sender wrote kept); failNext(method, failure) injects one answer per call (P8's FakeSlackFailure);
+//   * chat.update records each update (updates) and can be slowed (updateDelayMs) to prove nothing waits on it (RS07);
+//   * conversations.history honours channel, oldest, latest, inclusive, limit and cursor over the seeded pages (full Slack
+//     message JSON, sentinels included, so a reader's own reduction is what a test checks) plus the posted messages;
+//     conversations.replies answers a thread (its root first) from the same store;
+//   * users.conversations answers the seeded member pages in order (cursor = the page's index);
+//   * chat.getPermalink answers a well-formed permalink for any stored ts.
+//
+//   const ws = fakeSlackP10Workspace({ tokens: { "xoxp-fake-1": { userId: "U0MITCH", teamId: "T0SCALED" } } });
+//   const slack = installFakeSlack(ws.handlers);
+
+export interface FakeSlackOwnerPost {
+  channel: string; token: string; ts: string; body: Record<string, unknown>;
+}
+export interface FakeSlackP10Message { channel: string; ts: string; json: Record<string, unknown>; deleted: boolean }
+export interface FakeSlackP10Workspace {
+  handlers: Partial<Record<SlackMethod, FakeSlackHandler>>;
+  /** Every chat.postMessage body as sent, with its token and the ts it got (failed posts included when "posted_*"). */
+  posts: FakeSlackOwnerPost[];
+  /** Every chat.update body as sent. */
+  updates: { channel: string; ts: string; token: string; body: Record<string, unknown> }[];
+  /** Every stored message, seeded or posted (mutable: delete, edit, add replies). */
+  messages: FakeSlackP10Message[];
+  tokens: Map<string, FakeSlackIdentity | { error: string }>;
+  /** users.conversations pages, in order (mutable). */
+  memberPages: Record<string, unknown>[][];
+  failNext(method: SlackMethod, failure: FakeSlackFailure): void;
+  /** Milliseconds every chat.update waits before it answers (0 = at once). Mutable. */
+  updateDelayMs: number;
+  /** Adds a message (full Slack JSON; its channel is set here). */
+  add(channel: string, json: Record<string, unknown>): void;
+}
+
+/** VS16 (U+FE0F VARIATION SELECTOR-16), built rather than typed. */
+const VS16 = String.fromCodePoint(0xfe0f);
+const WIRE_EMAIL = /(^|[\s(])([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)/g;
+const WIRE_DOMAIN = /(^|[\s(])((?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,24}(?:\/[^\s<>]*)?)/gi;
+
+/** Slack's read-back of a posted text: VS16 dropped, bare e-mails and domains auto-linked (entities kept as sent). */
+export function slackWireText(text: string): string {
+  const noVs = text.split(VS16).join("");
+  const withMail = noVs.replace(WIRE_EMAIL, (_m: string, pre: string, addr: string) => `${pre}<mailto:${addr}|${addr}>`);
+  return withMail.replace(WIRE_DOMAIN, (m: string, pre: string, target: string, offset: number, all: string) => {
+    // An address that is already inside an auto-link (<mailto:…|…>) stays as it is.
+    const before = all.slice(0, offset + pre.length);
+    if (before.lastIndexOf("<") > before.lastIndexOf(">")) return m;
+    const url = /^https?:\/\//i.test(target) ? target : `http://${target}`;
+    return `${pre}<${url}|${target}>`;
+  });
+}
+
+export function fakeSlackP10Workspace(seed: { tokens?: Record<string, FakeSlackIdentity | { error: string }>; messages?: { channel: string; json: Record<string, unknown> }[];
+  memberPages?: Record<string, unknown>[][]; firstTs?: number } = {}): FakeSlackP10Workspace {
+  const tokens = new Map(Object.entries(seed.tokens ?? {}));
+  const messages: FakeSlackP10Message[] = (seed.messages ?? []).map((m) => ({ channel: m.channel, ts: String(m.json.ts), json: structuredClone(m.json), deleted: false }));
+  const posts: FakeSlackOwnerPost[] = [];
+  const updates: FakeSlackP10Workspace["updates"] = [];
+  const failures = new Map<string, FakeSlackFailure[]>();
+  let seq = 0;
+  const nextTs = () => `${seed.firstTs ?? Math.floor(Date.now() / 1000)}.${String(100 + ++seq).padStart(6, "0")}`;
+  const error = (code: string) => ({ ok: false, error: code });
+  const hang = (): Promise<never> => new Promise<never>(() => undefined);
+  const injected = (method: SlackMethod, store: () => void): Promise<Response | object> | Response | object | null => {
+    const f = failures.get(method)?.shift();
+    if (f === undefined || f === "pass") return null;
+    if (typeof f === "object" && "ratelimited" in f) return new Response("", { status: 429, headers: { "retry-after": String(f.ratelimited) } });
+    if (typeof f === "object" && "error" in f) return error(f.error);
+    if (f.startsWith("posted_")) store();
+    if (f === "timeout" || f === "posted_timeout") return hang();
+    if (f === "http_503" || f === "posted_503") return new Response("", { status: 503 });
+    throw new TypeError("fetch failed");
+  };
+  const identity = (headers: Headers): FakeSlackIdentity | { error: string } => tokens.get(bearerOf(headers)) ?? { error: "invalid_auth" };
+  const tsNum = (v: unknown) => (typeof v === "string" && v.length > 0 ? Number(v) : Number.NaN);
+  const inWindow = (ts: string, body: Record<string, unknown>) => {
+    const t = Number(ts);
+    const oldest = tsNum(body.oldest);
+    const latest = tsNum(body.latest);
+    const inclusive = body.inclusive === "true";
+    if (Number.isFinite(oldest) && (inclusive ? t < oldest : t <= oldest)) return false;
+    if (Number.isFinite(latest) && (inclusive ? t > latest : t >= latest)) return false;
+    return true;
+  };
+  const page = (rows: FakeSlackP10Message[], body: Record<string, unknown>) => {
+    const limit = Math.max(1, Number(body.limit ?? 100));
+    const start = typeof body.cursor === "string" && /^[0-9]+$/.test(body.cursor) ? Number(body.cursor) : 0;
+    const slice = rows.slice(start, start + limit);
+    const more = start + limit < rows.length;
+    return { ok: true, messages: slice.map((m) => structuredClone(m.json)), has_more: more, response_metadata: { next_cursor: more ? String(start + limit) : "" } };
+  };
+  const ws: FakeSlackP10Workspace = {
+    handlers: {},
+    posts, updates, messages, tokens,
+    memberPages: (seed.memberPages ?? []).map((p) => p.map((c) => structuredClone(c))),
+    updateDelayMs: 0,
+    failNext(method, failure) {
+      const q = failures.get(method) ?? [];
+      q.push(failure);
+      failures.set(method, q);
+    },
+    add(channel, json) {
+      messages.push({ channel, ts: String(json.ts), json: structuredClone(json), deleted: false });
+    }
+  };
+  ws.handlers = {
+    "auth.test": (_body, headers) => {
+      const failure = injected("auth.test", () => undefined);
+      if (failure !== null) return failure;
+      const id = identity(headers);
+      if ("error" in id) return error(id.error);
+      return { ok: true, url: "https://scaledai.slack.com/", team: "ScaledAI", user: "someone", team_id: id.teamId, user_id: id.userId,
+        ...(id.botId ? { bot_id: id.botId } : {}), is_enterprise_install: false };
+    },
+    "chat.postMessage": (body, headers) => {
+      const token = bearerOf(headers);
+      const ts = nextTs();
+      const channel = String(body.channel);
+      const record = () => {
+        posts.push({ channel, token, ts, body: structuredClone(body) });
+        const id = tokens.get(token);
+        const user = id && !("error" in id) ? id.userId : "U0UNKNOWN";
+        const json: Record<string, unknown> = { type: "message", user, ts, text: slackWireText(String(body.text ?? "")), team: id && !("error" in id) ? id.teamId : "T0SCALED" };
+        if (typeof body.thread_ts === "string") json.thread_ts = body.thread_ts;
+        messages.push({ channel, ts, json, deleted: false });
+      };
+      const failure = injected("chat.postMessage", record);
+      if (failure !== null) return failure;
+      const id = identity(headers);
+      if ("error" in id) return error(id.error);
+      record();
+      return { ok: true, channel, ts, message: { type: "message", ts, text: body.text } };
+    },
+    "chat.update": async (body, headers) => {
+      if (ws.updateDelayMs > 0) await new Promise((r) => setTimeout(r, ws.updateDelayMs));
+      const failure = injected("chat.update", () => undefined);
+      if (failure !== null) return failure;
+      updates.push({ channel: String(body.channel), ts: String(body.ts), token: bearerOf(headers), body: structuredClone(body) });
+      return { ok: true, channel: body.channel, ts: body.ts };
+    },
+    "conversations.history": (body) => {
+      const failure = injected("conversations.history", () => undefined);
+      if (failure !== null) return failure;
+      const rows = messages.filter((m) => !m.deleted && m.channel === body.channel && inWindow(m.ts, body)
+        && (typeof m.json.thread_ts !== "string" || m.json.thread_ts === m.ts || m.json.subtype === "thread_broadcast"))
+        .sort((a, b) => Number(b.ts) - Number(a.ts));
+      return page(rows, body);
+    },
+    "conversations.replies": (body) => {
+      const failure = injected("conversations.replies", () => undefined);
+      if (failure !== null) return failure;
+      const root = String(body.ts);
+      const thread = messages.filter((m) => !m.deleted && m.channel === body.channel && (m.ts === root || m.json.thread_ts === root) && inWindow(m.ts, body))
+        .sort((a, b) => (a.ts === root ? -1 : b.ts === root ? 1 : Number(a.ts) - Number(b.ts)));
+      if (!messages.some((m) => m.channel === body.channel && m.ts === root)) return error("thread_not_found");
+      return page(thread, body);
+    },
+    "users.conversations": (body) => {
+      const failure = injected("users.conversations", () => undefined);
+      if (failure !== null) return failure;
+      const i = typeof body.cursor === "string" && /^[0-9]+$/.test(body.cursor) ? Number(body.cursor) : 0;
+      const channels = ws.memberPages[i] ?? [];
+      const next = i + 1 < ws.memberPages.length ? String(i + 1) : "";
+      return { ok: true, channels: channels.map((c) => structuredClone(c)), response_metadata: { next_cursor: next } };
+    },
+    "chat.getPermalink": (body) => {
+      const failure = injected("chat.getPermalink", () => undefined);
+      if (failure !== null) return failure;
+      const m = messages.find((x) => !x.deleted && x.channel === body.channel && x.ts === body.message_ts);
+      if (!m) return error("message_not_found");
+      return { ok: true, channel: body.channel, permalink: `https://scaledai.slack.com/archives/${String(body.channel)}/p${m.ts.replace(".", "")}` };
+    }
+  };
+  return ws;
+}

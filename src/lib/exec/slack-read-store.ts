@@ -26,6 +26,7 @@ import type {
   WatchState
 } from "@/lib/exec/slack-read-types";
 import { compareTs, slackMsgFingerprint } from "@/lib/exec/slack-read-types";
+import { P10_LIMITS } from "@/lib/exec/slack-p10-types";
 import type { SlackEventFacts } from "@/lib/exec/slack-types";
 import type { ExecPrincipal, JobLane } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -1687,4 +1688,104 @@ export async function listGateDropChannels(principalIds: readonly string[]): Pro
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// P10 (contract §3.3.5, §3.13, B-P10-12; Area B): the read-all switch's effects and the voice sampler's conversations, so no
+// P10 file names a P7a table.
+// ---------------------------------------------------------------------------
+
+const READ_ALL_COLS = "channel_id,conv_type,class,finance_name,watch_state,mute_source,watch_set_by_owner_at,name";
+const READ_ALL_LABEL_MAX = 80;
+const VOICE_CHANNELS_MAX = 50;
+
+/** P7b's slackChannelLabel (slack-page.ts), restated: the store can't import the page model (it imports this store through
+ *  the slack-reading facade). "#name" for a named channel or private channel, else the conversation kind's words; the name is
+ *  cut to Slack's own character set, so a hostile stored value renders as plain text of bounded length. */
+function storedChannelLabel(convType: ConvType, name: string | null): string {
+  const raw = typeof name === "string" ? name.replace(/[^A-Za-z0-9._-]/g, "").slice(0, READ_ALL_LABEL_MAX - 1) : "";
+  if ((convType === "channel" || convType === "group") && raw.length > 0) return `#${raw}`;
+  if (convType === "mpim") return "Group DM";
+  if (convType === "im") return "Direct message";
+  return convType === "group" ? "Private channel" : "Channel";
+}
+
+/** P10 (C10) + v1.1 (security-5, product-14). Member conversations of the live installation, not left, in one read. null when the
+ *  P7a schema is missing; other failures throw. Labels come from the stored P7a names through slackChannelLabel (deny and
+ *  unclassified rows have no name, slack-classes.ts:231-235); they are for the Settings page only and are never logged. */
+export async function countReadAllEffects(principal: ExecPrincipal, q: { readAll: boolean }, opts?: { signal?: AbortSignal }): Promise<{
+  /** class finance or finance_name, by watch state. */
+  financeWatched: number; financeMuted: number;
+  /** Rows with no owner choice (watch_set_by_owner_at null) whose state doesn't match q.readAll's default yet: under read-all,
+   *  muted with mute_source 'default_finance' or 'slack'; without it, class finance or finance_name and watched. > 0 = the
+   *  re-discovery the switch queued (C3) hasn't applied yet. */
+  pendingDefaults: number;
+  /** security-5: rows with no owner choice that read-all opens (watch_state 'muted', mute_source in ('default_finance', 'slack')),
+   *  sorted by label, ≤ readAllPreviewMax, plus the count of the rest. Meaningful while read-all is off (the confirm shows it). */
+  wouldOpen: { labels: string[]; more: number };
+} | null> {
+  const pid = requirePrincipal(principal);
+  const signal = opts?.signal;
+  const readAll = q?.readAll === true;
+  // One paged read of his member conversations that aren't left (deny rows are bare markers: never a member, never named).
+  const rows = await pagedSelect("countReadAllEffects", () =>
+    withSignal(db().from(CHANNELS).select(READ_ALL_COLS).eq("principal_id", pid).eq("is_member", true).is("left_at", null).neq("class", "deny")
+      .order("channel_id", { ascending: true }), signal)
+  );
+  if (rows === null) return null;
+  let financeWatched = 0;
+  let financeMuted = 0;
+  let pendingDefaults = 0;
+  const opens: string[] = [];
+  for (const r of rows) {
+    const cls = oneOf(r.class, CLASSES);
+    const conv = oneOf(r.conv_type, CONV_TYPES);
+    const watch = oneOf(r.watch_state, WATCH_STATES);
+    if (!cls || !conv || !watch || cls === "deny" || cls === "unclassified") continue;
+    const finance = cls === "finance" || bool(r.finance_name);
+    if (finance && watch === "watched") financeWatched += 1;
+    if (finance && watch === "muted") financeMuted += 1;
+    if (str(r.watch_set_by_owner_at) !== null) continue;   // his own choice survives the switch (C5): never pending, never opened
+    const mute = oneOf(r.mute_source, MUTE_SOURCES);
+    const closedByDefault = watch === "muted" && (mute === "default_finance" || mute === "slack");
+    if (readAll ? closedByDefault : finance && watch === "watched") pendingDefaults += 1;
+    if (closedByDefault) opens.push(storedChannelLabel(conv, str(r.name)));
+  }
+  opens.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const max = P10_LIMITS.readAllPreviewMax;
+  return { financeWatched, financeMuted, pendingDefaults, wouldOpen: { labels: opens.slice(0, max), more: Math.max(0, opens.length - max) } };
+}
+
+/** P10 (§3.13, §3.5.6 step 2): the voice sampler's conversations: class standard, never shared (is_ext_shared, ext_ever false),
+ *  not finance_name, watch_state 'watched', member, not left, not archived, ordered by last_activity_ts desc then swept_at desc,
+ *  ≤ limit (10). Consumed by Area C's refreshSlackVoice. */
+export async function listReplyChannelsForVoice(principal: ExecPrincipal, limit: number): Promise<ChannelRow[]> {
+  const pid = requirePrincipal(principal);
+  const n = clampInt(limit, 1, VOICE_CHANNELS_MAX, P10_LIMITS.voiceConversations);
+  const result = (await db()
+    .from(CHANNELS)
+    .select(CHANNEL_COLS)
+    .eq("principal_id", pid)
+    .eq("class", "standard")
+    .eq("is_ext_shared", false)
+    .eq("ext_ever", false)
+    .eq("finance_name", false)
+    .eq("watch_state", "watched")
+    .eq("is_member", true)
+    .eq("is_archived", false)
+    .is("left_at", null)
+    .order("last_activity_ts", { ascending: false, nullsFirst: false })
+    .order("swept_at", { ascending: false, nullsFirst: false })
+    .order("channel_id", { ascending: true })
+    .limit(n)) as Result;
+  if (result.error) {
+    if (missing(result.error)) return [];
+    throw failure("listReplyChannelsForVoice", result.error);
+  }
+  // The predicate again on the mapped rows (a row the database answered outside it is dropped, never sampled).
+  return rowsOf(result)
+    .map((r) => toChannelRow(r, "listReplyChannelsForVoice"))
+    .filter((c) => c.class === "standard" && !c.isExtShared && !c.extEver && !c.financeName && c.watchState === "watched" && c.isMember
+      && !c.isArchived && c.leftAt === null)
+    .slice(0, n);
 }

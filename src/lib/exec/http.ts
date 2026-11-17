@@ -202,7 +202,10 @@ export type RateBucket = "attention_action" | "attention_feedback" | "settings_u
   // P7b (stage-0 seed, §0.2 step 5): the tag route (B, 60 / 10 min) and the digest build route (C, 20 / 10 min).
   | "slack_links" | "slack_digest_build"
   // P8 (stage-0 seed, §3.17.4; then Area E's): Regenerate (6 / h), its dry run (3 / h) and the brief settings (30 / 10 min).
-  | "brief_regenerate" | "brief_dry_run" | "brief_settings";
+  | "brief_regenerate" | "brief_dry_run" | "brief_settings"
+  // P10 (stage-0 seed, §3.12, C49; then Area D's): reply create + regenerate (20 / 10 min), edit + discard + review
+  // (60 / 10 min), send + resolve (10 / 10 min; the DM send job counts the same audit action).
+  | "slack_reply_create" | "slack_reply_edit" | "slack_reply_send";
 export interface RateBucketDef {
   /** created_at of the n-th newest counted row at or after sinceIso, or null when there are fewer than n. Throws on a read error. */
   nthNewestAt: (principal: ExecPrincipal, sinceIso: string, n: number, signal?: AbortSignal) => Promise<string | null>;
@@ -304,7 +307,11 @@ export const RATE_BUCKETS: Readonly<Record<RateBucket, RateBucketDef>> = Object.
   // P8 (§3.17.4; seeded at stage 0, then Area E's).
   brief_regenerate: { nthNewestAt: auditNthNewestAt(["brief.regenerate"]) },
   brief_dry_run: { nthNewestAt: auditNthNewestAt(["brief.dry_run"]) },
-  brief_settings: { nthNewestAt: auditNthNewestAt(["brief.settings.update"]) }
+  brief_settings: { nthNewestAt: auditNthNewestAt(["brief.settings.update"]) },
+  // P10 (§3.12, C49, C59; seeded at stage 0, then Area D's). v1.1: the review route's slack_reply.review shares the edit bucket.
+  slack_reply_create: { nthNewestAt: auditNthNewestAt(["slack_reply.create", "slack_reply.regenerate"]) },
+  slack_reply_edit: { nthNewestAt: auditNthNewestAt(["slack_reply.edit", "slack_reply.discard", "slack_reply.review"]) },
+  slack_reply_send: { nthNewestAt: auditNthNewestAt(["slack_reply.send", "slack_reply.resolve"]) }
 });
 
 /**

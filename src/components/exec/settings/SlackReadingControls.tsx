@@ -267,8 +267,9 @@ export function EnableReadingConfirm({
   );
 }
 
-/** The Stop reading confirm (N4, C42). */
-export function StopReadingConfirm({ pending, onConfirm, onCancel, autoFocus = true }: { pending: boolean; onConfirm: () => void; onCancel: () => void; autoFocus?: boolean }) {
+/** The Stop reading confirm (N4, C42). P10 (§3.7.5, ST10): `extra` (stopAlso while P10 is installed) under the body. */
+export function StopReadingConfirm({ pending, onConfirm, onCancel, autoFocus = true, extra = null }: { pending: boolean; onConfirm: () => void;
+  onCancel: () => void; autoFocus?: boolean; extra?: string | null }) {
   const id = useId();
   const titleRef = useRef<HTMLParagraphElement>(null);
   useEffect(() => {
@@ -294,6 +295,11 @@ export function StopReadingConfirm({ pending, onConfirm, onCancel, autoFocus = t
       <p id={`${id}-b`} className="text-[12.5px] leading-relaxed text-rose-950">
         {SLACK_READ_COPY.stopBody}
       </p>
+      {extra ? (
+        <p data-reading-stop-also className="text-[12.5px] leading-relaxed text-rose-950">
+          {extra}
+        </p>
+      ) : null}
       <div className="flex flex-wrap gap-2">
         <button type="button" data-reading-stop-confirm-button onClick={onConfirm} disabled={pending} className={DANGER_BUTTON}>
           {pending ? "Stopping…" : "Stop reading"}
@@ -367,7 +373,8 @@ export function SlackReadingControls({
   onCanonicalHost = true,
   initialDialog = null,
   initialChecked = false,
-  enableConfirmExtra = null
+  enableConfirmExtra = null,
+  stopConfirmExtra = null
 }: {
   view: SlackReadingView;
   /** C45: false replaces the Allow link with P6's settingsWrongHost. */
@@ -378,6 +385,8 @@ export function SlackReadingControls({
   initialChecked?: boolean;
   /** P7b fixer (ui-3): a second paragraph in the enable confirm (P7b's digests and live reads); null shows none. */
   enableConfirmExtra?: string | null;
+  /** P10 (§3.7.5, ST10): a second paragraph in the Stop-reading confirm (stopAlso while P10 is installed); null shows none. */
+  stopConfirmExtra?: string | null;
 }) {
   const isTop = useIsTopWindow();
   const router = useRouter();
@@ -544,7 +553,8 @@ export function SlackReadingControls({
         </div>
       )}
       {dialog === "stop" && canStop && (
-        <StopReadingConfirm pending={pending === "stop"} onConfirm={() => void stop()} onCancel={() => setDialog(null)} autoFocus={initialDialog === null} />
+        <StopReadingConfirm pending={pending === "stop"} onConfirm={() => void stop()} onCancel={() => setDialog(null)} autoFocus={initialDialog === null}
+          extra={stopConfirmExtra} />
       )}
       <p
         aria-live="polite"

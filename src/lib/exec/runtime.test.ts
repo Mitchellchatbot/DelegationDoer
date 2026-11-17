@@ -75,8 +75,21 @@ vi.mock("@/lib/exec/brief-store", async (importOriginal) => {
     listPrincipalIdsWithSlackLines: vi.fn(),
     scrubBriefsForSlackSystem: vi.fn(),
     listFallbackDmsDue: vi.fn(),
-    markFallbackDmDeleted: vi.fn()
+    markFallbackDmDeleted: vi.fn(),
+    // P10 (§3.11, v1.1 correctness-3): the lead re-check's second candidate source and its strip.
+    listPrincipalsWithBriefLeads: vi.fn(),
+    stripBriefLeadsSystem: vi.fn()
   };
+});
+// P10 (contract §3.11): the system purge's four P10 steps (slackLeads, slackReplies, slackReplyCards, slackLeadRecheck) have
+// their own suites (slack-leads-store, slack-reply-store, handlers/purge); here they find nothing to do.
+vi.mock("@/lib/exec/slack-leads-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/exec/slack-leads-store")>();
+  return { ...actual, purgeExpiredLeadCounts: vi.fn(), listPrincipalsWithLeadRows: vi.fn(), purgeLeadCountsSystem: vi.fn() };
+});
+vi.mock("@/lib/exec/slack-reply-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/exec/slack-reply-store")>();
+  return { ...actual, purgeExpiredReplies: vi.fn(), deleteRevokedInstallationCards: vi.fn() };
 });
 // P9 F13 (Area C): the system purge's Slack token re-seal step has its own suites (slack-token-reseal, handlers/purge); here it
 // finds nothing to re-seal.
@@ -128,8 +141,21 @@ import {
   lastDeliveredBriefAt,
   listFallbackDmsDue,
   listPrincipalIdsWithSlackLines,
-  purgeExpiredBriefs
+  listPrincipalsWithBriefLeads,
+  purgeExpiredBriefs,
+  stripBriefLeadsSystem
 } from "@/lib/exec/brief-store";
+import { listPrincipalsWithLeadRows, purgeExpiredLeadCounts, purgeLeadCountsSystem } from "@/lib/exec/slack-leads-store";
+import { deleteRevokedInstallationCards, purgeExpiredReplies } from "@/lib/exec/slack-reply-store";
+import { slackLeadCountJobHandler, slackLeadCountScheduledWork } from "@/lib/exec/handlers/slack-lead-count";
+import { slackRdraftGenerateJobHandler } from "@/lib/exec/handlers/slack-rdraft-generate";
+import { slackRdraftPlanJobHandler, slackRdraftPlanScheduledWork } from "@/lib/exec/handlers/slack-rdraft-plan";
+import { slackRdraftSendJobHandler } from "@/lib/exec/handlers/slack-rdraft-send";
+import { slackRdraftActJobHandler } from "@/lib/exec/handlers/slack-rdraft-act";
+import { slackRdraftSweepJobHandler, slackRdraftSweepScheduledWork } from "@/lib/exec/handlers/slack-rdraft-sweep";
+import { slackVoiceRefreshJobHandler, slackVoiceRefreshScheduledWork } from "@/lib/exec/handlers/slack-voice-refresh";
+import { slackReplyTokenCheckJobHandler, slackReplyTokenCheckScheduledWork } from "@/lib/exec/handlers/slack-reply-token-check";
+import { P10_JOB_KINDS } from "@/lib/exec/slack-p10-types";
 import { getAnsweredExclusion } from "@/lib/exec/slack-reading";
 import { slackActionJobHandler } from "@/lib/exec/handlers/slack-action";
 import { slackCardJobHandler } from "@/lib/exec/handlers/slack-card";
@@ -172,6 +198,7 @@ import {
   registerSystemScheduledWork
 } from "@/lib/exec/scheduler";
 import {
+  BUILT_IN_JOB_KINDS,
   __resetExecRuntimeForTests,
   briefAnsweredExclusion,
   briefSinceLastResolver,
@@ -236,6 +263,15 @@ const NO_EMAIL_PURGED = {
   briefSlackScrubbed: 0,
   fallbackDmsDeleted: 0,
   fallbackDmsRetry: 0,
+  // P10 (§3.11): the lead and reply TTLs, the revoked installations' cards and the lead re-check find nothing here.
+  slackLeadCounts: 0,
+  slackLeadChannels: 0,
+  slackLeadPrincipalsPurged: 0,
+  slackRepliesExpired: 0,
+  slackRepliesContentPurged: 0,
+  slackRepliesDeleted: 0,
+  slackReplyCards: 0,
+  slackVoiceProfiles: 0,
   slackResealed: 0,
   slackResealUnknownKey: 0,
   slackResealLost: 0,
@@ -273,6 +309,14 @@ beforeEach(() => {
   vi.mocked(listPrincipalIdsWithSlackLines).mockResolvedValue([]);
   vi.mocked(listFallbackDmsDue).mockResolvedValue([]);
   vi.mocked(resealSlackTokens).mockResolvedValue({ checked: 0, resealed: 0, unknownKey: 0, lost: 0, failed: 0 });
+  // P10 (§3.11): nothing past its TTL, no revoked installation's cards, no principal for the lead re-check.
+  vi.mocked(purgeExpiredLeadCounts).mockResolvedValue({ counts: 0, channels: 0 });
+  vi.mocked(purgeExpiredReplies).mockResolvedValue({});
+  vi.mocked(deleteRevokedInstallationCards).mockResolvedValue(0);
+  vi.mocked(listPrincipalsWithLeadRows).mockResolvedValue([]);
+  vi.mocked(listPrincipalsWithBriefLeads).mockResolvedValue([]);
+  vi.mocked(purgeLeadCountsSystem).mockResolvedValue(null);
+  vi.mocked(stripBriefLeadsSystem).mockResolvedValue(null);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -327,7 +371,13 @@ const ALL_SCHEDULES = [
   briefScheduledWork,
   briefPrepScheduledWork,
   briefSweepScheduledWork,
-  briefHealthScheduledWork
+  briefHealthScheduledWork,
+  // P10 (contract §3.10)
+  slackLeadCountScheduledWork,
+  slackRdraftPlanScheduledWork,
+  slackRdraftSweepScheduledWork,
+  slackVoiceRefreshScheduledWork,
+  slackReplyTokenCheckScheduledWork
 ];
 const ALL_SYSTEM_SCHEDULES = [purgeSystemWork, opsWatchSystemWork, slackDmPurgeSystemWork];
 
@@ -562,9 +612,10 @@ describe("P7a Slack reading (contract §3.11.12): RT01-RT03", () => {
     expect(slackReadRecheckScheduledWork.cadence.kind === "daily" && slackReadRecheckScheduledWork.cadence.at(base)).toBe("04:20");
     expect([gate(slackReadRecheckScheduledWork, base), gate(slackReadRecheckScheduledWork, { ...base, slackReadingSchemaReady: true })]).toEqual([false, true]);
     // P7b's three schedules (its own describe below) and P6's sweep are left out of P7a's list (P9 F16: P6's DM purge is no
-    // per-principal schedule any more).
+    // per-principal schedule any more). P10's five (their own describe below) are left out too.
     expect(listScheduledWork().map((w) => w.kind)).not.toContain("exec.slack-dm-purge");
-    const notP7a = ["exec.slack-sweep", "exec.slack-correlate", "exec.slack-digest-plan", "exec.slack-intel-sweep"];
+    const notP7a = ["exec.slack-sweep", "exec.slack-correlate", "exec.slack-digest-plan", "exec.slack-intel-sweep",
+      ...[P10_JOB_KINDS.leadCount, P10_JOB_KINDS.replyPlan, P10_JOB_KINDS.replySweep, P10_JOB_KINDS.voiceRefresh, P10_JOB_KINDS.replyTokenCheck]];
     expect(listScheduledWork().filter((w) => w.kind.startsWith("exec.slack-") && !notP7a.includes(w.kind)).map((w) => w.kind))
       .toEqual(["exec.slack-discover", "exec.slack-read-sweep", "exec.slack-probe", "exec.slack-attention", "exec.slack-read-recheck"]);
   });
@@ -623,6 +674,106 @@ describe("P7b Slack intelligence (contract §3.11.5): the four handlers and the 
     // P8 stage 0 (p8-bindings.md, forced by the ScheduledWork.payload ctx seed): the payload function now gets a ScheduleContext.
     const ctx = { now: new Date(), settings: base, zone: "UTC", localDate: null, dueAt: null, dueKey: "exec.slack-intel-sweep:ep_1:i1" };
     expect(slackIntelSweepScheduledWork.payload?.(principal, ctx)).toEqual({ reason: "schedule" });
+  });
+});
+
+describe("P10 Slack lead counts and reply drafts (contract §3.10): the eight handlers and the five schedules", () => {
+  const P10_HANDLERS = [slackLeadCountJobHandler, slackRdraftGenerateJobHandler, slackRdraftPlanJobHandler, slackRdraftSendJobHandler,
+    slackRdraftActJobHandler, slackRdraftSweepJobHandler, slackVoiceRefreshJobHandler, slackReplyTokenCheckJobHandler];
+  const P10_SCHEDULES = [slackLeadCountScheduledWork, slackRdraftPlanScheduledWork, slackRdraftSweepScheduledWork, slackVoiceRefreshScheduledWork,
+    slackReplyTokenCheckScheduledWork];
+  /** Every P10 switch on, both schemas installed: each gate opens. */
+  const allOn = (base: ReturnType<typeof settingsFromRow>) => ({
+    ...base, slackP10SchemaReady: true, slackReadingSchemaReady: true, slackReadingEnabled: true, slackLeadCountsEnabled: true,
+    slackRepliesEnabled: true, slackReplyAuto: true, slackReplySendEnabled: true, slackVoiceEnabled: true
+  });
+
+  it("registers each handler once, with its kind from P10_JOB_KINDS and the §3.5.9 / §3.4.5 lanes and timeouts", () => {
+    ensureExecRuntime();
+    ensureExecRuntime();
+    for (const handler of P10_HANDLERS) expect(getJobHandler(handler.kind)).toBe(handler);
+    expect(P10_HANDLERS.map((h) => h.kind)).toEqual(Object.values(P10_JOB_KINDS));
+    expect(P10_HANDLERS.map((h) => [h.lane, h.timeoutMs])).toEqual([
+      ["bulk", 300_000],
+      ["interactive", 90_000],
+      ["bulk", 60_000],
+      ["interactive", 45_000],
+      ["interactive", 30_000],
+      ["bulk", 120_000],
+      ["bulk", 240_000],
+      ["bulk", 30_000]
+    ]);
+    for (const h of P10_HANDLERS) expect(Object.isFrozen(h), h.kind).toBe(true);
+    // The eight kinds close the registry's kind list (the System card's labels and the runbook read it).
+    expect(BUILT_IN_JOB_KINDS.slice(-8)).toEqual(Object.values(P10_JOB_KINDS));
+  });
+
+  it("schedules five kinds (one each) with the §3.10 cadences and gates; drafting and the two click kinds have no schedule", () => {
+    ensureExecRuntime();
+    for (const work of P10_SCHEDULES) expect(getScheduledWork(work.kind)).toBe(work);
+    expect(P10_SCHEDULES.map((w) => w.kind)).toEqual([P10_JOB_KINDS.leadCount, P10_JOB_KINDS.replyPlan, P10_JOB_KINDS.replySweep,
+      P10_JOB_KINDS.voiceRefresh, P10_JOB_KINDS.replyTokenCheck]);
+    // No schedule and no system work for the generation (enqueued by the creation path) or the DM card's two click kinds
+    // (inserted only by SQL exec_slack_accept_action_v3 from a verified click).
+    for (const kind of [P10_JOB_KINDS.replyGenerate, P10_JOB_KINDS.replySend, P10_JOB_KINDS.replyAct]) {
+      expect(getScheduledWork(kind), kind).toBeUndefined();
+      expect(getSystemScheduledWork(kind), kind).toBeUndefined();
+    }
+    const kinds = listScheduledWork().map((w) => w.kind);
+    expect(new Set(kinds).size).toBe(kinds.length);
+    const base = settingsFromRow(null, "ep_1");
+    expect(slackLeadCountScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "interval", minutes: 30 }, maxAttempts: 1 });
+    expect(slackRdraftPlanScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "interval", minutes: 10 }, maxAttempts: 1 });
+    expect(slackRdraftSweepScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "interval", minutes: 5 }, maxAttempts: 1 });
+    expect(slackVoiceRefreshScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "weekly", isoWeekday: 7, at: "04:40" }, maxAttempts: 1 });
+    expect(slackReplyTokenCheckScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "daily" }, maxAttempts: 2 });
+    expect(slackReplyTokenCheckScheduledWork.cadence.kind === "daily" && slackReplyTokenCheckScheduledWork.cadence.at(base)).toBe("06:10");
+    // Every gate is shut on the defaults (the P10 schema isn't installed) and open with every switch on.
+    const on = allOn(base);
+    const gate = (w: { enabled?: (s: typeof base) => boolean }, s: typeof base) => w.enabled?.(s);
+    expect(P10_SCHEDULES.map((w) => gate(w, base))).toEqual([false, false, false, false, false]);
+    expect(P10_SCHEDULES.map((w) => gate(w, on))).toEqual([true, true, true, true, true]);
+    expect(P10_SCHEDULES.map((w) => gate(w, { ...on, slackP10SchemaReady: false }))).toEqual([false, false, false, false, false]);
+    // Lead counts: also lead counts, reading and P7a's schema.
+    expect([gate(slackLeadCountScheduledWork, { ...on, slackLeadCountsEnabled: false }), gate(slackLeadCountScheduledWork, { ...on, slackReadingEnabled: false }),
+      gate(slackLeadCountScheduledWork, { ...on, slackReadingSchemaReady: false })]).toEqual([false, false, false]);
+    // The plan: replies, automatic drafts and reading.
+    expect([gate(slackRdraftPlanScheduledWork, { ...on, slackRepliesEnabled: false }), gate(slackRdraftPlanScheduledWork, { ...on, slackReplyAuto: false }),
+      gate(slackRdraftPlanScheduledWork, { ...on, slackReadingEnabled: false })]).toEqual([false, false, false]);
+    // The sweep purges whatever the switches say: only the P10 schema gates it.
+    const allOff = { ...on, slackReadingEnabled: false, slackLeadCountsEnabled: false, slackRepliesEnabled: false, slackReplyAuto: false,
+      slackReplySendEnabled: false, slackVoiceEnabled: false };
+    expect(gate(slackRdraftSweepScheduledWork, allOff)).toBe(true);
+    // The Slack style: replies and voice learning. The token check: replies and sending.
+    expect([gate(slackVoiceRefreshScheduledWork, { ...on, slackRepliesEnabled: false }), gate(slackVoiceRefreshScheduledWork, { ...on, slackVoiceEnabled: false })])
+      .toEqual([false, false]);
+    expect([gate(slackReplyTokenCheckScheduledWork, { ...on, slackRepliesEnabled: false }), gate(slackReplyTokenCheckScheduledWork, { ...on, slackReplySendEnabled: false })])
+      .toEqual([false, false]);
+  });
+
+  it("the scheduler enqueues the five with every switch on (Sunday 07:00 EST): keyed by bucket, day or ISO week, nothing for the click kinds", async () => {
+    vi.stubEnv("EXEC_ENABLED", "true");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const at = new Date("2026-11-08T12:00:00Z");   // Sunday 07:00 EST: past 04:40 (style) and 06:10 (token check)
+    vi.setSystemTime(at);
+    vi.mocked(listEnabledPrincipals).mockResolvedValue([principal]);
+    vi.mocked(loadSettings).mockImplementation(async (id: string) => allOn(settingsFromRow(null, id)));
+    await runExecSchedulerTick();
+    const p10Kinds = new Set<string>(Object.values(P10_JOB_KINDS));
+    const rows = db.upserts.map((u) => u.row).filter((r) => p10Kinds.has(String(r.kind)));
+    expect(rows.map((r) => [r.kind, r.dedupe_key, r.lane, r.principal_id, r.max_attempts])).toEqual([
+      [P10_JOB_KINDS.leadCount, `${P10_JOB_KINDS.leadCount}:ep_1:i${intervalBucket(at, 30)}`, "bulk", "ep_1", 1],
+      [P10_JOB_KINDS.replyPlan, `${P10_JOB_KINDS.replyPlan}:ep_1:i${intervalBucket(at, 10)}`, "bulk", "ep_1", 1],
+      [P10_JOB_KINDS.replySweep, `${P10_JOB_KINDS.replySweep}:ep_1:i${intervalBucket(at, 5)}`, "bulk", "ep_1", 1],
+      [P10_JOB_KINDS.voiceRefresh, `${P10_JOB_KINDS.voiceRefresh}:ep_1:2026-W45`, "bulk", "ep_1", 1],
+      [P10_JOB_KINDS.replyTokenCheck, `${P10_JOB_KINDS.replyTokenCheck}:ep_1:2026-11-08`, "bulk", "ep_1", 2]
+    ]);
+    // Defaults (the P10 schema not installed): none of them.
+    db.upserts.length = 0;
+    vi.mocked(loadSettings).mockImplementation(async (id: string) => settingsFromRow(null, id));
+    vi.setSystemTime(new Date("2026-11-08T12:30:00Z"));
+    await runExecSchedulerTick();
+    expect(db.upserts.map((u) => String(u.row.kind)).filter((k) => p10Kinds.has(k))).toEqual([]);
   });
 });
 
@@ -969,6 +1120,8 @@ describe("exec.purge", () => {
         "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 " +
         "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0 slackItems=0 slackMessages=0 slackThreads=0 slackMarkers=0 slackLog=0 slackChannels=0 slackAttention=0 slackDigests=0 slackDigestsFailed=0 " +
         "briefContentPurged=0 briefsDeleted=0 briefCheckinsDeleted=0 briefMentionsDeleted=0 briefRefsReleased=0 revokedReadingPurged=0 briefSlackScrubbed=0 fallbackDmsDeleted=0 fallbackDmsRetry=0 " +
+        "slackLeadCounts=0 slackLeadChannels=0 slackLeadPrincipalsPurged=0 slackRepliesExpired=0 slackRepliesContentPurged=0 " +
+        "slackRepliesDeleted=0 slackReplyCards=0 slackVoiceProfiles=0 " +
         "slackResealed=0 slackResealUnknownKey=0 slackResealLost=0 slackResealFailed=0"
     );
   });
@@ -1001,7 +1154,8 @@ describe("exec.purge", () => {
   it("runs every step even when one fails, then fails the run", async () => {
     db.deleteResult = (d) =>
       d.table === "exec_access_log" ? { count: null, error: { message: "statement timeout" } } : { count: 1, error: null };
-    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 21 steps failed: accessLog: exec_access_log purge failed: statement timeout");
+    // P10 (§3.11, AM-P10-23): four more steps (21 → 25).
+    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 25 steps failed: accessLog: exec_access_log purge failed: statement timeout");
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
       "exec_access_log",
@@ -1016,7 +1170,7 @@ describe("exec.purge", () => {
     db.deleteResult = (d) =>
       d.table === "exec_attention_items" ? { count: null, error: { message: "permission denied" } } : { count: 2, error: null };
     await expect(runPurge()).rejects.toThrow(
-      "exec.purge: 1 of 21 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
+      "exec.purge: 1 of 25 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
     );
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
@@ -1031,6 +1185,8 @@ describe("exec.purge", () => {
         "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 " +
         "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0 slackItems=0 slackMessages=0 slackThreads=0 slackMarkers=0 slackLog=0 slackChannels=0 slackAttention=0 slackDigests=0 slackDigestsFailed=0 " +
         "briefContentPurged=0 briefsDeleted=0 briefCheckinsDeleted=0 briefMentionsDeleted=0 briefRefsReleased=0 revokedReadingPurged=0 briefSlackScrubbed=0 fallbackDmsDeleted=0 fallbackDmsRetry=0 " +
+        "slackLeadCounts=0 slackLeadChannels=0 slackLeadPrincipalsPurged=0 slackRepliesExpired=0 slackRepliesContentPurged=0 " +
+        "slackRepliesDeleted=0 slackReplyCards=0 slackVoiceProfiles=0 " +
         "slackResealed=0 slackResealUnknownKey=0 slackResealLost=0 slackResealFailed=0 failed=1"
     );
   });

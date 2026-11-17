@@ -111,6 +111,24 @@ export interface ExecSettings {
   slackDailyCapUsd: number;
   /** The settings read found the P7a columns (the P7a migration is applied). */
   slackReadingSchemaReady: boolean;
+  // P10 (contract §3.7.1; stage-0 seed, lead): the "slackP10" column group. Area B's loader fills them from the row; each
+  // switch is on only when slackP10SchemaReady and the column is exactly true (a dropped group → the defaults).
+  /** exec_settings.slack_read_all (P10 T1, C1): also read finance-type channels he is in and the channels he muted in Slack. */
+  slackReadAll: boolean;
+  /** exec_settings.slack_lead_counts_enabled (P10 T2, C23): count posts in client lead channels (counts only). */
+  slackLeadCountsEnabled: boolean;
+  /** exec_settings.slack_replies_enabled (P10 T3): Slack reply drafts. */
+  slackRepliesEnabled: boolean;
+  /** exec_settings.slack_reply_send_enabled (P10 T3, H2): Send posts a drafted reply as him (on top of slackRepliesEnabled). */
+  slackReplySendEnabled: boolean;
+  /** exec_settings.slack_reply_auto (P10 C30): automatic drafts (never sent). */
+  slackReplyAuto: boolean;
+  /** exec_settings.slack_reply_daily_cap_usd (P10 C30, C52): automatic drafts' daily budget. Default 1.5. */
+  slackReplyDailyCapUsd: number;
+  /** exec_settings.slack_voice_enabled (P10 C25): learn his Slack style. Default true. */
+  slackVoiceEnabled: boolean;
+  /** The settings read found the P10 columns (the P10 migration is applied). */
+  slackP10SchemaReady: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -229,8 +247,11 @@ export interface SourceRef {
 // LLM
 // ---------------------------------------------------------------------------
 
-/** P8 (§3.21.1, stage-0 seed): "checkin" = the morning brief's check-in notes (Opus 5.5, effort medium, DD data only). */
-export type ExecLlmFeature = "chat" | "draft" | "brief" | "triage" | "digest" | "voice" | "spike" | "ddtext" | "slack_triage" | "checkin";
+/** P8 (§3.21.1, stage-0 seed): "checkin" = the morning brief's check-in notes (Opus 5.5, effort medium, DD data only).
+ *  P10 (§3.12, stage-0 seed): "slack_reply" = Slack reply drafts (Opus 5.5, effort medium); "slack_voice" = his Slack style
+ *  profile (Haiku 5.5, effort low). Neither shares P7a's Slack sub-cap (SLACK_CAP_FEATURES unchanged, C52). */
+export type ExecLlmFeature = "chat" | "draft" | "brief" | "triage" | "digest" | "voice" | "spike" | "ddtext" | "slack_triage" | "checkin"
+  | "slack_reply" | "slack_voice";
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 // ---------------------------------------------------------------------------

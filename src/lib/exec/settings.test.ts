@@ -43,11 +43,12 @@ function mint(id = "ep_1", accounts: string[] = ["acc_1", "acc_2"]): ExecPrincip
 const P = mint();
 const OTHER = mint("ep_2");
 
-type Groups = { email?: boolean; drafts?: boolean; ddtext?: boolean; chat?: boolean; slack?: boolean };
+type Groups = { email?: boolean; drafts?: boolean; ddtext?: boolean; chat?: boolean; slack?: boolean; slackP10?: boolean };
 /** An exec_settings row holding the base columns, updated_at and the groups asked for (all by default; P5b's chat and P7a's
  *  slack included). */
 function settingsDbRow(over: Row = {}, groups: Groups = {}): Row {
-  const g = { email: true, drafts: true, ddtext: true, chat: true, slack: true, ...groups };
+  // P10 (contract §3.7.1; Area B): P10's seven columns come with P7a's (P10's migration comes after), so reads stay single.
+  const g = { email: true, drafts: true, ddtext: true, chat: true, slack: true, slackP10: groups.slack !== false, ...groups };
   const row: Row = {
     principal_id: "ep_1",
     brief_enabled: false,
@@ -69,6 +70,10 @@ function settingsDbRow(over: Row = {}, groups: Groups = {}): Row {
   if (g.ddtext) Object.assign(row, { ddtext_enabled: false, retention_days_ddtext: 90 });
   if (g.chat) Object.assign(row, { chat_enabled: false, ask_ai_uses_exec: false, chat_daily_cap_usd: "9.00" });
   if (g.slack) Object.assign(row, { slack_reading_enabled: false, slack_daily_cap_usd: "2.00" });
+  if (g.slackP10) {
+    Object.assign(row, { slack_read_all: false, slack_lead_counts_enabled: false, slack_replies_enabled: false, slack_reply_send_enabled: false,
+      slack_reply_auto: false, slack_reply_daily_cap_usd: "1.50", slack_voice_enabled: true });
+  }
   return { ...row, ...over };
 }
 
@@ -309,7 +314,7 @@ describe("settings-fields.ts (test 25c)", () => {
       expect(def.label.length).toBeGreaterThan(3);
       expect(def.help.length).toBeGreaterThan(10);
       expect(`${def.label} ${def.help}`).not.toMatch(/stub/i);
-      expect(["base", "email", "drafts", "ddtext", "chat", "slack"]).toContain(def.group);
+      expect(["base", "email", "drafts", "ddtext", "chat", "slack", "slackP10"]).toContain(def.group);   // P10 stage 0: + slackP10
       if (def.kind === "boolean") expect([def.min, def.max]).toEqual([undefined, undefined]);
       else expect(typeof def.min === "number" && typeof def.max === "number").toBe(true);
     }
@@ -532,7 +537,7 @@ describe("getSettingsView", () => {
     useDb({ tables: { exec_settings: [settingsDbRow({}, { drafts: false, ddtext: false })] } });
     vi.mocked(getSyncState).mockResolvedValue(null);
     const view = await getSettingsView(P, NOW);
-    expect(view.schema).toEqual({ email: true, drafts: false, ddtext: false, chat: false, slack: false });
+    expect(view.schema).toEqual({ email: true, drafts: false, ddtext: false, chat: false, slack: false, slackP10: false });   // P10 stage 0
     expect(view.feedback).toEqual({ ok: true, data: null });
     expect(view.voice).toEqual({ ok: true, data: { installed: false, profile: null } });
     expect(feedbackTotals).not.toHaveBeenCalled();

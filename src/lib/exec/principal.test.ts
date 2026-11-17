@@ -210,7 +210,16 @@ describe("settingsFromRow", () => {
       // P7a stage -1 seed: nor the P7a columns, so Slack reading is off and not installed.
       slackReadingEnabled: false,
       slackDailyCapUsd: 2,
-      slackReadingSchemaReady: false
+      slackReadingSchemaReady: false,
+      // P10 stage 0 (§3.7.1, p10-bindings.md): nor the P10 columns, so every P10 field is its default and not installed.
+      slackReadAll: false,
+      slackLeadCountsEnabled: false,
+      slackRepliesEnabled: false,
+      slackReplySendEnabled: false,
+      slackReplyAuto: false,
+      slackReplyDailyCapUsd: 1.5,
+      slackVoiceEnabled: true,
+      slackP10SchemaReady: false
     });
   });
 
@@ -546,7 +555,7 @@ describe("loadSettings", () => {
     fakeDb({ exec_settings: [] });
     expect(await loadSettings("ep_1")).toEqual({
       principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: true, chatSchemaReady: true,
-      slackReadingSchemaReady: true
+      slackReadingSchemaReady: true, slackP10SchemaReady: true   // P10 (§3.7.1): the slackP10 group was read too
     });
   });
 
@@ -555,11 +564,12 @@ describe("loadSettings", () => {
   // drafts group (P4's migration can't exist without P3's column); the ddtext
   // group needs neither and stays. A message that names no column drops the
   // last still-selected group each time, so PGRST204's bare form walks all the
-  // way down (P7a's slack, P5b's chat, ddtext, drafts, email) before the base read answers.
-  // P5b: the chat group needs drafts, so a named email column takes it too (and P7a's slack group, which needs chat).
+  // way down (P10's slackP10, P7a's slack, P5b's chat, ddtext, drafts, email) before the base read answers.
+  // P5b: the chat group needs drafts, so a named email column takes it too (and P7a's slack group, which needs chat, and P10's
+  // slackP10 group, which needs slack).
   const emailMissingReads: Record<string, { reads: number; ddtextSchemaReady: boolean }> = {
     "42703": { reads: 2, ddtextSchemaReady: true },
-    PGRST204: { reads: 6, ddtextSchemaReady: false },
+    PGRST204: { reads: 7, ddtextSchemaReady: false },   // P10: one more group to walk down
     "message only": { reads: 2, ddtextSchemaReady: true }
   };
   for (const [form, err] of Object.entries(missingColumn)) {
@@ -591,15 +601,17 @@ describe("loadSettings", () => {
       expect(last.includes("ddtext_enabled")).toBe(expected.ddtextSchemaReady);
       expect(last).not.toContain("chat_enabled");
       if (form === "PGRST204") {
-        // Unnamed: the last group first (P7a's slack), then P5b's chat, then ddtext, then drafts, then email.
-        expect(reads[1].columns).not.toContain("slack_reading_enabled");
-        expect(reads[1].columns).toContain("chat_enabled");
-        expect(reads[2].columns).not.toContain("chat_enabled");
-        expect(reads[2].columns).toContain("ddtext_enabled");
-        expect(reads[3].columns).not.toContain("ddtext_enabled");
-        expect(reads[3].columns).toContain("drafts_enabled");
-        expect(reads[4].columns).toContain("email_enabled");
-        expect(reads[4].columns).not.toContain("drafts_enabled");
+        // Unnamed: the last group first (P10's slackP10), then P7a's slack, then P5b's chat, then ddtext, then drafts, then email.
+        expect(reads[1].columns).not.toContain("slack_read_all");
+        expect(reads[1].columns).toContain("slack_reading_enabled");
+        expect(reads[2].columns).not.toContain("slack_reading_enabled");
+        expect(reads[2].columns).toContain("chat_enabled");
+        expect(reads[3].columns).not.toContain("chat_enabled");
+        expect(reads[3].columns).toContain("ddtext_enabled");
+        expect(reads[4].columns).not.toContain("ddtext_enabled");
+        expect(reads[4].columns).toContain("drafts_enabled");
+        expect(reads[5].columns).toContain("email_enabled");
+        expect(reads[5].columns).not.toContain("drafts_enabled");
       }
     });
   }
@@ -662,7 +674,7 @@ describe("loadSettings: the column-group loader (P5a test 22)", () => {
     const cols = reads(db);
     expect(cols).toHaveLength(1);
     expect(cols[0].split(",")).toEqual(expect.arrayContaining(["updated_at", ...SETTINGS_COLUMN_GROUPS.flatMap((g) => [...g.columns])]));
-    expect(cols[0]).toBe(settingsColumnsFor({ email: true, drafts: true, ddtext: true, chat: true, slack: true }));
+    expect(cols[0]).toBe(settingsColumnsFor({ email: true, drafts: true, ddtext: true, chat: true, slack: true, slackP10: true }));   // P10 (§3.7.1)
   });
 
   const ddtextMissing: Record<string, DbError> = {
@@ -711,26 +723,29 @@ describe("loadSettings: the column-group loader (P5a test 22)", () => {
 
   it("an unnamed 42703 drops the last still-selected group first", async () => {
     const unnamed = { code: "42703", message: "column does not exist" };
-    // P5b: the chat group was the last one; P7a's slack group now is, so it goes first, then chat (then ddtext, whose
-    // column fails).
+    // P5b: the chat group was the last one; P7a's slack group and then P10's slackP10 group came after it, so slackP10 goes
+    // first, then slack, then chat (then ddtext, whose column fails).
     const db = fakeDb({ exec_settings: [fullRow()] }, {}, failWhen("ddtext_enabled", unnamed));
     expect(await loadSettings("ep_1")).toMatchObject({
-      emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: false, chatSchemaReady: false, slackReadingSchemaReady: false
+      emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: false, chatSchemaReady: false, slackReadingSchemaReady: false,
+      slackP10SchemaReady: false
     });
-    expect(reads(db)).toHaveLength(4);
+    expect(reads(db)).toHaveLength(5);   // P10: one more group dropped first
     // The failing column belongs to an earlier group: the later (present) groups go first, then that one.
     const db2 = fakeDb({ exec_settings: [fullRow()] }, {}, failWhen("send_enabled", unnamed));
     expect(await loadSettings("ep_1")).toMatchObject({ emailSchemaReady: true, draftsSchemaReady: false, ddtextSchemaReady: false, chatSchemaReady: false });
     const cols = reads(db2);
-    expect(cols).toHaveLength(5);
-    expect(cols[1]).toContain("chat_enabled");
-    expect(cols[1]).not.toContain("slack_reading_enabled");
-    expect(cols[2]).toContain("ddtext_enabled");
-    expect(cols[2]).not.toContain("chat_enabled");
-    expect(cols[3]).toContain("drafts_enabled");
-    expect(cols[3]).not.toContain("ddtext_enabled");
-    expect(cols[4]).toContain("email_enabled");
-    expect(cols[4]).not.toContain("drafts_enabled");
+    expect(cols).toHaveLength(6);   // P10: the slackP10 group goes first (cols[1]), so every later index moved by one
+    expect(cols[1]).toContain("slack_reading_enabled");
+    expect(cols[1]).not.toContain("slack_read_all");
+    expect(cols[2]).toContain("chat_enabled");
+    expect(cols[2]).not.toContain("slack_reading_enabled");
+    expect(cols[3]).toContain("ddtext_enabled");
+    expect(cols[3]).not.toContain("chat_enabled");
+    expect(cols[4]).toContain("drafts_enabled");
+    expect(cols[4]).not.toContain("ddtext_enabled");
+    expect(cols[5]).toContain("email_enabled");
+    expect(cols[5]).not.toContain("drafts_enabled");
   });
 
   it("any other error throws after one read (a 500, a timeout, a connection failure)", async () => {
@@ -748,7 +763,7 @@ describe("loadSettings: the column-group loader (P5a test 22)", () => {
     await expect(loadSettings("ep_1")).rejects.toThrow("exec_settings read failed: column exec_settings.updated_at does not exist");
     const cols = reads(db);
     expect(cols).toHaveLength(SETTINGS_COLUMN_GROUPS.length + 1);
-    expect(cols[cols.length - 1]).toBe(settingsColumnsFor({ email: false, drafts: false, ddtext: false, chat: false, slack: false }));
+    expect(cols[cols.length - 1]).toBe(settingsColumnsFor({ email: false, drafts: false, ddtext: false, chat: false, slack: false, slackP10: false }));
   });
 
   it("a principal's timezone still loads with only the base columns", async () => {
@@ -776,7 +791,7 @@ describe("loadSettingsSnapshot and the snapshot helpers (P5a test 23)", () => {
       version: null,
       settings: {
         principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: true, chatSchemaReady: true,
-        slackReadingSchemaReady: true
+        slackReadingSchemaReady: true, slackP10SchemaReady: true   // P10 (§3.7.1)
       }
     });
     fakeDb({}, { exec_settings: "down" });
@@ -796,25 +811,25 @@ describe("loadSettingsSnapshot and the snapshot helpers (P5a test 23)", () => {
   });
 
   it("snapshotFromRow takes the raw version, and none from a row without a usable updated_at", () => {
-    const schema = { email: true, drafts: true, ddtext: true, chat: false, slack: false };
+    const schema = { email: true, drafts: true, ddtext: true, chat: false, slack: false, slackP10: false };
     expect(snapshotFromRow(settingsRow({ updated_at: RAW, ddtext_enabled: true, retention_days_ddtext: 7 }), "ep_1", schema)).toMatchObject({
       version: RAW,
       settings: { ddtextEnabled: true, retentionDaysDdtext: 7, ddtextSchemaReady: true, draftsSchemaReady: true }
     });
     expect(snapshotFromRow(settingsRow(), "ep_1", schema).version).toBeNull();
     expect(snapshotFromRow(settingsRow({ updated_at: 12 }), "ep_1", schema).version).toBeNull();
-    expect(snapshotFromRow(null, "ep_1", { email: false, drafts: false, ddtext: true, chat: false, slack: false })).toEqual({
+    expect(snapshotFromRow(null, "ep_1", { email: false, drafts: false, ddtext: true, chat: false, slack: false, slackP10: false })).toEqual({
       version: null,
       settings: { principalId: "ep_1", ...DEFAULT_SETTINGS, ddtextSchemaReady: true }
     });
   });
 
   it("settingsColumnsFor and settingsSchemaFlags", () => {
-    const base = settingsColumnsFor({ email: false, drafts: false, ddtext: false, chat: false, slack: false });
+    const base = settingsColumnsFor({ email: false, drafts: false, ddtext: false, chat: false, slack: false, slackP10: false });
     expect(base.split(",")).toContain("updated_at");
     expect(base).not.toMatch(/email_enabled|drafts_enabled|ddtext_enabled|chat_enabled/);
-    expect(settingsColumnsFor({ email: true, drafts: false, ddtext: true, chat: false, slack: false })).toBe(`${base},email_enabled,ddtext_enabled,retention_days_ddtext`);
-    expect(settingsColumnsFor({ email: true, drafts: true, ddtext: false, chat: true, slack: false })).toBe(
+    expect(settingsColumnsFor({ email: true, drafts: false, ddtext: true, chat: false, slack: false, slackP10: false })).toBe(`${base},email_enabled,ddtext_enabled,retention_days_ddtext`);
+    expect(settingsColumnsFor({ email: true, drafts: true, ddtext: false, chat: true, slack: false, slackP10: false })).toBe(
       `${base},email_enabled,drafts_enabled,send_enabled,voice_enabled,chat_enabled,ask_ai_uses_exec,chat_daily_cap_usd`
     );
     expect(settingsSchemaFlags({ emailSchemaReady: true, draftsSchemaReady: false, ddtextSchemaReady: true, chatSchemaReady: false, slackReadingSchemaReady: false })).toEqual({
@@ -822,10 +837,13 @@ describe("loadSettingsSnapshot and the snapshot helpers (P5a test 23)", () => {
       drafts: false,
       ddtext: true,
       chat: false,
-      slack: false
+      slack: false,
+      slackP10: false   // P10 stage 0 (§3.7.2)
     });
     expect(settingsSchemaFlags({ emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: true, chatSchemaReady: true, slackReadingSchemaReady: true }).chat).toBe(true);
-    expect(Object.keys(settingsSchemaFlags(DEFAULT_SETTINGS)).sort()).toEqual(SETTINGS_COLUMN_GROUPS.map((g) => g.key).sort());
+    // P10 stage 0 (§3.7.1, p10-bindings.md): the slackP10 flag exists before its column group (Area B appends the group; the Set
+    // keeps this line true after it).
+    expect(Object.keys(settingsSchemaFlags(DEFAULT_SETTINGS)).sort()).toEqual([...new Set([...SETTINGS_COLUMN_GROUPS.map((g) => g.key), "slackP10"])].sort());
   });
 });
 
@@ -899,8 +917,9 @@ describe("P7a settings: the slack group and watch_mode (SE01-SE04)", () => {
     const { slack_daily_cap_usd: _c, ...oneColumn } = p7aRow();
     void _c;
     expect(settingsFromRow(oneColumn as unknown as SRow, "ep_1")).toMatchObject({ slackReadingEnabled: false, slackReadingSchemaReady: false });
-    expect(SETTINGS_COLUMN_GROUPS.map((g) => g.key)).toEqual(["email", "drafts", "ddtext", "chat", "slack"]);
-    expect(SETTINGS_COLUMN_GROUPS[SETTINGS_COLUMN_GROUPS.length - 1]).toEqual({ key: "slack", columns: ["slack_reading_enabled", "slack_daily_cap_usd"] });
+    // P10 (§3.7.1): the slackP10 group follows slack (it needs it).
+    expect(SETTINGS_COLUMN_GROUPS.map((g) => g.key)).toEqual(["email", "drafts", "ddtext", "chat", "slack", "slackP10"]);
+    expect(SETTINGS_COLUMN_GROUPS[SETTINGS_COLUMN_GROUPS.length - 2]).toEqual({ key: "slack", columns: ["slack_reading_enabled", "slack_daily_cap_usd"] });
     // The chat group missing (P5b not applied) takes the slack group with it (P7a needs P6, which needs P5b).
     const chatMissing = (table: string, columns: string): DbError | null =>
       table === "exec_settings" && columns.includes("chat_enabled") ? { code: "42703", message: "column exec_settings.chat_enabled does not exist" } : null;
@@ -928,7 +947,8 @@ describe("P7a settings: the slack group and watch_mode (SE01-SE04)", () => {
   });
 
   it("the three P7a registry fields (section slack) carry SLACK_READ_COPY's copy and the §3.2 bounds", () => {
-    const tail = SETTINGS_FIELDS.slice(-3).map(({ key, column, group, kind, min, max, section, label, help }) => ({ key, column, group, kind, min, max, section, label, help }));
+    // P10 stage 0 (§3.7.2): P10's seven rows follow P7a's three.
+    const tail = SETTINGS_FIELDS.slice(-10, -7).map(({ key, column, group, kind, min, max, section, label, help }) => ({ key, column, group, kind, min, max, section, label, help }));
     expect(tail).toEqual([
       { key: "slackReadingEnabled", column: "slack_reading_enabled", group: "slack", kind: "boolean", min: undefined, max: undefined, section: "slack",
         label: SLACK_READ_COPY.fieldReadingLabel, help: SLACK_READ_COPY.fieldReadingHelp },
@@ -937,7 +957,9 @@ describe("P7a settings: the slack group and watch_mode (SE01-SE04)", () => {
       { key: "retentionDaysSlack", column: "retention_days_slack", group: "base", kind: "int", min: 7, max: 365, section: "slack",
         label: SLACK_READ_COPY.fieldRetentionLabel, help: SLACK_READ_COPY.fieldRetentionHelp }
     ]);
-    expect(SETTINGS_FIELDS.filter((d) => d.section === "slack").map((d) => d.key)).toEqual(["slackReadingEnabled", "slackDailyCapUsd", "retentionDaysSlack"]);
+    expect(SETTINGS_FIELDS.filter((d) => d.section === "slack").map((d) => d.key)).toEqual(["slackReadingEnabled", "slackDailyCapUsd", "retentionDaysSlack",
+      // P10 stage 0 (§3.7.2): section "slack" too (SlackP10Controls renders them).
+      "slackReadAll", "slackLeadCountsEnabled", "slackRepliesEnabled", "slackReplySendEnabled", "slackReplyAuto", "slackReplyDailyCapUsd", "slackVoiceEnabled"]);
     expect(settingsFieldFor("retentionDaysSlack")?.group).toBe("base");
   });
 });

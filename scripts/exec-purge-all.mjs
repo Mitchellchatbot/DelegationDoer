@@ -40,10 +40,18 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
   process.exit(1);
 }
 
-// Children before parents (every foreign key of P2a-P8 respected), each with a column that is never null (the DELETE
-// filter PostgREST requires). exec_slack_author_optouts goes before exec_slack_channels (P7a contract §7.6); the P8 brief
-// tables first; exec_audit_log only with --include-audit (exec_drafts' audit reference is set null, and it goes first).
+// Children before parents (every foreign key of P2a-P10 respected), each with a column that is never null (the DELETE
+// filter PostgREST requires). exec_slack_author_optouts goes before exec_slack_channels (P7a contract §7.6); the P10 tables
+// first (P10 contract §3.11: counts → lead channels → cards → drafts → voice; the drafts reference P7a's message rows and the
+// lead channels P7a's channel rows, so all five go before P7a's tables), then the P8 brief tables; exec_audit_log only with
+// --include-audit (exec_drafts' audit reference is set null, and it goes first).
 const EXEC_PURGE_ORDER = Object.freeze([
+  // P10
+  { table: "exec_slack_lead_counts", key: "principal_id" },
+  { table: "exec_slack_lead_channels", key: "principal_id" },
+  { table: "exec_slack_reply_cards", key: "installation_id" },
+  { table: "exec_slack_reply_drafts", key: "id" },
+  { table: "exec_slack_voice_profile", key: "principal_id" },
   // P8
   { table: "exec_brief_checkins", key: "id" },
   { table: "exec_brief_mentions", key: "principal_id" },

@@ -996,10 +996,13 @@ const baseVocabFor = (p: string): Vocabulary => (isP4ContentFile(p) ? P4_VOCAB :
 // P7b B-P7b-2: a P7b content file takes the P7b words on top of that (p7bVocabulary, below).
 // P8 B-P8-6: a P8 content file (brief|checkin|network under exec code, dd-bot.ts, access.ts) takes the P8 words and names on
 // top of that (p8Vocabulary, in the P8 section below).
+// P10 B-P10-6: a P10 content file (isP10ContentFile, in the P10 section below) takes the P10 words and names on top of that
+// (p10Vocabulary).
 const vocabFor = (p: string): Vocabulary => {
   const base = isSlackFile(p) ? slackVocabulary(baseVocabFor(p)) : baseVocabFor(p);
   const withP7b = isP7bContentFile(p) ? p7bVocabulary(base) : base;
-  return isP8ContentFile(p) ? p8Vocabulary(withP7b) : withP7b;
+  const withP8 = isP8ContentFile(p) ? p8Vocabulary(withP7b) : withP7b;
+  return isP10ContentFile(p) ? p10Vocabulary(withP8) : withP8;
 };
 
 /** B8: rule 9 over the P4 file class with the P4 vocabulary; the handler-return check covers the P4 handlers. */
@@ -2247,7 +2250,10 @@ const P6_RPCS = [
 ];
 const P6_STORE_TEXT = new RegExp(`(?<![A-Za-z0-9_])(${[...P6_TABLES, ...P6_RPCS].join("|")})(?![A-Za-z0-9_.:])`, "g");
 // P7a stage -1 (lead): + slack-read-types (pure, type-only: ReadTarget, ConversationMeta, ConvType for the §3.6.1 reads).
-const SLACK_CLIENT_ALLOWED_TARGETS: ReadonlySet<string> = new Set(["src/lib/exec/types", "src/lib/exec/slack-types", "src/lib/exec/slack-read-types"]);
+// P10 stage 0 (lead, p10-bindings.md AM-P10-36): + slack-p10-types (pure, type-only: LeadExclusions, LeadPostShape for the
+// §3.4.1 shape reader).
+const SLACK_CLIENT_ALLOWED_TARGETS: ReadonlySet<string> = new Set(["src/lib/exec/types", "src/lib/exec/slack-types", "src/lib/exec/slack-read-types",
+  "src/lib/exec/slack-p10-types"]);
 
 interface P6Facts {
   /** B-P6-4: strings naming the Web API (the base URL, or one of SLACK_METHOD_STRINGS). */
@@ -2396,6 +2402,8 @@ interface FileFacts extends ImportFacts {
   p7b: P7bFacts;
   /** P8 rules B-P8-1..5, -7, -8, -10, -12 */
   p8: P8Facts;
+  /** P10 rules B-P10-1, -2, -9, -10, -14 */
+  p10: P10Facts;
 }
 
 interface Scan {
@@ -2407,6 +2415,8 @@ interface Scan {
   probeExports: Map<string, string[]>;
   /** P8 B-P8-12: the in-memory probes' P8 facts, read WITH the checker (contextual DmTarget types). */
   probeP8: Map<string, P8Facts>;
+  /** P10 B-P10-9: the in-memory probes' P10 facts, read WITH the checker (contextual OwnerPostTarget types). */
+  probeP10: Map<string, P10Facts>;
   /** The repo-root next.config.mjs through the P4 analyzer (B1, B2, B9); null when the file is missing. */
   nextConfig: P4Facts | null;
 }
@@ -2456,7 +2466,8 @@ function scanTree(probes: ReadonlyMap<string, string>, exportProbes: readonly st
       p6: analyzeP6(sf, isExecCode(file) ? checker : undefined),
       p7a: analyzeP7a(sf, isExecCode(file) ? checker : null),
       p7b: analyzeP7b(sf),
-      p8: analyzeP8(sf, isExecCode(file) ? checker : null)
+      p8: analyzeP8(sf, isExecCode(file) ? checker : null),
+      p10: analyzeP10(sf, isExecCode(file) ? checker : null)
     });
   }
   const nextConfigPath = path.join(ROOT, NEXT_CONFIG_FILE);
@@ -2470,7 +2481,8 @@ function scanTree(probes: ReadonlyMap<string, string>, exportProbes: readonly st
   const probeMints = new Map([...probes.keys()].map((file) => [file, findMints(sourceOf(file), checker, brand)]));
   const probeExports = new Map(exportProbes.map((file) => [file, principalExports(sourceOf(file), checker, brand)]));
   const probeP8 = new Map([...probes.keys()].map((file) => [file, analyzeP8(sourceOf(file), checker)]));
-  return { files: absFiles.map(relPath), facts, trustedExports, probeMints, probeExports, nextConfig, probeP8 };
+  const probeP10 = new Map([...probes.keys()].map((file) => [file, analyzeP10(sourceOf(file), checker)]));
+  return { files: absFiles.map(relPath), facts, trustedExports, probeMints, probeExports, nextConfig, probeP8, probeP10 };
 }
 
 // --- detector probes (in-memory files next to principal.ts) ---------------------------
@@ -5686,12 +5698,35 @@ const P8_MIGRATION_FILE = "supabase/migrations/20261111100000_exec_brief.sql";
 const USER_TOKEN = "slack_user_token";
 const USER_TOKEN_TEXT = /(?<![A-Za-z0-9_])slack_user_token(?![A-Za-z0-9_])/;
 const CHECKIN_POST_FILE = "src/lib/exec/checkin-post.ts";
-/** AM-P8-24: `git grep -l slack_user_token -- src` at the base (tests aside), plus checkin-post.ts. */
+// P10 B-P10-11 (P10 contract §0.4; v1.1 product-4, product-6): B-P8-2 amended. slack-reply-post.ts is the second exec reader
+// of his token (C39); it is imported only by slack-reply-send.ts (⊆ {verifyReplyToken, postReplyAsOwner, ReplyTokenVerdict})
+// and, verify-only, by handlers/slack-reply-token-check.ts (⊆ {verifyReplyToken, ReplyTokenVerdict}); slack-reply-send.ts
+// only by the send route, the review route (⊆ {reviewSlackReply}) and handlers/slack-rdraft-send.ts (userTokenOffenses, below).
+const REPLY_POST_FILE = "src/lib/exec/slack-reply-post.ts";
+const REPLY_POST_MODULE = "src/lib/exec/slack-reply-post";
+const REPLY_SEND_FILE = "src/lib/exec/slack-reply-send.ts";
+const REPLY_SEND_MODULE = "src/lib/exec/slack-reply-send";
+const REPLY_TOKEN_CHECK_FILE = "src/lib/exec/handlers/slack-reply-token-check.ts";
+const REPLY_SEND_ROUTE = "src/app/api/exec/slack/replies/[id]/send/route.ts";
+const REPLY_REVIEW_ROUTE = "src/app/api/exec/slack/replies/[id]/review/route.ts";
+const REPLY_SEND_HANDLER = "src/lib/exec/handlers/slack-rdraft-send.ts";
+/** slack-reply-post.ts' importers → the names each may take. */
+const REPLY_POST_IMPORTERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  [REPLY_SEND_FILE, new Set(["verifyReplyToken", "postReplyAsOwner", "ReplyTokenVerdict"])],
+  [REPLY_TOKEN_CHECK_FILE, new Set(["verifyReplyToken", "ReplyTokenVerdict"])]
+]);
+/** slack-reply-send.ts' importers → the names each may take (null: any). */
+const REPLY_SEND_IMPORTERS: ReadonlyMap<string, ReadonlySet<string> | null> = new Map<string, ReadonlySet<string> | null>([
+  [REPLY_SEND_ROUTE, null],
+  [REPLY_REVIEW_ROUTE, new Set(["reviewSlackReply"])],
+  [REPLY_SEND_HANDLER, null]
+]);
+/** AM-P8-24: `git grep -l slack_user_token -- src` at the base (tests aside), plus checkin-post.ts; P10 (B-P10-11): plus slack-reply-post.ts. */
 const USER_TOKEN_FILES: ReadonlySet<string> = new Set([
   "src/app/api/integrations/slack/callback/route.ts", "src/app/api/integrations/slack/clear/route.ts",
   "src/app/api/integrations/slack/disconnect/route.ts", "src/app/api/integrations/slack/test/route.ts", "src/app/api/kudos/route.ts",
   "src/app/api/slack/interactions/route.ts", "src/app/api/tasks/[id]/comments/route.ts", "src/app/api/tasks/[id]/notify/route.ts",
-  "src/lib/slack-status-sync.ts", CHECKIN_POST_FILE,
+  "src/lib/slack-status-sync.ts", CHECKIN_POST_FILE, REPLY_POST_FILE,
   // #535 (2026-11-17): reads it server-side only to return a boolean (slackAuthorized); the token never leaves the server.
   "src/app/api/users/me/route.ts"
 ]);
@@ -5719,8 +5754,12 @@ const PURE_P8_FILES: readonly string[] = [
 // and the deterministic top 3 and section scaffolding (which the validator needs, §3.10.2 rules 4 and 6) in brief-sections.ts,
 // so brief-novelty.ts and brief-validate.ts value-import it. brief-sections.ts is itself one of PURE_P8_FILES, held to this
 // same list, so allowing it lets nothing impure in.
+// P10 (§3.8 item 6; Area B): brief-slack-ui.ts renders the leads block with slack-leads.ts' briefLeadsText (leadCountsLine),
+// SLACK_P10_COPY and P10_LIMITS. The three are pure themselves (BD-P10-13: no server-only module reached, no value import
+// outside exec code), so allowing them lets nothing impure in.
 const PURE_ALLOWED_TARGETS: ReadonlySet<string> = new Set(
-  ["types", "attention-types", "brief-types", "brief-copy", "time", "format", "refs", "slack-types", "slack-ui", "slack-copy", "slack-intel-types", "brief-sections"].map((m) => `src/lib/exec/${m}`)
+  ["types", "attention-types", "brief-types", "brief-copy", "time", "format", "refs", "slack-types", "slack-ui", "slack-copy", "slack-intel-types", "brief-sections",
+    "slack-leads", "slack-p10-types", "slack-p10-copy"].map((m) => `src/lib/exec/${m}`)
 );
 const PURE_REFS_TARGET = "src/lib/exec/refs";
 const PURE_REFS_NAMES: ReadonlySet<string> = new Set(["isAllowedLinkUrl", "appOrigin", "clipExcerpt"]);
@@ -5983,12 +6022,27 @@ function p8StoreOffenses(file: string, f: FileFacts): string[] {
 
 /** B-P8-2 */
 function userTokenOffenses(file: string, f: FileFacts): string[] {
-  const out = USER_TOKEN_FILES.has(file) ? [] : f.p8.userToken.map((line) => `${file}:${line}: names ${USER_TOKEN}; only ${CHECKIN_POST_FILE} (and the legacy DD files) may`);
+  const out = USER_TOKEN_FILES.has(file) ? [] : f.p8.userToken.map((line) => `${file}:${line}: names ${USER_TOKEN}; only ${CHECKIN_POST_FILE}, ${REPLY_POST_FILE} (and the legacy DD files) may`);
   for (const r of f.p8.refs) {
     if (r.target !== CHECKIN_POST_MODULE || file === CHECKIN_POST_FILE) continue;
     if (!CHECKIN_POST_IMPORTERS.has(file)) out.push(`${file}:${r.line}: imports checkin-post.ts; only ${[...CHECKIN_POST_IMPORTERS].join(" and ")} may`);
     else if (r.whole) out.push(`${file}:${r.line}: takes checkin-post.ts whole`);
     else for (const name of [...r.valueNames, ...r.typeNames]) if (!CHECKIN_POST_NAMES.has(name)) out.push(`${file}:${r.line}: imports ${name} from checkin-post.ts`);
+  }
+  // P10 B-P10-11: slack-reply-post.ts' and slack-reply-send.ts' importers, by name (a type import counts; import() takes it whole).
+  for (const r of f.p8.refs) {
+    if (r.target === REPLY_POST_MODULE && file !== REPLY_POST_FILE) {
+      const names = REPLY_POST_IMPORTERS.get(file);
+      if (names === undefined) out.push(`${file}:${r.line}: imports slack-reply-post.ts; only ${[...REPLY_POST_IMPORTERS.keys()].join(" and ")} may`);
+      else if (r.whole) out.push(`${file}:${r.line}: takes slack-reply-post.ts whole`);
+      else for (const name of [...r.valueNames, ...r.typeNames]) if (!names.has(name)) out.push(`${file}:${r.line}: imports ${name} from slack-reply-post.ts`);
+    }
+    if (r.target === REPLY_SEND_MODULE && file !== REPLY_SEND_FILE) {
+      const names = REPLY_SEND_IMPORTERS.get(file);
+      if (names === undefined) out.push(`${file}:${r.line}: imports slack-reply-send.ts; only ${[...REPLY_SEND_IMPORTERS.keys()].join(", ")} may`);
+      else if (names !== null && r.whole) out.push(`${file}:${r.line}: takes slack-reply-send.ts whole`);
+      else if (names !== null) for (const name of [...r.valueNames, ...r.typeNames]) if (!names.has(name)) out.push(`${file}:${r.line}: imports ${name} from slack-reply-send.ts`);
+    }
   }
   return out;
 }
@@ -6494,6 +6548,1128 @@ describe("P8 boundary detectors (probes; BD02-BD12)", () => {
       expect([...p8StoreOffenses(file, f), ...userTokenOffenses(file, f), ...ddBotOffenses(file, f), ...legacyGateOffenses(file, f), ...pureP8Offenses(file, f),
         ...p8ContentOffenses(file, f.mail), ...checkinImportOffenses(file, f), ...modelFeatureOffenses(file, f), ...forwardedForOffenses(file, f),
         ...dmTargetOffenses(file, f)], file).toEqual([]);
+    }
+  });
+});
+
+// --- P10 (contract §0.4 B-P10-1..14, §5.15 BD-P10-01..14; Area B owns this section, other areas request additions) ----------
+//
+//   B-P10-1  Only slack-leads-store.ts names the two lead tables and the seven lead functions (§2.1.7) in a string (tests and
+//            the migration aside); exec_slack_fb_lead_channels_v2 only sources/dd.ts; exec_brief_strip_leads and
+//            exec_brief_principals_with_leads only brief-store.ts. Whole tokens in B-P7a-2's shape over the full names, so a
+//            _v2 / _v3 suffix is part of the token (B-P7a-2's own regex can't see a suffixed name); an audit target (a
+//            `target:` value, or a name followed by ":"), an index or constraint name and a column ("name.") aren't reads.
+//   B-P10-2  The same for the three reply tables and the seven reply functions (§2.1.9-§2.1.13; slack-reply-store.ts) and
+//            exec_slack_accept_action_v3 (slack-install.ts, beside v1 / v2).
+//   B-P10-3  The lead job and its three modules never import a content reader, the model, triage, untrusted text, a reply
+//            module or the agent; from sources/slack only readHistoryShapes, listMemberChannels, SlackApiError and the types
+//            LeadPostShape / LeadExclusions (AM-P10-36's re-exports). In sources/slack.ts readHistoryShapes builds every shape
+//            from an object literal with exactly LeadPostShape's six keys and reads no content property (LP02's names).
+//   B-P10-4  brief-compose.ts reads no property named leads (property access, element access or destructuring).
+//   B-P10-5  slack-reply-pack.ts value-imports only its allow-list, with the named subsets; never, even as a type, a mail,
+//            email, drafts-pack, client-update, DD, attention, Slack intel / digest / search, agent, brief, chat-store or lead
+//            module. `import type` from an allowed module is erased.
+//   B-P10-6  Rule 9 over the P10 content class (isP10ContentFile) with the P10 words and names on top of the file's own
+//            vocabulary (vocabFor's last layer); the handler-return check over the P10 handlers. Count words (textLength,
+//            samplesUsed, placeholdersCount) stay allowed, an Error's .name is a code, and SLACK_P10_OPS / SLACK_P10_COPY are
+//            fixed copy (P8's constRoots precedent: notifyOps(SLACK_P10_OPS.tokenMismatch…) names a constant, not a token).
+//   B-P10-7  callModel({ feature: "slack_reply" }) only in slack-reply-generate.ts; "slack_voice" only in slack-voice.ts.
+//   B-P10-8  In sources/slack.ts only postInDm and postAsOwnerInConversation call callSlack with chat.postMessage (by its
+//            method variable or the literal); postAsOwnerInConversation throws SlackChannelRefusedError, on the then side of
+//            an if that compares msg.channel with target.channelId by !==, before its first callSlack; only
+//            slack-reply-post.ts imports it (by name; nothing else takes sources/slack.ts whole as a value).
+//   B-P10-9  OwnerPostTarget values (a cast, an assertion, `satisfies`, an annotated object literal, an object literal whose
+//            contextual type is OwnerPostTarget per the checker, or a function declared to return one) are built only in
+//            slack-reply-post.ts (B-P8-12's checker rule, generalized; DmTarget's makers are unchanged).
+//   B-P10-10 No P10 file names exec_attention_items, builds a string starting "slack:" (an attention fingerprint; P7a's
+//            screen passes any slack: fingerprint that isn't slack:msg:) or value-imports attention.ts (the writer).
+//   B-P10-11 B-P8-2 amended, in the P8 section (USER_TOKEN_FILES, REPLY_POST_IMPORTERS, REPLY_SEND_IMPORTERS).
+//   B-P10-12 The P10 files take only channelSlug / isLeadName from slack-classes.ts (never classifyConversation, B-P7a-9);
+//            BR02 / BR09 hold on the P10 tree.
+//   B-P10-13 The P10 client components are rule-16 roots; slack-reply-links.ts, slack-p10-copy.ts, slack-p10-types.ts and
+//            slack-leads.ts are pure (no server-only module reached, no value import outside exec code), which is what lets
+//            B-P8-5's allow-list take the last three (brief-slack-ui.ts renders the leads block, §3.8 item 6).
+//   B-P10-14 Only a click starts a DM send: the string exec.slack-rdraft-send (and the string "replySend", a computed key)
+//            only in slack-p10-types.ts (AM-P10-22: also as a JOB_LABELS key in job-labels.ts, a label, never a value);
+//            P10_JOB_KINDS.replySend referenced only by handlers/slack-rdraft-send.ts and runtime.ts; no enqueueJob(…) call
+//            anywhere names that kind or that property (literal, constant, template or computed key); replyButtonValue /
+//            replyMac imported only by slack-reply-view.ts, verifyReplyMac only by slack-reply-send.ts and
+//            handlers/slack-rdraft-act.ts; in handlers/slack-rdraft-send.ts every sendSlackReply call passes an object literal
+//            with the literals path "dm" and actor "slack" (once each, no spread), and sendSlackReply is never passed around.
+// Comments never count; names in types never count except where a rule reads a type (B-P10-9).
+
+const P10_LEAD_STORE_FILE = "src/lib/exec/slack-leads-store.ts";
+const P10_REPLY_STORE_FILE = "src/lib/exec/slack-reply-store.ts";
+const P10_MIGRATION_FILE = "supabase/migrations/20261112100000_exec_slack_leads_replies.sql";
+const P10_LEAD_TABLES = ["exec_slack_lead_channels", "exec_slack_lead_counts"];
+const P10_LEAD_FUNCTIONS = [
+  "exec_slack_lead_markers", "exec_slack_lead_map_apply", "exec_slack_lead_counts_put", "exec_slack_lead_summary", "exec_slack_lead_coverage",
+  "exec_slack_lead_purge_principal", "exec_slack_lead_purge_expired"
+];
+const P10_REPLY_TABLES = ["exec_slack_reply_drafts", "exec_slack_reply_cards", "exec_slack_voice_profile"];
+const P10_REPLY_FUNCTIONS = [
+  "exec_slack_rdraft_create", "exec_slack_rdraft_regenerate", "exec_slack_rdraft_finish", "exec_slack_rdraft_edit", "exec_slack_rdraft_target",
+  "exec_slack_rdraft_blank", "exec_slack_rdraft_purge_expired"
+];
+const FB_LEAD_V2 = "exec_slack_fb_lead_channels_v2";
+const BRIEF_LEAD_FUNCTIONS = ["exec_brief_strip_leads", "exec_brief_principals_with_leads"];
+const ACCEPT_V3 = "exec_slack_accept_action_v3";
+/** §2.1.1's CHECK helpers: the migration creates them, no TypeScript names them (outside every list). */
+const P10_CHECK_HELPERS = ["exec_slack_channel_array_ok", "exec_slack_ref_array_ok", "exec_slack_ts_array_ok", "exec_slack_user_array_ok"];
+/** Each guarded name → the one src file that may hold it in a string. */
+const P10_NAME_OWNER: ReadonlyMap<string, string> = new Map([
+  ...[...P10_LEAD_TABLES, ...P10_LEAD_FUNCTIONS].map((n) => [n, P10_LEAD_STORE_FILE] as const),
+  ...[...P10_REPLY_TABLES, ...P10_REPLY_FUNCTIONS].map((n) => [n, P10_REPLY_STORE_FILE] as const),
+  [FB_LEAD_V2, DD_SOURCE_FILE] as const,
+  ...BRIEF_LEAD_FUNCTIONS.map((n) => [n, BRIEF_STORE_FILE] as const),
+  [ACCEPT_V3, SLACK_INSTALL_FILE] as const
+]);
+// B-P7a-2's whole-token shape over the full names (longest first): a suffix is part of the token, so
+// exec_slack_fb_lead_channels_v2 is seen here while P7a's exec_slack_fb_lead_channels never matches inside it.
+const P10_NAME_TEXT = new RegExp(`(?<![A-Za-z0-9_])(${[...P10_NAME_OWNER.keys()].sort((a, b) => b.length - a.length).join("|")})(?![A-Za-z0-9_.:])`, "g");
+
+const SOURCES_SLACK_MODULE = "src/lib/exec/sources/slack";
+const P10_LEAD_MODULES: ReadonlySet<string> = new Set([
+  "src/lib/exec/handlers/slack-lead-count.ts", "src/lib/exec/slack-leads.ts", P10_LEAD_STORE_FILE, "src/lib/exec/slack-leads-view.ts"
+]);
+const P10_LEAD_NEVER_NAMES: ReadonlySet<string> = new Set([
+  "readHistory", "readReplies", "getUserBrief", "getPermalink", "sweepVerdict", "deriveIngestFacts", "prefilterIngest", "callModel"
+]);
+const P10_LEAD_NEVER_MODULE = /^src\/lib\/exec\/(?:llm\/|triage\/|text\/untrusted$|slack-reply|agent\/)/;
+const P10_LEAD_SLACK_VALUES: ReadonlySet<string> = new Set(["readHistoryShapes", "listMemberChannels", "SlackApiError"]);
+const P10_LEAD_SLACK_TYPES: ReadonlySet<string> = new Set(["LeadPostShape", "LeadExclusions", "SlackApiError"]);
+/** LeadPostShape's six keys, sorted (slack-p10-types.ts). */
+const LEAD_SHAPE_KEYS = ["bot", "excluded", "hidden", "reply", "subtypeClass", "ts"];
+/** LP02: what a lead post holds that readHistoryShapes never reads. */
+const SHAPE_CONTENT_KEYS: ReadonlySet<string> = new Set([
+  "text", "blocks", "attachments", "files", "username", "reactions", "metadata", "name", "real_name", "display_name", "user_profile"
+]);
+
+const P10_PACK_FILE = "src/lib/exec/slack-reply-pack.ts";
+/** B-P10-5: the pack's allowed value-import targets → the names allowed (null: any). */
+const P10_PACK_ALLOWED: ReadonlyMap<string, ReadonlySet<string> | null> = new Map<string, ReadonlySet<string> | null>([
+  ["src/lib/exec/types", null],
+  ["src/lib/exec/slack-p10-types", null],
+  ["src/lib/exec/slack-p10-copy", null],
+  ["src/lib/exec/slack-read", new Set(["openReader", "paced", "isAbort", "isSlackAuthError"])],
+  [SOURCES_SLACK_MODULE, new Set(["readHistory", "readReplies", "getUserBrief", "SlackApiError"])],
+  ["src/lib/exec/slack-read-types", new Set(["msToTs", "tsToMs"])],
+  ["src/lib/exec/triage/slack", new Set(["plainTextOf", "placeholderOf", "defaceSlackHeaders", "windowKeeps", "SLACK_TRIAGE_PLACEHOLDERS"])],
+  ["src/lib/exec/slack-ingest", new Set(["isExternalAuthor"])],
+  ["src/lib/exec/text/untrusted", new Set(["newNonce", "renderUntrustedBlock", "untrustedEntrySize", "untrustedBlockOverhead", "clipForModel", "neutralizeChatText"])],
+  ["src/lib/exec/format", null],
+  ["src/lib/exec/time", null],
+  ["src/lib/exec/slack-reading", new Set(["getDdBotIdentity", "listAuthorOptouts"])]
+]);
+/** Never, even as a type. */
+const P10_PACK_NEVER = /^src\/lib\/exec\/(?:sources\/mail(?:$|\/)|email-|drafts-pack|client-update|sources\/dd|attention|slack-intel|slack-digest|slack-search|agent\/|brief-|chat-store$|slack-leads)/;
+
+const P10_MODEL_FEATURE_FILES: ReadonlyMap<string, string> = new Map([
+  ["slack_reply", "src/lib/exec/slack-reply-generate.ts"],
+  ["slack_voice", "src/lib/exec/slack-voice.ts"]
+]);
+const P10_POST_FUNCTIONS: ReadonlySet<string> = new Set(["postInDm", "postAsOwnerInConversation"]);
+const OWNER_SENDER = "postAsOwnerInConversation";
+const OWNER_TARGET_TYPE = "OwnerPostTarget";
+const ATTENTION_WRITER_MODULE = "src/lib/exec/attention";
+const P10_ATTENTION_TABLE_TEXT = /(?<![A-Za-z0-9_])exec_attention_items(?![A-Za-z0-9_])/;
+const P10_CLASSIFIER_NAMES: ReadonlySet<string> = new Set(["channelSlug", "isLeadName"]);
+const P10_CONTROLS_FILE = "src/components/exec/settings/SlackP10Controls.tsx";
+const P10_PURE_FILES: readonly string[] = [
+  "src/lib/exec/slack-reply-links.ts", "src/lib/exec/slack-p10-copy.ts", "src/lib/exec/slack-p10-types.ts", "src/lib/exec/slack-leads.ts"
+];
+const P10_TYPES_FILE = "src/lib/exec/slack-p10-types.ts";
+const P10_TYPES_MODULE = "src/lib/exec/slack-p10-types";
+const P10_SEND_KIND = "exec.slack-rdraft-send";
+const P10_SEND_PROPERTY = "replySend";
+const P10_JOB_KINDS_NAME = "P10_JOB_KINDS";
+const SEND_KIND_REFERRERS: ReadonlySet<string> = new Set([REPLY_SEND_HANDLER, "src/lib/exec/runtime.ts"]);
+/** AM-P10-22: the System card's label map keys every registered kind (a label, never a value anything enqueues). */
+const JOB_LABELS_FILE = "src/components/exec/overview/job-labels.ts";
+const CRYPTO_MODULE = "src/lib/exec/crypto";
+const REPLY_MAC_IMPORTERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["replyButtonValue", new Set(["src/lib/exec/slack-reply-view.ts"])],
+  ["replyMac", new Set(["src/lib/exec/slack-reply-view.ts"])],
+  ["verifyReplyMac", new Set([REPLY_SEND_FILE, "src/lib/exec/handlers/slack-rdraft-act.ts"])]
+]);
+
+// B-P10-6: the P10 content class and its vocabulary. Only exec modules at the top of src/lib/exec match the basename
+// patterns: handlers/slack-reply.ts (P6's assistant-DM handler) keeps P6's vocabulary.
+const isP10Handler = (p: string) => /^src\/lib\/exec\/handlers\/(?:slack-lead-count|slack-rdraft-[^/]+|slack-voice-refresh|slack-reply-token-check)\.ts$/.test(p);
+const isP10ClientComponent = (p: string) => p.startsWith("src/components/exec/slack/replies/") || p === P10_CONTROLS_FILE;
+const isP10ContentFile = (p: string) =>
+  /^src\/lib\/exec\/slack-(?:lead|reply|voice|p10)[^/]*\.tsx?$/.test(p) ||
+  isP10Handler(p) ||
+  p.startsWith("src/app/api/exec/slack/replies/") ||
+  isP10ClientComponent(p) ||
+  p === "src/components/exec/slack/LeadCountsCard.tsx";
+const P10_WORDS = [
+  "text", "texts", "draft", "instruction", "note", "placeholder", "placeholders", "label", "labels", "clientlabel", "summary", "name", "names",
+  "sample", "samples", "token", "mac", "value"
+];
+const P10_NAMES = ["slack_user_token", "usertoken", "buttonvalue", "triggerid", "trigger_id", "ownerposttarget"];
+const P10_COUNT_WORDS = ["used"];
+const P10_CONST_ROOTS = ["SLACK_P10_OPS", "SLACK_P10_COPY"];
+const p10Vocabs = new Map<Vocabulary, Vocabulary>();
+/** B-P10-6: a P10 content file's vocabulary, built once per base vocabulary. */
+function p10Vocabulary(base: Vocabulary): Vocabulary {
+  let v = p10Vocabs.get(base);
+  if (!v) {
+    v = {
+      words: new Set([...base.words, ...P10_WORDS]),
+      names: new Set([...base.names, ...P10_NAMES]),
+      errorNames: true,
+      countWords: new Set([...(base.countWords ?? []), ...P10_COUNT_WORDS]),
+      constRoots: new Set([...(base.constRoots ?? []), ...P10_CONST_ROOTS])
+    };
+    p10Vocabs.set(base, v);
+  }
+  return v;
+}
+
+interface P10Facts {
+  /** B-P10-1, -2: guarded names in strings (not an audit target value; not followed by ":" or "."). */
+  storeNames: { name: string; line: number }[];
+  /** B-P10-10 */
+  attentionTable: number[];
+  slackStrings: number[];
+  /** B-P10-14 (a): the kind in a string; labelKey when the string is an object literal's property name. */
+  sendKindStrings: { line: number; labelKey: boolean }[];
+  /** The string "replySend" (a computed key into P10_JOB_KINDS). */
+  sendPropertyStrings: number[];
+  /** .replySend accesses and { replySend } bindings; viaKinds when the receiver is P10_JOB_KINDS itself. */
+  sendPropertyRefs: { line: number; viaKinds: boolean }[];
+  /** enqueueJob(…) calls whose arguments name the kind or the property (a literal, a template, a same-file constant, a key). */
+  enqueueSendKind: number[];
+  /** B-P10-14 (c): sendSlackReply(…) calls, and whether their object literal has exactly the literal path "dm" / actor "slack". */
+  sendCalls: { line: number; ok: boolean }[];
+  /** sendSlackReply used other than as a callee (an alias, a shorthand, an argument). */
+  sendAliases: number[];
+  /** B-P10-9 */
+  ownerTargets: number[];
+}
+
+/** A type (or a union / intersection member) that is slack-types.ts's OwnerPostTarget. */
+function isOwnerTargetType(t: ts.Type | undefined, depth = 0): boolean {
+  if (t === undefined || depth > 4) return false;
+  const sym = t.aliasSymbol ?? t.getSymbol();
+  if (sym && sym.getName() === OWNER_TARGET_TYPE && (sym.declarations ?? []).some((d) => path.basename(d.getSourceFile().fileName) === "slack-types.ts")) return true;
+  if (t.isUnionOrIntersection()) return t.types.some((m) => isOwnerTargetType(m, depth + 1));
+  return false;
+}
+
+/** A type node naming OwnerPostTarget as written; with typeArgs, also inside a generic's arguments (Promise<OwnerPostTarget>). */
+function namesOwnerTarget(node: ts.TypeNode | undefined, typeArgs = false): boolean {
+  if (node === undefined) return false;
+  if (ts.isTypeReferenceNode(node)) {
+    const n = node.typeName;
+    if ((ts.isIdentifier(n) ? n.text : n.right.text) === OWNER_TARGET_TYPE) return true;
+    return typeArgs && (node.typeArguments ?? []).some((a) => namesOwnerTarget(a, true));
+  }
+  if (ts.isUnionTypeNode(node) || ts.isIntersectionTypeNode(node)) return node.types.some((m) => namesOwnerTarget(m, typeArgs));
+  if (ts.isParenthesizedTypeNode(node) || ts.isTypeOperatorNode(node)) return namesOwnerTarget(node.type, typeArgs);
+  return false;
+}
+
+function analyzeP10(sf: ts.SourceFile, checker: ts.TypeChecker | null): P10Facts {
+  const lineOf = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const facts: P10Facts = {
+    storeNames: [], attentionTable: [], slackStrings: [], sendKindStrings: [], sendPropertyStrings: [], sendPropertyRefs: [], enqueueSendKind: [],
+    sendCalls: [], sendAliases: [], ownerTargets: []
+  };
+  const isTargetValue = (n: ts.Node): boolean =>
+    ts.isPropertyAssignment(n.parent) && n.parent.initializer === n && propertyNameText(n.parent.name) === "target";
+  const isStringPart = (n: ts.Node): n is ts.StringLiteralLike | ts.TemplateHead | ts.TemplateMiddle | ts.TemplateTail =>
+    ts.isStringLiteralLike(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n);
+  // B-P10-14: same-file constants holding a string (`const k = "replySend"; K[k]`, `const KIND = "exec.slack-rdraft-send"`).
+  const stringConsts = new Map<string, string>();
+  const collectConsts = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && ts.isStringLiteralLike(n.initializer)) stringConsts.set(n.name.text, n.initializer.text);
+    ts.forEachChild(n, collectConsts);
+  };
+  collectConsts(sf);
+  // The kind, the property, or a kind computed from "exec.slack-rdraft-" plus a substitution.
+  const namesSendKind = (s: string) => s.includes(P10_SEND_KIND) || s === P10_SEND_PROPERTY || s.endsWith("exec.slack-rdraft-");
+  const mentionsSendKind = (root: ts.Node): boolean => {
+    let hit = false;
+    const visit = (n: ts.Node): void => {
+      if (hit || ts.isTypeNode(n)) return;
+      if (isStringPart(n)) hit = namesSendKind(n.text);
+      else if (ts.isPropertyAccessExpression(n) && n.name.text === P10_SEND_PROPERTY) hit = true;
+      else if (ts.isIdentifier(n) && stringConsts.has(n.text)) hit = namesSendKind(stringConsts.get(n.text) as string);
+      if (!hit) ts.forEachChild(n, visit);
+    };
+    visit(root);
+    return hit;
+  };
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node) || ts.isImportEqualsDeclaration(node)) return;
+    // Types name nothing here; B-P10-9 reads the type nodes of casts, annotations and return types from their parents below.
+    if (ts.isTypeNode(node) || ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) return;
+    if (isStringPart(node)) {
+      const text = node.text;
+      const line = lineOf(node);
+      if (!isTargetValue(node)) for (const m of text.matchAll(P10_NAME_TEXT)) facts.storeNames.push({ name: m[1], line });
+      if (P10_ATTENTION_TABLE_TEXT.test(text)) facts.attentionTable.push(line);
+      if ((ts.isStringLiteralLike(node) || ts.isTemplateHead(node)) && text.startsWith("slack:")) facts.slackStrings.push(line);
+      if (text.includes(P10_SEND_KIND)) {
+        const labelKey = ts.isStringLiteral(node) && ts.isPropertyAssignment(node.parent) && node.parent.name === node;
+        facts.sendKindStrings.push({ line, labelKey });
+      }
+      if (ts.isStringLiteralLike(node) && text === P10_SEND_PROPERTY) facts.sendPropertyStrings.push(line);
+    }
+    if (ts.isPropertyAccessExpression(node) && node.name.text === P10_SEND_PROPERTY) {
+      facts.sendPropertyRefs.push({ line: lineOf(node), viaKinds: ts.isIdentifier(node.expression) && node.expression.text === P10_JOB_KINDS_NAME });
+    }
+    if (ts.isBindingElement(node)) {
+      const key = node.propertyName ?? node.name;
+      if (ts.isIdentifier(key) && key.text === P10_SEND_PROPERTY) {
+        let decl: ts.Node = node.parent;
+        while (!ts.isVariableDeclaration(decl) && !ts.isParameter(decl) && !ts.isSourceFile(decl)) decl = decl.parent;
+        const init = ts.isVariableDeclaration(decl) ? decl.initializer : undefined;
+        facts.sendPropertyRefs.push({ line: lineOf(node), viaKinds: init !== undefined && ts.isIdentifier(init) && init.text === P10_JOB_KINDS_NAME });
+      }
+    }
+    if (ts.isCallExpression(node)) {
+      const name = calleeName(node);
+      if (name === "enqueueJob" && node.arguments.some((a) => mentionsSendKind(a))) facts.enqueueSendKind.push(lineOf(node));
+      if (name === "sendSlackReply") {
+        const obj = node.arguments.find((a): a is ts.ObjectLiteralExpression => ts.isObjectLiteralExpression(a));
+        const props: readonly ts.ObjectLiteralElementLike[] = obj?.properties ?? [];
+        const once = (key: string, want: string) => {
+          const ps = props.filter((p) => p.name !== undefined && propertyNameText(p.name) === key);
+          return ps.length === 1 && ts.isPropertyAssignment(ps[0]) && ts.isStringLiteralLike(ps[0].initializer) && ps[0].initializer.text === want;
+        };
+        const spread = props.some((p) => ts.isSpreadAssignment(p));
+        facts.sendCalls.push({ line: lineOf(node), ok: obj !== undefined && !spread && once("path", "dm") && once("actor", "slack") });
+      }
+    }
+    if (ts.isIdentifier(node) && node.text === "sendSlackReply") {
+      const p = node.parent;
+      const callee = (ts.isCallExpression(p) && p.expression === node) ||
+        (ts.isPropertyAccessExpression(p) && p.name === node && ts.isCallExpression(p.parent) && p.parent.expression === p);
+      const declared = (ts.isFunctionDeclaration(p) || ts.isVariableDeclaration(p)) && p.name === node;
+      if (!callee && !declared) facts.sendAliases.push(lineOf(node));
+    }
+
+    // B-P10-9: a value made an OwnerPostTarget by a cast, an assertion, `satisfies`, an annotated object literal, a function
+    // declared to return one, or (with the checker) an object literal whose contextual type is OwnerPostTarget.
+    if ((ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) && namesOwnerTarget(node.type)) facts.ownerTargets.push(lineOf(node));
+    if (ts.isVariableDeclaration(node) && node.initializer && namesOwnerTarget(node.type)) {
+      let init: ts.Expression = node.initializer;
+      while (ts.isParenthesizedExpression(init)) init = init.expression;
+      if (ts.isObjectLiteralExpression(init)) facts.ownerTargets.push(lineOf(node));
+    }
+    if ((ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node)) && node.body &&
+      namesOwnerTarget(node.type, true)) {
+      facts.ownerTargets.push(lineOf(node));
+    }
+    if (ts.isObjectLiteralExpression(node) && checker !== null) {
+      let t: ts.Type | undefined;
+      try {
+        t = checker.getContextualType(node);
+      } catch {
+        t = undefined;
+      }
+      if (isOwnerTargetType(t)) facts.ownerTargets.push(lineOf(node));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  facts.ownerTargets = [...new Set(facts.ownerTargets)];
+  return facts;
+}
+
+const p10Offenses = (check: (file: string, f: FileFacts) => string[]) => [...scan.facts].flatMap(([file, facts]) => check(file, facts));
+const readSrc = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8");
+
+/** B-P10-1, B-P10-2 */
+function p10StoreOffenses(file: string, f: { p10: P10Facts }): string[] {
+  return f.p10.storeNames
+    .filter((s) => P10_NAME_OWNER.get(s.name) !== file)
+    .map((s) => `${file}:${s.line}: names ${s.name}; only ${P10_NAME_OWNER.get(s.name)} may`);
+}
+
+/** B-P10-3 (imports): one offense per bad module, else one per bad name. */
+function leadImportOffenses(file: string, f: { p8: P8Facts }): string[] {
+  if (!P10_LEAD_MODULES.has(file)) return [];
+  const out: string[] = [];
+  for (const r of f.p8.refs) {
+    if (r.target !== null && P10_LEAD_NEVER_MODULE.test(r.target)) {
+      out.push(`${file}:${r.line}: imports ${r.spec} (the lead job never touches content)`);
+      continue;
+    }
+    if (r.target === SOURCES_SLACK_MODULE && r.whole) {
+      out.push(`${file}:${r.line}: takes sources/slack.ts whole`);
+      continue;
+    }
+    for (const name of r.valueNames) {
+      if (P10_LEAD_NEVER_NAMES.has(name)) out.push(`${file}:${r.line}: imports ${name}`);
+      else if (r.target === SOURCES_SLACK_MODULE && !P10_LEAD_SLACK_VALUES.has(name)) out.push(`${file}:${r.line}: imports ${name} from sources/slack.ts`);
+    }
+    for (const name of r.typeNames) {
+      if (P10_LEAD_NEVER_NAMES.has(name)) out.push(`${file}:${r.line}: imports ${name}`);
+      else if (r.target === SOURCES_SLACK_MODULE && !P10_LEAD_SLACK_TYPES.has(name)) out.push(`${file}:${r.line}: imports type ${name} from sources/slack.ts`);
+    }
+  }
+  return out;
+}
+
+/** B-P10-3 (the reader, LP02): readHistoryShapes' pushed shapes are object literals with exactly LeadPostShape's six keys,
+ *  and it reads, destructures or sets no content key. */
+function shapeReaderOffenses(code: string): string[] {
+  const sf = ts.createSourceFile(path.join(ROOT, SLACK_CLIENT_FILE), code, ts.ScriptTarget.Latest, true);
+  const out: string[] = [];
+  let found = false;
+  const visitFn = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "readHistoryShapes" && node.body) {
+      found = true;
+      let pushes = 0;
+      const inner = (n: ts.Node): void => {
+        if (ts.isTypeNode(n)) return;
+        if (ts.isPropertyAccessExpression(n) && SHAPE_CONTENT_KEYS.has(n.name.text)) out.push(`readHistoryShapes reads .${n.name.text}`);
+        if (ts.isElementAccessExpression(n) && ts.isStringLiteralLike(n.argumentExpression) && SHAPE_CONTENT_KEYS.has(n.argumentExpression.text)) {
+          out.push(`readHistoryShapes reads ["${n.argumentExpression.text}"]`);
+        }
+        if (ts.isBindingElement(n)) {
+          const key = n.propertyName ?? n.name;
+          const k = ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : null;
+          if (k !== null && SHAPE_CONTENT_KEYS.has(k)) out.push(`readHistoryShapes destructures ${k}`);
+        }
+        if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === "push") {
+          pushes++;
+          const a = n.arguments[0];
+          if (n.arguments.length !== 1 || !a || !ts.isObjectLiteralExpression(a)) out.push("readHistoryShapes pushes a shape that isn't one object literal");
+          else {
+            const keys = a.properties.map((p) => (ts.isSpreadAssignment(p) ? "...spread" : p.name !== undefined ? propertyNameText(p.name) ?? "(computed)" : "(computed)"));
+            if ([...keys].sort().join(",") !== LEAD_SHAPE_KEYS.join(",")) out.push(`readHistoryShapes builds a shape with keys ${keys.join(",")}`);
+          }
+        }
+        ts.forEachChild(n, inner);
+      };
+      inner(node.body);
+      if (pushes === 0) out.push("readHistoryShapes builds no shape literal");
+      return;
+    }
+    ts.forEachChild(node, visitFn);
+  };
+  visitFn(sf);
+  if (!found) out.push("readHistoryShapes not found");
+  return out;
+}
+
+/** B-P10-4: brief-compose.ts reads no property named leads. */
+function leadsReadOffenses(code: string): string[] {
+  const sf = ts.createSourceFile(path.join(ROOT, "src/lib/exec/brief-compose.ts"), code, ts.ScriptTarget.Latest, true);
+  const out: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isTypeNode(n) || ts.isInterfaceDeclaration(n) || ts.isTypeAliasDeclaration(n)) return;
+    if (ts.isPropertyAccessExpression(n) && n.name.text === "leads") out.push("reads .leads");
+    if (ts.isElementAccessExpression(n) && ts.isStringLiteralLike(n.argumentExpression) && n.argumentExpression.text === "leads") out.push('reads ["leads"]');
+    if (ts.isBindingElement(n)) {
+      const key = n.propertyName ?? n.name;
+      if ((ts.isIdentifier(key) || ts.isStringLiteralLike(key)) && key.text === "leads") out.push("destructures leads");
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/** B-P10-5 */
+function packImportOffenses(file: string, f: { p8: P8Facts }): string[] {
+  if (file !== P10_PACK_FILE) return [];
+  const out: string[] = [];
+  for (const r of f.p8.refs) {
+    if (r.target !== null && P10_PACK_NEVER.test(r.target)) {
+      out.push(`${file}:${r.line}: imports ${r.spec} (the pack takes one conversation)`);
+      continue;
+    }
+    if (r.typeOnly) continue;
+    if (r.target === null) {
+      if (!(r.spec === "server-only" && r.sideEffect)) out.push(`${file}:${r.line}: imports ${r.spec}`);
+      continue;
+    }
+    if (!P10_PACK_ALLOWED.has(r.target)) {
+      out.push(`${file}:${r.line}: imports ${r.spec}`);
+      continue;
+    }
+    const names = P10_PACK_ALLOWED.get(r.target) ?? null;
+    if (names === null) continue;
+    if (r.whole) out.push(`${file}:${r.line}: takes ${r.spec} whole`);
+    for (const name of r.valueNames) if (!names.has(name)) out.push(`${file}:${r.line}: imports ${name} from ${r.spec}`);
+  }
+  return out;
+}
+
+/** B-P10-6 */
+function p10ContentOffenses(file: string, f: MailFacts): string[] {
+  if (!isP10ContentFile(file)) return [];
+  return [...f.contentLogs.map((at) => `${file}:${at}`), ...(isP10Handler(file) ? f.contentReturns.map((at) => `${file}:${at}`) : [])];
+}
+
+/** B-P10-7 */
+function p10ModelFeatureOffenses(file: string, f: { p8: P8Facts }): string[] {
+  return f.p8.modelFeatures
+    .filter((m) => P10_MODEL_FEATURE_FILES.has(m.feature) && P10_MODEL_FEATURE_FILES.get(m.feature) !== file)
+    .map((m) => `${file}:${m.line}: callModel({ feature: "${m.feature}" }); only ${P10_MODEL_FEATURE_FILES.get(m.feature)} may`);
+}
+
+/** B-P10-8 (AST): which functions in sources/slack.ts send chat.postMessage, and whether postAsOwnerInConversation refuses a
+ *  channel that isn't its target's before its first callSlack. */
+function senderFacts(code: string): { posters: string[]; ownerRefusesFirst: boolean } {
+  const sf = ts.createSourceFile(path.join(ROOT, SLACK_CLIENT_FILE), code, ts.ScriptTarget.Latest, true);
+  const posters: string[] = [];
+  let ownerRefusesFirst = false;
+  const nameOf = (fn: FunctionNode): string => {
+    if (!ts.isArrowFunction(fn) && fn.name && ts.isIdentifier(fn.name)) return fn.name.text;
+    if (ts.isVariableDeclaration(fn.parent) && ts.isIdentifier(fn.parent.name)) return fn.parent.name.text;
+    if (ts.isPropertyAssignment(fn.parent)) return propertyNameText(fn.parent.name) ?? "(anonymous)";
+    return "(anonymous)";
+  };
+  const visitFn = (node: ts.Node): void => {
+    if (isFunctionNode(node) && node.body) {
+      const fn = node;
+      const name = nameOf(fn);
+      const [targetParam, msgParam] = fn.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : null));
+      const postVars = new Set<string>();
+      const targetChannel = new Set<string>();
+      const msgChannel = new Set<string>();
+      let firstCall = Number.POSITIVE_INFINITY;
+      let refusal = Number.POSITIVE_INFINITY;
+      let posts = 0;
+      const strip = (e: ts.Expression): ts.Expression => {
+        let x = e;
+        while (ts.isParenthesizedExpression(x) || ts.isNonNullExpression(x)) x = x.expression;
+        return x;
+      };
+      const isAccess = (e: ts.Expression, obj: string | null | undefined, prop: string): boolean => {
+        const x = strip(e);
+        return obj != null && ts.isPropertyAccessExpression(x) && x.name.text === prop && ts.isIdentifier(x.expression) && x.expression.text === obj;
+      };
+      const isTargetChannel = (e: ts.Expression) => { const x = strip(e); return (ts.isIdentifier(x) && targetChannel.has(x.text)) || isAccess(x, targetParam, "channelId"); };
+      const isMsgChannel = (e: ts.Expression) => { const x = strip(e); return (ts.isIdentifier(x) && msgChannel.has(x.text)) || isAccess(x, msgParam, "channel"); };
+      const comparesChannels = (cond: ts.Node): boolean => {
+        if (ts.isBinaryExpression(cond) && (cond.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken || cond.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsToken)) {
+          if ((isTargetChannel(cond.left) && isMsgChannel(cond.right)) || (isMsgChannel(cond.left) && isTargetChannel(cond.right))) return true;
+        }
+        let hit = false;
+        ts.forEachChild(cond, (c) => { if (!hit && comparesChannels(c)) hit = true; });
+        return hit;
+      };
+      const inner = (n: ts.Node): void => {
+        if (n !== fn && isFunctionNode(n)) return;
+        if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
+          const init = n.initializer;
+          if (ts.isStringLiteralLike(init) && init.text === "chat.postMessage") postVars.add(n.name.text);
+          if (isAccess(init, targetParam, "channelId")) targetChannel.add(n.name.text);
+          if (isAccess(init, msgParam, "channel")) msgChannel.add(n.name.text);
+        }
+        if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "callSlack") {
+          firstCall = Math.min(firstCall, n.getStart(sf));
+          const a = n.arguments[0];
+          if (a && ((ts.isIdentifier(a) && postVars.has(a.text)) || (ts.isStringLiteralLike(a) && a.text === "chat.postMessage"))) posts++;
+        }
+        if (ts.isThrowStatement(n) && n.expression && ts.isNewExpression(n.expression) && ts.isIdentifier(n.expression.expression) &&
+          n.expression.expression.text === "SlackChannelRefusedError") {
+          let child: ts.Node = n;
+          let p: ts.Node = n.parent;
+          while (p !== fn && !ts.isIfStatement(p)) {
+            child = p;
+            p = p.parent;
+          }
+          if (ts.isIfStatement(p) && p.thenStatement === child && comparesChannels(p.expression)) refusal = Math.min(refusal, n.getStart(sf));
+        }
+        ts.forEachChild(n, inner);
+      };
+      inner(fn.body as ts.Node);
+      if (posts > 0) posters.push(name);
+      if (name === OWNER_SENDER) ownerRefusesFirst = refusal < firstCall;
+    }
+    ts.forEachChild(node, visitFn);
+  };
+  visitFn(sf);
+  return { posters: [...new Set(posters)].sort(), ownerRefusesFirst };
+}
+
+function senderOffenses(code: string): string[] {
+  const { posters, ownerRefusesFirst } = senderFacts(code);
+  const out = posters.filter((p) => !P10_POST_FUNCTIONS.has(p)).map((p) => `${p} sends chat.postMessage; only postInDm and ${OWNER_SENDER} may`);
+  if (posters.includes(OWNER_SENDER) && !ownerRefusesFirst) out.push(`${OWNER_SENDER} calls Slack before refusing another channel`);
+  return out;
+}
+
+/** B-P10-8 (imports) */
+function ownerSenderImportOffenses(file: string, f: { p8: P8Facts }): string[] {
+  if (file === REPLY_POST_FILE || file === SLACK_CLIENT_FILE) return [];
+  const out: string[] = [];
+  for (const r of f.p8.refs) {
+    if (r.target !== SOURCES_SLACK_MODULE) continue;
+    if (r.whole && !r.typeOnly) out.push(`${file}:${r.line}: takes sources/slack.ts whole (${OWNER_SENDER} is ${REPLY_POST_FILE}'s only)`);
+    else if ([...r.valueNames, ...r.typeNames].includes(OWNER_SENDER)) out.push(`${file}:${r.line}: imports ${OWNER_SENDER}; only ${REPLY_POST_FILE} may`);
+  }
+  return out;
+}
+
+/** B-P10-9 */
+function ownerTargetOffenses(file: string, f: { p10: P10Facts }): string[] {
+  if (file === REPLY_POST_FILE) return [];
+  return f.p10.ownerTargets.map((line) => `${file}:${line}: builds an ${OWNER_TARGET_TYPE}; only ${REPLY_POST_FILE} may`);
+}
+
+/** B-P10-10 */
+function p10AttentionOffenses(file: string, f: { p8: P8Facts; p10: P10Facts }): string[] {
+  if (!isP10ContentFile(file)) return [];
+  return [
+    ...f.p10.attentionTable.map((line) => `${file}:${line}: names exec_attention_items`),
+    ...f.p10.slackStrings.map((line) => `${file}:${line}: builds a "slack:" string (an attention fingerprint)`),
+    ...f.p8.refs.filter((r) => r.target === ATTENTION_WRITER_MODULE && !r.typeOnly).map((r) => `${file}:${r.line}: imports ${r.spec} (the attention writer)`)
+  ];
+}
+
+/** B-P10-12 */
+function p10ClassifierOffenses(file: string, f: { p8: P8Facts }): string[] {
+  if (!isP10ContentFile(file)) return [];
+  const out: string[] = [];
+  for (const r of f.p8.refs) {
+    if (r.target !== CLASSIFIER_MODULE || r.typeOnly) continue;
+    if (r.whole) out.push(`${file}:${r.line}: takes slack-classes.ts whole`);
+    for (const name of r.valueNames) if (!P10_CLASSIFIER_NAMES.has(name)) out.push(`${file}:${r.line}: imports ${name} from slack-classes.ts`);
+  }
+  return out;
+}
+
+/** B-P10-13: a pure P10 module reaches no server-only module and value-imports nothing outside exec code. */
+function p10PureOffenses(file: string, f: { p5: P5Facts; p8: P8Facts }, factsByFile: ReadonlyMap<string, { p5: P5Facts }>, modules: ReadonlyMap<string, string>): string[] {
+  const out: string[] = [];
+  const chain = serverOnlyChain(file, f.p5, factsByFile, modules);
+  if (chain !== null) out.push(`${file}: reaches a server-only module (${chain.join(" -> ")})`);
+  for (const r of f.p8.refs) {
+    if (r.typeOnly) continue;
+    if (r.target === null || !r.target.startsWith("src/lib/exec/")) out.push(`${file}:${r.line}: a pure P10 module imports ${r.spec}`);
+  }
+  return out;
+}
+
+/** B-P10-14 */
+function dmSendOffenses(file: string, f: { p8: P8Facts; p10: P10Facts }): string[] {
+  const out: string[] = [];
+  const p = f.p10;
+  if (file !== P10_TYPES_FILE) {
+    for (const s of p.sendKindStrings) {
+      if (!(s.labelKey && file === JOB_LABELS_FILE)) out.push(`${file}:${s.line}: names ${P10_SEND_KIND}; only ${P10_TYPES_FILE} may`);
+    }
+    out.push(...p.sendPropertyStrings.map((line) => `${file}:${line}: the string "${P10_SEND_PROPERTY}" (a computed key into ${P10_JOB_KINDS_NAME})`));
+  }
+  if (!SEND_KIND_REFERRERS.has(file)) {
+    const kindsImported = f.p8.refs.some((r) => r.target === P10_TYPES_MODULE && !r.typeOnly && (r.whole || r.valueNames.includes(P10_JOB_KINDS_NAME)));
+    for (const r of p.sendPropertyRefs) if (r.viaKinds || kindsImported) out.push(`${file}:${r.line}: references ${P10_JOB_KINDS_NAME}.${P10_SEND_PROPERTY}`);
+  }
+  out.push(...p.enqueueSendKind.map((line) => `${file}:${line}: an enqueueJob call names the DM send kind (only SQL ${ACCEPT_V3} enqueues it)`));
+  for (const r of f.p8.refs) {
+    if (r.target !== CRYPTO_MODULE) continue;
+    if (r.whole && !r.typeOnly) out.push(`${file}:${r.line}: takes crypto.ts whole`);
+    for (const name of r.valueNames) {
+      const only = REPLY_MAC_IMPORTERS.get(name);
+      if (only !== undefined && !only.has(file)) out.push(`${file}:${r.line}: imports ${name} from crypto.ts; only ${[...only].join(" and ")} may`);
+    }
+  }
+  if (file === REPLY_SEND_HANDLER) {
+    out.push(...p.sendCalls.filter((c) => !c.ok).map((c) => `${file}:${c.line}: sendSlackReply without the literals path "dm" and actor "slack"`));
+    out.push(...p.sendAliases.map((line) => `${file}:${line}: passes sendSlackReply around`));
+  }
+  return out;
+}
+
+// B-P10-9 probes in the real program: the checker sees an object literal's contextual type.
+const OWNER_PRELUDE = 'import type { OwnerPostTarget } from "./slack-types";\nimport { postAsOwnerInConversation } from "./sources/slack";\ndeclare const token: string;\ndeclare const ch: string;\n';
+const ownerTargetProbes = [
+  ["an annotated OwnerPostTarget object literal", probe(`${OWNER_PRELUDE}const t: OwnerPostTarget = { token, channelId: ch };\nexport const x = t;`), 1],
+  ["an object literal handed to postAsOwnerInConversation (contextual OwnerPostTarget, no annotation)",
+    probe(`${OWNER_PRELUDE}export async function f() { await postAsOwnerInConversation({ token, channelId: ch }, { channel: ch, threadTs: null, text: "t" }); }`), 1],
+  ["a cast", probe(`${OWNER_PRELUDE}export const t = { token, channelId: ch } as OwnerPostTarget;`), 1],
+  ["a function declared to return one (no literal in sight)", probe(`${OWNER_PRELUDE}export function make(): OwnerPostTarget { const t = { token, channelId: ch }; return Object.freeze(t); }`), 1],
+  ["an async arrow returning one", probe(`${OWNER_PRELUDE}export const make = async (): Promise<OwnerPostTarget> => JSON.parse("{}");`), 1],
+  ["a union-typed parameter", probe(`${OWNER_PRELUDE}declare function use(t: OwnerPostTarget | null): void;\nuse({ token, channelId: ch });`), 1],
+  ["reading one, or taking one as a parameter (harmless)",
+    probe(`${OWNER_PRELUDE}declare const t: OwnerPostTarget;\nexport const c = t.channelId; export const o = { channel: t.channelId };\nexport function g(x: OwnerPostTarget) { return x.channelId; }`), 0]
+] as const;
+
+const P10_PRESENT = [
+  P10_LEAD_STORE_FILE, P10_REPLY_STORE_FILE, ...P10_LEAD_MODULES, P10_PACK_FILE, REPLY_POST_FILE, REPLY_SEND_FILE, P10_TYPES_FILE, REPLY_SEND_HANDLER,
+  REPLY_TOKEN_CHECK_FILE, REPLY_SEND_ROUTE, REPLY_REVIEW_ROUTE, P10_CONTROLS_FILE, "src/components/exec/slack/LeadCountsCard.tsx", "src/lib/exec/slack-reply-generate.ts",
+  "src/lib/exec/slack-voice.ts", "src/lib/exec/slack-reply-view.ts", "src/lib/exec/handlers/slack-rdraft-act.ts", ...P10_PURE_FILES
+];
+
+describe("P10 boundary (real source tree; contract §0.4 B-P10-1..14, §5.15 BD-P10-01..14)", () => {
+  it("knows the P10 files: in the scan, the content class and the handler class", () => {
+    for (const p of new Set(P10_PRESENT)) expect(scan.files, p).toContain(p);
+    for (const p of [P10_LEAD_STORE_FILE, "src/lib/exec/slack-leads-view.ts", "src/lib/exec/slack-p10-settings.ts", "src/lib/exec/slack-voice.ts", REPLY_SEND_HANDLER,
+      REPLY_TOKEN_CHECK_FILE, "src/lib/exec/handlers/slack-lead-count.ts", REPLY_SEND_ROUTE, "src/components/exec/slack/replies/ReplySendDialog.tsx",
+      "src/components/exec/slack/LeadCountsCard.tsx", P10_CONTROLS_FILE]) {
+      expect(isP10ContentFile(p), p).toBe(true);
+    }
+    // P6's assistant-DM handler, P7a's reader and the brief keep their own classes.
+    for (const p of ["src/lib/exec/handlers/slack-reply.ts", "src/lib/exec/slack-read.ts", "src/lib/exec/brief-slack-ui.ts", "src/components/exec/slack/CatchUpList.tsx"]) {
+      expect(isP10ContentFile(p), p).toBe(false);
+    }
+    for (const p of ["src/lib/exec/handlers/slack-lead-count.ts", "src/lib/exec/handlers/slack-rdraft-send.ts", "src/lib/exec/handlers/slack-voice-refresh.ts",
+      REPLY_TOKEN_CHECK_FILE]) {
+      expect(isP10Handler(p), p).toBe(true);
+    }
+    expect(isP10Handler("src/lib/exec/handlers/slack-reply.ts")).toBe(false);
+  });
+
+  it("BD-P10-01 B-P10-1: the lead tables and functions only in slack-leads-store.ts; v2 only in sources/dd.ts; the brief's two only in brief-store.ts", () => {
+    const migration = readSrc(P10_MIGRATION_FILE);
+    const created = [...migration.matchAll(/create or replace function public[.]([a-z0-9_]+)[(]/g)].map((m) => m[1]);
+    expect([...new Set(created)].sort()).toEqual([...P10_LEAD_FUNCTIONS, ...P10_REPLY_FUNCTIONS, FB_LEAD_V2, ...BRIEF_LEAD_FUNCTIONS, ACCEPT_V3, ...P10_CHECK_HELPERS].sort());
+    const tables = [...migration.matchAll(/create table (?:if not exists )?public[.](exec_[a-z0-9_]+)/g)].map((m) => m[1]);
+    expect([...new Set(tables)].sort()).toEqual([...P10_LEAD_TABLES, ...P10_REPLY_TABLES].sort());
+    const lead = new Set<string>([...P10_LEAD_TABLES, ...P10_LEAD_FUNCTIONS, FB_LEAD_V2, ...BRIEF_LEAD_FUNCTIONS]);
+    expect(p10Offenses(p10StoreOffenses).filter((o) => lead.has(o.split(": names ")[1].split(";")[0]))).toEqual([]);
+    // The owners hold them (the scan sees each name where it belongs; the store writes the counts table through RPC 3 only).
+    expect(factsOf(P10_LEAD_STORE_FILE).p10.storeNames.map((s) => s.name)).toEqual(expect.arrayContaining(["exec_slack_lead_channels", ...P10_LEAD_FUNCTIONS]));
+    expect(factsOf(DD_SOURCE_FILE).p10.storeNames.map((s) => s.name)).toContain(FB_LEAD_V2);
+    expect(new Set(factsOf(BRIEF_STORE_FILE).p10.storeNames.map((s) => s.name))).toEqual(new Set(BRIEF_LEAD_FUNCTIONS));
+  });
+
+  it("BD-P10-02 B-P10-2: the reply tables and functions only in slack-reply-store.ts; accept_action_v3 only in slack-install.ts", () => {
+    const reply = new Set<string>([...P10_REPLY_TABLES, ...P10_REPLY_FUNCTIONS, ACCEPT_V3]);
+    expect(p10Offenses(p10StoreOffenses).filter((o) => reply.has(o.split(": names ")[1].split(";")[0]))).toEqual([]);
+    expect(factsOf(P10_REPLY_STORE_FILE).p10.storeNames.map((s) => s.name)).toEqual(expect.arrayContaining([...P10_REPLY_TABLES, ...P10_REPLY_FUNCTIONS]));
+    expect(factsOf(SLACK_INSTALL_FILE).p10.storeNames.map((s) => s.name)).toContain(ACCEPT_V3);
+    // Everything else names them only as audit targets (exec_slack_reply_drafts:<id>, a `target:` value).
+    expect(p10Offenses(p10StoreOffenses)).toEqual([]);
+  });
+
+  it("BD-P10-03 B-P10-3: the lead modules import no content reader, and readHistoryShapes returns shapes only", () => {
+    for (const file of P10_LEAD_MODULES) expect(scan.files, file).toContain(file);
+    expect(p10Offenses(leadImportOffenses)).toEqual([]);
+    const handlerSlack = factsOf("src/lib/exec/handlers/slack-lead-count.ts").p8.refs.filter((r) => r.target === SOURCES_SLACK_MODULE);
+    expect(handlerSlack.flatMap((r) => r.valueNames).sort()).toEqual(expect.arrayContaining(["listMemberChannels", "readHistoryShapes"]));
+    expect(shapeReaderOffenses(readSrc(SLACK_CLIENT_FILE))).toEqual([]);
+  });
+
+  it("BD-P10-04 B-P10-4: brief-compose.ts never reads leads", () => {
+    expect(leadsReadOffenses(readSrc("src/lib/exec/brief-compose.ts"))).toEqual([]);
+    // brief-build.ts does (it adds the gathered block to the composed content), so the detector isn't blind.
+    expect(leadsReadOffenses(readSrc("src/lib/exec/brief-build.ts"))).toContain("reads .leads");
+  });
+
+  it("BD-P10-05 B-P10-5: the reply pack imports only its allow-list", () => {
+    expect(factsOf(P10_PACK_FILE).p8.refs.length).toBeGreaterThan(5);
+    expect(p10Offenses(packImportOffenses)).toEqual([]);
+  });
+
+  it("BD-P10-06 B-P10-6: no P10 content file logs or alerts content, no P10 handler returns it, under the P10 vocabulary", () => {
+    expect(scan.files.filter(isP10ContentFile).length).toBeGreaterThanOrEqual(30);
+    expect(vocabFor("src/lib/exec/slack-reply-send.ts").words.has("draft")).toBe(true);
+    expect(p3Offenses(p10ContentOffenses)).toEqual([]);
+    // The class's older rules still hold under the wider vocabulary.
+    expect(p3Offenses(slackContentOffenses)).toEqual([]);
+    expect(p3Offenses(contentOffenses)).toEqual([]);
+  });
+
+  it("BD-P10-07 B-P10-7: callModel slack_reply only in slack-reply-generate.ts, slack_voice only in slack-voice.ts", () => {
+    expect(p10Offenses(p10ModelFeatureOffenses)).toEqual([]);
+    const features = [...scan.facts].flatMap(([file, f]) => f.p8.modelFeatures.filter((m) => P10_MODEL_FEATURE_FILES.has(m.feature)).map((m) => `${m.feature}@${file}`));
+    expect(features.sort()).toEqual(["slack_reply@src/lib/exec/slack-reply-generate.ts", "slack_voice@src/lib/exec/slack-voice.ts"]);
+  });
+
+  it("BD-P10-08 B-P10-8: two senders; postAsOwnerInConversation refuses first and only slack-reply-post.ts imports it", () => {
+    const facts = senderFacts(readSrc(SLACK_CLIENT_FILE));
+    expect(facts.posters).toEqual([OWNER_SENDER, "postInDm"]);
+    expect(facts.ownerRefusesFirst).toBe(true);
+    expect(senderOffenses(readSrc(SLACK_CLIENT_FILE))).toEqual([]);
+    expect(p10Offenses(ownerSenderImportOffenses)).toEqual([]);
+    expect(factsOf(REPLY_POST_FILE).p8.refs.some((r) => r.target === SOURCES_SLACK_MODULE && r.valueNames.includes(OWNER_SENDER))).toBe(true);
+  });
+
+  it("BD-P10-09 B-P10-9: OwnerPostTarget values are built only in slack-reply-post.ts", () => {
+    expect(p10Offenses(ownerTargetOffenses)).toEqual([]);
+    expect(factsOf(REPLY_POST_FILE).p10.ownerTargets.length).toBeGreaterThanOrEqual(1);
+    // DmTarget's makers are unchanged (B-P8-12).
+    expect(p8Offenses(dmTargetOffenses)).toEqual([]);
+  });
+
+  it("BD-P10-10 B-P10-10: no P10 file names exec_attention_items, builds a slack: string or imports the attention writer", () => {
+    expect(p10Offenses(p10AttentionOffenses)).toEqual([]);
+  });
+
+  it("BD-P10-11 B-P10-11: B-P8-2 amended: slack-reply-post.ts reads the token; it and slack-reply-send.ts have only their importers", () => {
+    expect(USER_TOKEN_FILES.has(REPLY_POST_FILE)).toBe(true);
+    expect(factsOf(REPLY_POST_FILE).p8.userToken.length).toBeGreaterThan(0);
+    expect(p8Offenses(userTokenOffenses)).toEqual([]);
+    const importers = (module: string) => [...scan.facts].filter(([, f]) => f.p8.refs.some((r) => r.target === module)).map(([file]) => file).sort();
+    expect(importers(REPLY_POST_MODULE)).toEqual([REPLY_TOKEN_CHECK_FILE, REPLY_SEND_FILE].sort());
+    expect(importers(REPLY_SEND_MODULE).every((file) => REPLY_SEND_IMPORTERS.has(file))).toBe(true);
+  });
+
+  it("BD-P10-12 B-P10-12: the P10 files take only channelSlug / isLeadName from slack-classes.ts; BR02 and BR09 hold on the P10 tree", () => {
+    expect(p10Offenses(p10ClassifierOffenses)).toEqual([]);
+    expect(p7aOffenses(p7aStoreOffenses)).toEqual([]);
+    expect(p7aOffenses(neverWatchOffenses)).toEqual([]);
+    expect(factsOf("src/lib/exec/slack-leads.ts").p8.refs.find((r) => r.target === CLASSIFIER_MODULE)?.valueNames).toEqual(["channelSlug"]);
+  });
+
+  it("BD-P10-13 B-P10-13: the P10 client components are rule-16 roots; the P10 pure modules (B-P8-5's three included) are pure", () => {
+    const modules = moduleIndex(scan.facts.keys());
+    const clients = scan.files.filter(isP10ClientComponent);
+    expect(clients).toContain(P10_CONTROLS_FILE);
+    expect(factsOf(P10_CONTROLS_FILE).p5.useClient).toBe(true);
+    for (const file of clients) {
+      expect(isClientRoot(file), file).toBe(true);
+      const facts = factsOf(file).p5;
+      if (facts.useClient) expect(serverOnlyChain(file, facts, scan.facts, modules), file).toBeNull();
+    }
+    for (const file of P10_PURE_FILES) expect(p10PureOffenses(file, factsOf(file), scan.facts, modules), file).toEqual([]);
+    // B-P8-5 amended: brief-slack-ui.ts takes the three, and still passes.
+    expect(p8Offenses(pureP8Offenses)).toEqual([]);
+    expect(factsOf("src/lib/exec/brief-slack-ui.ts").p8.refs.some((r) => r.target === "src/lib/exec/slack-leads" && !r.typeOnly)).toBe(true);
+  });
+
+  it("BD-P10-14 B-P10-14: only a click starts a DM send", () => {
+    expect(p10Offenses(dmSendOffenses)).toEqual([]);
+    expect(factsOf(P10_TYPES_FILE).p10.sendKindStrings).toHaveLength(1);
+    expect(factsOf(REPLY_SEND_HANDLER).p10.sendPropertyRefs.filter((r) => r.viaKinds)).toHaveLength(1);
+    expect(factsOf(REPLY_SEND_HANDLER).p10.sendCalls.length).toBeGreaterThan(0);
+    expect(factsOf(REPLY_SEND_HANDLER).p10.sendCalls.every((c) => c.ok)).toBe(true);
+  });
+});
+
+describe("P10 boundary detectors (probes; BD-P10-01..14)", () => {
+  const kindOf = (file: string) => (file.endsWith(".tsx") ? ts.ScriptKind.TSX : /\.[cm]?js$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS);
+  const sourceAt = (file: string, code: string) => ts.createSourceFile(path.join(ROOT, file), code, ts.ScriptTarget.Latest, true, kindOf(file));
+  const mailAt = (file: string, code: string) => analyzeMail(sourceAt(file, code), vocabFor(file));
+  /** Syntax-only facts of a probe file (no checker), shaped like the scan's. */
+  const factsAt = (file: string, code: string): FileFacts => {
+    const sf = sourceAt(file, code);
+    return { ...analyzeImports(sf), mail: analyzeMail(sf, vocabFor(file)), p5: analyzeP5(sf), p7a: analyzeP7a(sf, null), p8: analyzeP8(sf, null), p10: analyzeP10(sf, null) } as unknown as FileFacts;
+  };
+  const OTHER = "src/lib/exec/slack-reply-view.ts";
+  const HANDLER = "src/lib/exec/handlers/slack-rdraft-sweep.ts";
+  const PLAN = "src/lib/exec/handlers/slack-rdraft-plan.ts";
+  const LEAD_HANDLER = "src/lib/exec/handlers/slack-lead-count.ts";
+
+  it("BD-P10-01 B-P10-1: a lead name outside its store is flagged; P7a's regex can't see the suffixed v2, this one does", () => {
+    const store = (file: string, code: string) => p10StoreOffenses(file, factsAt(file, code));
+    expect(store(OTHER, 'const { data } = await db.from("exec_slack_lead_counts").select("n");')).toHaveLength(1);
+    for (const name of [...P10_LEAD_TABLES, ...P10_LEAD_FUNCTIONS]) {
+      expect(store(HANDLER, `await db.rpc(${JSON.stringify(name)}, {});`), name).toHaveLength(1);
+      expect(store(P10_LEAD_STORE_FILE, `await db.rpc(${JSON.stringify(name)}, {});`), name).toEqual([]);
+    }
+    const v2 = `const { data } = await db.rpc("${FB_LEAD_V2}", { p_user_id: id });`;
+    expect(store(LEAD_HANDLER, v2)).toHaveLength(1);
+    expect(store(DD_SOURCE_FILE, v2)).toEqual([]);
+    expect(p7aStoreOffenses(LEAD_HANDLER, factsAt(LEAD_HANDLER, v2))).toEqual([]);
+    for (const name of BRIEF_LEAD_FUNCTIONS) {
+      expect(store("src/lib/exec/brief-gather.ts", `await db.rpc("${name}", a);`), name).toHaveLength(1);
+      expect(store(BRIEF_STORE_FILE, `await db.rpc("${name}", a);`), name).toEqual([]);
+    }
+    expect(store(HANDLER, "const sql = `select n from exec_slack_lead_counts where day = ${d}`;")).toHaveLength(1);
+    // Not reads: an audit target (a `target:` value or name:…), a column, an index or constraint name, a type, a comment.
+    expect(store(HANDLER, 'await auditStart(p, { action: "slack_leads.purge", target: "exec_slack_lead_counts" });')).toEqual([]);
+    expect(store(HANDLER, 'const t = "exec_slack_lead_channels:" + id; const u = `exec_slack_lead_channels:${id}`;')).toEqual([]);
+    expect(store(HANDLER, 'const c = "exec_slack_lead_counts.n"; if (m.includes("exec_slack_lead_counts_day_idx")) x();')).toEqual([]);
+    expect(store(HANDLER, 'type T = "exec_slack_lead_counts";\n// exec_slack_lead_summary(p)\n/* exec_slack_fb_lead_channels_v2 */')).toEqual([]);
+  });
+
+  it("BD-P10-02 B-P10-2: a reply name or accept_action_v3 outside its owner is flagged; P8's v2 isn't this rule's", () => {
+    const store = (file: string, code: string) => p10StoreOffenses(file, factsAt(file, code));
+    for (const name of [...P10_REPLY_TABLES, ...P10_REPLY_FUNCTIONS]) {
+      expect(store(HANDLER, `await db.from(${JSON.stringify(name)}).select("id");`), name).toHaveLength(1);
+      expect(store(P10_REPLY_STORE_FILE, `await db.from(${JSON.stringify(name)}).select("id");`), name).toEqual([]);
+    }
+    expect(store(REPLY_SEND_HANDLER, `await db.rpc("${ACCEPT_V3}", a);`)).toHaveLength(1);
+    expect(store(SLACK_INSTALL_FILE, `const RPC_V3 = "${ACCEPT_V3}";`)).toEqual([]);
+    expect(store(HANDLER, 'await db.rpc("exec_slack_accept_action_v2", a);')).toEqual([]);
+    expect(store(REPLY_SEND_ROUTE, 'await auditStart(p, { action: "slack_reply.send", target: `exec_slack_reply_drafts:${id}` });')).toEqual([]);
+  });
+
+  it("BD-P10-03 B-P10-3: the lead job importing a content reader, the model, triage, a reply module, or sources/slack whole is flagged", () => {
+    const lead = (code: string, file = LEAD_HANDLER) => leadImportOffenses(file, factsAt(file, code));
+    for (const code of [
+      'import { readHistory } from "@/lib/exec/sources/slack";', 'import { getPermalink } from "@/lib/exec/sources/slack";',
+      'import { getUserBrief } from "@/lib/exec/sources/slack";', 'import { callModel } from "@/lib/exec/llm/client";',
+      'import { sweepVerdict } from "@/lib/exec/slack-ingest";', 'import { plainTextOf } from "@/lib/exec/triage/slack";',
+      'import { renderUntrustedBlock } from "@/lib/exec/text/untrusted";', 'import { getReplyDraft } from "@/lib/exec/slack-reply-store";',
+      'import { runAgent } from "@/lib/exec/agent/run";', 'import * as slack from "@/lib/exec/sources/slack";',
+      'async function f() { const s = await import("@/lib/exec/sources/slack"); }', 'import { lookupUserByEmail } from "@/lib/exec/sources/slack";',
+      'import type { SlackReadMessage } from "@/lib/exec/sources/slack";'
+    ]) {
+      expect(lead(code), code).toHaveLength(1);
+    }
+    expect(lead('import { readReplies, readHistory } from "@/lib/exec/sources/slack";')).toHaveLength(2);
+    for (const file of P10_LEAD_MODULES) expect(lead('import { readHistory } from "@/lib/exec/sources/slack";', file), file).toHaveLength(1);
+    expect(lead([
+      'import { readHistoryShapes, listMemberChannels, SlackApiError, type LeadPostShape, type LeadExclusions } from "@/lib/exec/sources/slack";',
+      'import { openReader, paced, isSlackAuthError } from "@/lib/exec/slack-read";',
+      'import { P10_LIMITS } from "@/lib/exec/slack-p10-types";'
+    ].join("\n"))).toEqual([]);
+    // Outside the four modules the rule doesn't apply (the reply pack reads content by design).
+    expect(lead('import { readHistory } from "@/lib/exec/sources/slack";', P10_PACK_FILE)).toEqual([]);
+  });
+
+  it("BD-P10-03 / LP02: readHistoryShapes reading m.text, adding a key, pushing a non-literal or destructuring text is flagged", () => {
+    const head = "export async function readHistoryShapes(t: unknown, q: unknown) { const shapes: unknown[] = []; const json: any = {};\nfor (const m of json.messages) {";
+    const tail = "}\nreturn { shapes, hasMore: false, nextCursor: null }; }";
+    const good = 'const ts = m.ts; shapes.push({ ts, reply: false, bot: !!m.bot_id, excluded: false, hidden: m.hidden === true, subtypeClass: "none" });';
+    expect(shapeReaderOffenses(`${head}${good}${tail}`)).toEqual([]);
+    expect(shapeReaderOffenses(`${head}shapes.push({ ts: m.ts, reply: false, bot: true, excluded: false, hidden: false, subtypeClass: "none", text: m.text });${tail}`).sort())
+      .toEqual(["readHistoryShapes builds a shape with keys ts,reply,bot,excluded,hidden,subtypeClass,text", "readHistoryShapes reads .text"].sort());
+    expect(shapeReaderOffenses(`${head}shapes.push(m);${tail}`)).toEqual(["readHistoryShapes pushes a shape that isn't one object literal"]);
+    expect(shapeReaderOffenses(`${head}shapes.push({ ...m });${tail}`)).toEqual(["readHistoryShapes builds a shape with keys ...spread"]);
+    expect(shapeReaderOffenses(`${head}const { text } = m; ${good}${tail}`)).toEqual(["readHistoryShapes destructures text"]);
+    for (const key of ["blocks", "attachments", "files", "username", "reactions", "metadata", "name", "real_name", "display_name"]) {
+      expect(shapeReaderOffenses(`${head}const x = m.${key}; ${good}${tail}`), key).toEqual([`readHistoryShapes reads .${key}`]);
+    }
+    expect(shapeReaderOffenses(`${head}const x = m["user_profile"]; ${good}${tail}`)).toEqual(['readHistoryShapes reads ["user_profile"]']);
+    expect(shapeReaderOffenses("export async function readHistory() { return []; }")).toEqual(["readHistoryShapes not found"]);
+    expect(shapeReaderOffenses(`${head}${tail}`)).toEqual(["readHistoryShapes builds no shape literal"]);
+  });
+
+  it("BD-P10-04 B-P10-4: a compose that reads leads (access, element access, destructuring, optional chain) is flagged", () => {
+    expect(leadsReadOffenses("export function f(g: any) { return g.leads; }")).toEqual(["reads .leads"]);
+    expect(leadsReadOffenses("export function f(g: any) { return g?.leads?.rows; }")).toEqual(["reads .leads"]);
+    expect(leadsReadOffenses('export function f(g: any) { return g["leads"]; }')).toEqual(['reads ["leads"]']);
+    expect(leadsReadOffenses("export function f({ leads }: any) { return 1; }")).toEqual(["destructures leads"]);
+    expect(leadsReadOffenses("export function f(g: any) { const { leads: l } = g; return l; }")).toEqual(["destructures leads"]);
+    expect(leadsReadOffenses("type G = { leads: number };\n// g.leads\nexport function f(g: { sections: number }) { return g.sections; }")).toEqual([]);
+  });
+
+  it("BD-P10-05 B-P10-5: the pack importing mail, drafts, a brief, DD, lead or chat module, or an unlisted name is flagged; type imports pass", () => {
+    const pack = (code: string) => packImportOffenses(P10_PACK_FILE, factsAt(P10_PACK_FILE, code));
+    for (const code of [
+      'import { listThreads } from "@/lib/exec/sources/mail";', 'import type { DraftContext } from "@/lib/exec/drafts-pack";',
+      'import { gatherBrief } from "@/lib/exec/brief-gather";', 'import { readOpenSlackItems } from "@/lib/exec/slack-reading";',
+      'import { getChannel } from "@/lib/exec/slack-read-store";', 'import { listFbLeadChannelsV2 } from "@/lib/exec/sources/dd";',
+      'import { leadCountsView } from "@/lib/exec/slack-leads-view";', 'import { runAgent } from "@/lib/exec/agent/run";',
+      'import { getChatThread } from "@/lib/exec/chat-store";', 'import { listScreenedAttention } from "@/lib/exec/attention-read";',
+      'import { getSupabaseAdmin } from "@/lib/supabase-admin";', 'import * as slack from "@/lib/exec/sources/slack";',
+      'import { searchSlack } from "@/lib/exec/slack-search";', 'import type { ClientUpdate } from "@/lib/exec/client-update";',
+      'import { getPermalink } from "@/lib/exec/sources/slack";', 'import { buildTriageWindow } from "@/lib/exec/triage/slack";'
+    ]) {
+      expect(pack(code).length, code).toBe(1);
+    }
+    expect(pack([
+      'import "server-only";',
+      'import type { ExecPrincipal } from "@/lib/exec/types";',
+      'import { P10_LIMITS, type ReplyDraftRow } from "@/lib/exec/slack-p10-types";',
+      'import { SLACK_P10_COPY } from "@/lib/exec/slack-p10-copy";',
+      'import { isAbort, isSlackAuthError, openReader, paced } from "@/lib/exec/slack-read";',
+      'import { getUserBrief, readHistory, readReplies, SlackApiError, type SlackReadMessage } from "@/lib/exec/sources/slack";',
+      'import { msToTs, tsToMs, type ConvType } from "@/lib/exec/slack-read-types";',
+      'import { defaceSlackHeaders, placeholderOf, plainTextOf, SLACK_TRIAGE_PLACEHOLDERS, windowKeeps } from "@/lib/exec/triage/slack";',
+      'import { isExternalAuthor } from "@/lib/exec/slack-ingest";',
+      'import { clipForModel, neutralizeChatText, newNonce, renderUntrustedBlock, untrustedBlockOverhead, untrustedEntrySize } from "@/lib/exec/text/untrusted";',
+      'import { formatInZone } from "@/lib/exec/format";',
+      'import { localDateString } from "@/lib/exec/time";',
+      'import { getDdBotIdentity, listAuthorOptouts } from "@/lib/exec/slack-reading";',
+      'import type { SlackSearchHit } from "@/lib/exec/slack-read-store";'
+    ].join("\n"))).toEqual([]);
+  });
+
+  it("BD-P10-06 B-P10-6: logging a draft's text, an instruction, a label, a name or a token in a P10 file is flagged; counts and codes pass", () => {
+    const content = (file: string, code: string) => p10ContentOffenses(file, mailAt(file, code));
+    const FILE = "src/lib/exec/slack-reply-generate.ts";
+    for (const code of [
+      "console.log(draft.text);", "console.error(instruction);", 'void notifyOps({ key: "k", title: "t", detail: row.note });', "console.log(placeholders);",
+      "console.log(label);", "console.log(clientLabel);", "console.log(digest.summary);", "console.log(names);", "console.log(samples);", "console.log(token);",
+      "console.log(mac);", "console.log({ value });", "console.log(slack_user_token);", "console.log(userToken);", "console.log(buttonValue);", "console.log(triggerId);",
+      "console.log(p.trigger_id);", "console.log(ownerPostTarget);", "console.warn(`[exec-slack-reply] ${row.instruction}`);", "console.log(channel.name);"
+    ]) {
+      expect(content(FILE, code), code).toHaveLength(1);
+    }
+    for (const code of [
+      "console.log(textLength, samplesUsed, placeholdersCount, draftId, status, code, version);",
+      "console.error(`[exec-slack-reply] draft ${id}: ${code} (${err instanceof Error ? err.name : \"error\"})`);",
+      "void notifyOps({ key: SLACK_P10_OPS.tokenMismatch.key(p.id), title: SLACK_P10_OPS.tokenMismatch.title, detail: `reply ${id}: ${reason}` });",
+      "console.log(SLACK_P10_COPY.leads.states.off);"
+    ]) {
+      expect(content(FILE, code), code).toEqual([]);
+    }
+    const handler = (ret: string) => `export const h = { kind: "exec.slack-rdraft-generate", lane: "bulk", timeoutMs: 1, run: async (ctx) => (${ret}) };`;
+    expect(content("src/lib/exec/handlers/slack-rdraft-generate.ts", handler("{ draftId, text: row.text }"))).toHaveLength(1);
+    expect(content(LEAD_HANDLER, handler("{ channels, counted, label }"))).toHaveLength(1);
+    expect(content(REPLY_TOKEN_CHECK_FILE, handler("{ state, token }"))).toHaveLength(1);
+    expect(content(REPLY_SEND_HANDLER, handler("{ draftId, outcome, reason }"))).toEqual([]);
+    expect(content(LEAD_HANDLER, handler("{ channels, counted, pages, partial, needsFinal, errors }"))).toEqual([]);
+    // The class's routes, components and settings module are in; P6's DM handler and DD code keep their own vocabularies.
+    expect(content(REPLY_SEND_ROUTE, "console.error(draft.text);")).toHaveLength(1);
+    expect(content(P10_CONTROLS_FILE, "console.log(label);")).toHaveLength(1);
+    expect(content("src/lib/exec/handlers/slack-reply.ts", "console.log(label);")).toEqual([]);
+    expect(vocabFor("src/lib/exec/handlers/slack-reply.ts").words.has("draft")).toBe(false);
+    expect(vocabFor("src/lib/exec/jobs.ts")).toBe(P3_VOCAB);
+  });
+
+  it("BD-P10-07 B-P10-7: callModel slack_reply / slack_voice in a probe file is flagged; the two owners pass", () => {
+    const mf = (file: string, code: string) => p10ModelFeatureOffenses(file, factsAt(file, code));
+    expect(mf(HANDLER, 'await callModel({ principal, feature: "slack_reply", request, signal });')).toHaveLength(1);
+    expect(mf("src/lib/exec/slack-reply-generate.ts", 'await callModel({ principal, feature: "slack_reply", request, signal });')).toEqual([]);
+    expect(mf("src/lib/exec/slack-reply-generate.ts", 'await llm.callModel({ principal, feature: "slack_voice", request });')).toHaveLength(1);
+    expect(mf("src/lib/exec/slack-voice.ts", 'await callModel({ principal, feature: "slack_voice", request });')).toEqual([]);
+    expect(mf(HANDLER, 'await callModel({ principal, feature: "chat", request });')).toEqual([]);
+  });
+
+  it("BD-P10-08 B-P10-8: a third sender, an owner sender that posts before its channel check, a second importer are flagged", () => {
+    const decl = "\ndeclare function callSlack(...a: unknown[]): Promise<any>; declare class SlackChannelRefusedError {}";
+    const third = 'export async function postSomewhere(t: any) { const method = "chat.postMessage"; await callSlack(method, t); }';
+    expect(senderOffenses(third + decl)).toEqual([`postSomewhere sends chat.postMessage; only postInDm and ${OWNER_SENDER} may`]);
+    expect(senderOffenses('export const post = async (t: any) => { await callSlack("chat.postMessage", t); };' + decl)).toHaveLength(1);
+    const late = 'export async function postAsOwnerInConversation(target: any, msg: any) { const method = "chat.postMessage"; await callSlack(method, target);\n'
+      + "if (msg.channel !== target.channelId) throw new SlackChannelRefusedError(); }";
+    expect(senderOffenses(late + decl)).toEqual([`${OWNER_SENDER} calls Slack before refusing another channel`]);
+    const wrong = 'export async function postAsOwnerInConversation(target: any, msg: any) { if (msg.threadTs === "x") throw new SlackChannelRefusedError();\n'
+      + 'const method = "chat.postMessage"; await callSlack(method, target); }';
+    expect(senderOffenses(wrong + decl)).toEqual([`${OWNER_SENDER} calls Slack before refusing another channel`]);
+    const aliased = "export async function postAsOwnerInConversation(target: any, msg: any) { const pinned = target?.channelId; const channel = msg?.channel;\n"
+      + 'if (typeof pinned !== "string" || channel !== pinned) throw new SlackChannelRefusedError();\nconst method = "chat.postMessage"; await callSlack(method, target); }';
+    expect(senderOffenses(aliased + decl)).toEqual([]);
+    expect(senderOffenses('export async function updateInDm(t: any) { const method = "chat.update"; await callSlack(method, t); }' + decl)).toEqual([]);
+    const imp = (file: string, code: string) => ownerSenderImportOffenses(file, factsAt(file, code));
+    expect(imp(REPLY_SEND_FILE, `import { ${OWNER_SENDER} } from "@/lib/exec/sources/slack";`)).toHaveLength(1);
+    expect(imp(REPLY_POST_FILE, `import { authTest, ${OWNER_SENDER}, SlackApiError } from "@/lib/exec/sources/slack";`)).toEqual([]);
+    expect(imp("src/lib/exec/slack-reply-pack.ts", `export { ${OWNER_SENDER} } from "@/lib/exec/sources/slack";`)).toHaveLength(1);
+    expect(imp(HANDLER, 'async function f() { const s = await import("@/lib/exec/sources/slack"); }')).toHaveLength(1);
+    expect(imp(OTHER, 'import type { SlackReadMessage } from "@/lib/exec/sources/slack";\nimport { postInDm } from "@/lib/exec/sources/slack";')).toEqual([]);
+  });
+
+  it("BD-P10-09 B-P10-9: an OwnerPostTarget built in a probe file is flagged (the checker sees contextual types); the maker passes", () => {
+    for (const [what, file, n] of ownerTargetProbes) {
+      const facts = scan.probeP10.get(file);
+      if (!facts) throw new Error(`boundary test: ${what} wasn't scanned`);
+      expect(ownerTargetOffenses(relPath(file), { p10: facts }), what).toHaveLength(n);
+    }
+    // Syntax alone sees casts, assertions, annotations and declared return types; the maker is allowed.
+    const ot = (file: string, code: string) => ownerTargetOffenses(file, factsAt(file, code));
+    expect(ot(OTHER, "const t = { token, channelId } as OwnerPostTarget;")).toHaveLength(1);
+    expect(ot(OTHER, "const t = <OwnerPostTarget>{ token, channelId };")).toHaveLength(1);
+    expect(ot(OTHER, "const t: OwnerPostTarget | null = { token, channelId };")).toHaveLength(1);
+    expect(ot(OTHER, "const t = { token, channelId } satisfies OwnerPostTarget;")).toHaveLength(1);
+    expect(ot(OTHER, "function make(token: string, channelId: string): Readonly<OwnerPostTarget> { return Object.freeze({ token, channelId }); }")).toHaveLength(1);
+    expect(ot(REPLY_POST_FILE, "function make(token: string, channelId: string): OwnerPostTarget { return Object.freeze({ token, channelId }); }")).toEqual([]);
+    expect(ot(OTHER, "let target: OwnerPostTarget | null = null; target = open.target; function g(t: OwnerPostTarget) { return t.channelId; }")).toEqual([]);
+    // A DmTarget is B-P8-12's, not this rule's.
+    expect(ot(OTHER, "const t = { token, dmChannelId } as DmTarget;")).toEqual([]);
+  });
+
+  it("BD-P10-10 B-P10-10: an attention write, a slack: fingerprint or the attention writer in a P10 file is flagged", () => {
+    const att = (file: string, code: string) => p10AttentionOffenses(file, factsAt(file, code));
+    const FILE = "src/lib/exec/slack-leads-view.ts";
+    expect(att(FILE, 'await db.from("exec_attention_items").insert(row);')).toHaveLength(1);
+    expect(att(FILE, 'const id = "C1"; export const fp = `slack:lead:${id}`;')).toHaveLength(1);
+    expect(att(FILE, 'export const fp = "slack:reply:" + id;')).toHaveLength(1);
+    expect(att(FILE, 'import { upsertAttentionItems } from "@/lib/exec/attention";')).toHaveLength(1);
+    expect(att(FILE, 'import type { AttentionItemRow } from "@/lib/exec/attention";\nexport const ok = "slackish";')).toEqual([]);
+    expect(att(REPLY_SEND_HANDLER, 'export const fp = `slack:msg:${id}`;')).toHaveLength(1);
+    // P6's DM handler isn't in the class (its route string stays).
+    expect(att("src/lib/exec/handlers/slack-reply.ts", 'const route = "slack:message.im";')).toEqual([]);
+  });
+
+  it("BD-P10-11 B-P10-11: slack_user_token in slack-reply-post.ts passes; a third reader, a third importer, postReplyAsOwner from the token check are flagged", () => {
+    const tok = (file: string, code: string) => userTokenOffenses(file, factsAt(file, code));
+    expect(tok(REPLY_POST_FILE, 'const { data } = await db.from("users").select("slack_user_token").eq("id", principal.userId);')).toEqual([]);
+    expect(tok(REPLY_SEND_FILE, "const t = row.slack_user_token;")).toHaveLength(1);
+    expect(tok("src/lib/exec/slack-voice.ts", 'const { data } = await db.from("users").select("slack_user_token");')).toHaveLength(1);
+    expect(tok(HANDLER, 'import { verifyReplyToken } from "@/lib/exec/slack-reply-post";')).toHaveLength(1);
+    expect(tok(REPLY_TOKEN_CHECK_FILE, 'import { verifyReplyToken, type ReplyTokenVerdict } from "@/lib/exec/slack-reply-post";')).toEqual([]);
+    expect(tok(REPLY_TOKEN_CHECK_FILE, 'import { postReplyAsOwner } from "@/lib/exec/slack-reply-post";')).toEqual([
+      `${REPLY_TOKEN_CHECK_FILE}:1: imports postReplyAsOwner from slack-reply-post.ts`
+    ]);
+    expect(tok(REPLY_SEND_FILE, 'import { postReplyAsOwner, verifyReplyToken, type ReplyTokenVerdict } from "@/lib/exec/slack-reply-post";')).toEqual([]);
+    expect(tok(REPLY_SEND_FILE, 'import * as post from "@/lib/exec/slack-reply-post";')).toHaveLength(1);
+    expect(tok(OTHER, 'import type { ReplyTokenVerdict } from "@/lib/exec/slack-reply-post";')).toHaveLength(1);
+    expect(tok(PLAN, 'import { sendSlackReply } from "@/lib/exec/slack-reply-send";')).toHaveLength(1);
+    expect(tok(REPLY_REVIEW_ROUTE, 'import { reviewSlackReply } from "@/lib/exec/slack-reply-send";')).toEqual([]);
+    expect(tok(REPLY_REVIEW_ROUTE, 'import { sendSlackReply } from "@/lib/exec/slack-reply-send";')).toHaveLength(1);
+    expect(tok(REPLY_SEND_ROUTE, 'import { sendSlackReply } from "@/lib/exec/slack-reply-send";')).toEqual([]);
+    expect(tok(REPLY_SEND_HANDLER, 'import { sendSlackReply, sentNotRecorded } from "@/lib/exec/slack-reply-send";')).toEqual([]);
+    expect(tok("src/lib/exec/agent/tools.ts", 'async function f() { const m = await import("@/lib/exec/slack-reply-send"); }')).toHaveLength(1);
+    // checkin-post.ts' own importers are unchanged.
+    expect(tok(REPLY_SEND_FILE, 'import { postCheckinAsOwner } from "@/lib/exec/checkin-post";')).toHaveLength(1);
+  });
+
+  it("BD-P10-12 B-P10-12: classifyConversation (or an unlisted helper) from slack-classes in a P10 module is flagged", () => {
+    const cls = (file: string, code: string) => p10ClassifierOffenses(file, factsAt(file, code));
+    const FILE = "src/lib/exec/slack-leads.ts";
+    expect(cls(FILE, 'import { channelSlug, classifyConversation } from "@/lib/exec/slack-classes";')).toEqual([`${FILE}:1: imports classifyConversation from slack-classes.ts`]);
+    expect(neverWatchOffenses(FILE, factsAt(FILE, 'import { classifyConversation } from "@/lib/exec/slack-classes";'))).toHaveLength(1);
+    expect(cls(FILE, 'import { channelSlug, isLeadName } from "@/lib/exec/slack-classes";')).toEqual([]);
+    expect(cls(FILE, 'import { leadSlugsFrom } from "@/lib/exec/slack-classes";')).toHaveLength(1);
+    expect(cls(FILE, 'import * as cls from "@/lib/exec/slack-classes";')).toHaveLength(1);
+    expect(cls("src/lib/exec/slack-read.ts", 'import { leadSlugsFrom } from "@/lib/exec/slack-classes";')).toEqual([]);
+    // P10 names no P7a table: slack-read-store.ts' two P10 exports read them (BR02 still flags a P10 file that names one).
+    expect(p7aStoreOffenses("src/lib/exec/slack-voice.ts", factsAt("src/lib/exec/slack-voice.ts", 'await db.from("exec_slack_channels").select("id");'))).toHaveLength(1);
+  });
+
+  it("BD-P10-13 B-P10-13: a P10 client component or pure module reaching a server module is flagged; B-P8-5 takes the three pure P10 modules", () => {
+    const modules = moduleIndex(scan.facts.keys());
+    const chainOf = (code: string) => serverOnlyChain(P10_CONTROLS_FILE, analyzeP5(sourceAt(P10_CONTROLS_FILE, code)), scan.facts, modules);
+    expect(chainOf('"use client";\nimport { getReplyDraft } from "@/lib/exec/slack-reply-store";')).toEqual([P10_CONTROLS_FILE, P10_REPLY_STORE_FILE]);
+    expect(chainOf('"use client";\nimport { SLACK_P10_COPY } from "@/lib/exec/slack-p10-copy";\nimport type { SlackP10ReadingPart } from "@/lib/exec/slack-types";')).toBeNull();
+    const pureAt = (file: string, code: string) => p10PureOffenses(file, factsAt(file, code), scan.facts, modules);
+    expect(pureAt("src/lib/exec/slack-reply-links.ts", 'import { getSupabaseAdmin } from "@/lib/supabase-admin";')).toHaveLength(1);
+    expect(pureAt("src/lib/exec/slack-p10-copy.ts", 'import "server-only";')).toHaveLength(2);
+    expect(pureAt("src/lib/exec/slack-leads.ts", 'import { leadCountsView } from "@/lib/exec/slack-leads-view";').length).toBeGreaterThanOrEqual(1);
+    expect(pureAt("src/lib/exec/slack-leads.ts", 'import { channelSlug } from "@/lib/exec/slack-classes";\nimport type { ExecPrincipal } from "@/lib/exec/types";')).toEqual([]);
+    const pure = (code: string) => pureP8Offenses("src/lib/exec/brief-slack-ui.ts", factsAt("src/lib/exec/brief-slack-ui.ts", code));
+    expect(pure('import { briefLeadsText } from "@/lib/exec/slack-leads";\nimport { P10_LIMITS } from "@/lib/exec/slack-p10-types";\nimport { SLACK_P10_COPY } from "@/lib/exec/slack-p10-copy";')).toEqual([]);
+    expect(pure('import { leadCountsView } from "@/lib/exec/slack-leads-view";')).toHaveLength(1);
+    expect(pure('import { listLeadStates } from "@/lib/exec/slack-leads-store";')).toHaveLength(1);
+  });
+
+  it("BD-P10-14 B-P10-14 (security-3): a planner enqueueing replySend, a sweep importing replyMac, a send handler passing path: input.path", () => {
+    const dm = (file: string, code: string) => dmSendOffenses(file, factsAt(file, code));
+    const KINDS = 'import { P10_JOB_KINDS } from "@/lib/exec/slack-p10-types";\nimport { enqueueJob } from "@/lib/exec/jobs";\n';
+    expect(dm(PLAN, `${KINDS}export async function f() { await enqueueJob({ kind: P10_JOB_KINDS.replySend, lane: "interactive", principalId: "p", payload: {} }); }`)).toEqual([
+      `${PLAN}:3: references P10_JOB_KINDS.replySend`, `${PLAN}:3: an enqueueJob call names the DM send kind (only SQL ${ACCEPT_V3} enqueues it)`
+    ]);
+    expect(dm(HANDLER, `${KINDS}const k = "replySend";\nexport async function f() { await enqueueJob({ kind: P10_JOB_KINDS[k], lane: "bulk", principalId: "p", payload: {} }); }`)).toHaveLength(2);
+    expect(dm(HANDLER, `${KINDS}const KIND = "exec.slack-rdraft-send";\nexport async function f() { await enqueueJob({ kind: KIND, lane: "bulk", principalId: "p", payload: {} }); }`)).toHaveLength(2);
+    expect(dm(HANDLER, `${KINDS}export async function f(s: string) { await enqueueJob({ kind: \`exec.slack-rdraft-\${s}\`, lane: "bulk", principalId: "p", payload: {} }); }`)).toHaveLength(1);
+    expect(dm(HANDLER, 'export async function f(db: any) { await db.from("exec_jobs").insert({ kind: "exec.slack-rdraft-send", payload: {} }); }')).toHaveLength(1);
+    expect(dm(HANDLER, 'import { P10_JOB_KINDS as K } from "@/lib/exec/slack-p10-types";\nexport const k = K.replySend;')).toHaveLength(1);
+    expect(dm(HANDLER, 'import { P10_JOB_KINDS } from "@/lib/exec/slack-p10-types";\nconst { replySend } = P10_JOB_KINDS;\nexport const k = replySend;')).toHaveLength(1);
+    expect(dm(REPLY_SEND_HANDLER, `${KINDS}export const h = { kind: P10_JOB_KINDS.replySend, lane: "interactive" };`)).toEqual([]);
+    expect(dm(REPLY_SEND_HANDLER, `${KINDS}export async function f() { await enqueueJob({ kind: P10_JOB_KINDS.replySend, lane: "interactive", principalId: "p", payload: {} }); }`)).toHaveLength(1);
+    // Holding a settings part's replySend switch isn't the kind (no P10_JOB_KINDS in the file).
+    expect(dm(P10_CONTROLS_FILE, "export const on = (p10: { replySend: boolean }) => p10.replySend;")).toEqual([]);
+    // AM-P10-22: the System card's label key, in job-labels.ts only.
+    expect(dm(JOB_LABELS_FILE, 'export const JOB_LABELS = Object.freeze({ "exec.slack-rdraft-send": "Slack reply sending" });')).toEqual([]);
+    expect(dm(OTHER, 'export const JOB_LABELS = Object.freeze({ "exec.slack-rdraft-send": "Slack reply sending" });')).toHaveLength(1);
+    expect(dm(JOB_LABELS_FILE, 'export const K = { kind: "exec.slack-rdraft-send" };')).toHaveLength(1);
+    // (b) the MAC helpers' importers.
+    expect(dm(HANDLER, 'import { replyMac } from "@/lib/exec/crypto";')).toEqual([`${HANDLER}:1: imports replyMac from crypto.ts; only src/lib/exec/slack-reply-view.ts may`]);
+    expect(dm(OTHER, 'import { replyButtonValue, replyMac } from "@/lib/exec/crypto";')).toEqual([]);
+    expect(dm(OTHER, 'import { verifyReplyMac } from "@/lib/exec/crypto";')).toHaveLength(1);
+    expect(dm("src/lib/exec/handlers/slack-rdraft-act.ts", 'import { verifyReplyMac } from "@/lib/exec/crypto";')).toEqual([]);
+    expect(dm(HANDLER, 'import * as crypto from "@/lib/exec/crypto";')).toHaveLength(1);
+    // (c) the DM send's literals.
+    const IMPORT = 'import { sendSlackReply } from "@/lib/exec/slack-reply-send";\n';
+    expect(dm(REPLY_SEND_HANDLER, `${IMPORT}export async function f(p: any, input: any) { await sendSlackReply(p, { id: "x", path: input.path, actor: "slack" }); }`)).toEqual([
+      `${REPLY_SEND_HANDLER}:2: sendSlackReply without the literals path "dm" and actor "slack"`
+    ]);
+    expect(dm(REPLY_SEND_HANDLER, `${IMPORT}export async function f(p: any, base: any) { await sendSlackReply(p, { ...base, path: "dm", actor: "slack" }); }`)).toHaveLength(1);
+    expect(dm(REPLY_SEND_HANDLER, `${IMPORT}export async function f(p: any) { await sendSlackReply(p, { id: "x", path: "dm", actor: "owner" }); }`)).toHaveLength(1);
+    expect(dm(REPLY_SEND_HANDLER, `${IMPORT}export async function f(p: any, o: any) { await sendSlackReply(p, o); }`)).toHaveLength(1);
+    expect(dm(REPLY_SEND_HANDLER, `${IMPORT}const send = sendSlackReply;\nexport async function f(p: any) { await send(p, { id: "x", path: "web", actor: "owner" }); }`)).toHaveLength(1);
+    expect(dm(REPLY_SEND_HANDLER, `${IMPORT}export async function f(p: any) { await sendSlackReply(p, { id: "x", path: "dm", actor: "slack" }); }`)).toEqual([]);
+  });
+
+  it("BD-P10-15 the same names inside comments and types aren't flagged by any P10 rule", () => {
+    const code = [
+      '// exec_slack_lead_counts, exec_slack_reply_drafts, exec_slack_accept_action_v3, "exec.slack-rdraft-send", slack:lead:x',
+      '/* import { readHistory } from "@/lib/exec/sources/slack"; console.log(draft.text); P10_JOB_KINDS.replySend */',
+      'type Probe = { t: "exec_slack_lead_counts" | "exec.slack-rdraft-send" | "slack:x"; replySend: string };',
+      "export const ok = 1;"
+    ].join("\n");
+    for (const file of [OTHER, HANDLER, LEAD_HANDLER, P10_PACK_FILE, REPLY_SEND_HANDLER, "src/lib/exec/slack-leads-view.ts"]) {
+      const f = factsAt(file, code);
+      expect([...p10StoreOffenses(file, f), ...leadImportOffenses(file, f), ...packImportOffenses(file, f), ...p10ContentOffenses(file, f.mail),
+        ...p10ModelFeatureOffenses(file, f), ...ownerSenderImportOffenses(file, f), ...ownerTargetOffenses(file, f), ...p10AttentionOffenses(file, f),
+        ...p10ClassifierOffenses(file, f), ...dmSendOffenses(file, f)], file).toEqual([]);
     }
   });
 });

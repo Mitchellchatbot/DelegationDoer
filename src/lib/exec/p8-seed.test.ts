@@ -232,7 +232,7 @@ describe("P8 seed: additive seeds in earlier phases' files", () => {
   });
 
   it("the check-in buttons: SLACK_ACTION_IDS, SLACK_VALUE_RE.checkin, and P6's handler refuses them (they are v2's)", () => {
-    expect(SLACK_ACTION_IDS.slice(-2)).toEqual(["ea_ci_send", "ea_ci_rewrite"]);
+    expect(SLACK_ACTION_IDS.slice(7, 9)).toEqual(["ea_ci_send", "ea_ci_rewrite"]);   // P10 stage 0: P10's three reply buttons follow
     const id = "ebc_" + "a".repeat(32);
     const mac = "0123456789abcdef0123456789abcdef";
     expect(SLACK_VALUE_RE.checkin.exec(`c1.${id}.12.${mac}`)?.slice(1)).toEqual([id, "12", mac]);
@@ -254,7 +254,7 @@ describe("P8 seed: additive seeds in earlier phases' files", () => {
 
   it("SyncSource \"brief\" is in the type and the runtime source check", () => {
     const src = read("sync-state.ts");
-    expect(src).toMatch(/export type SyncSource = [^;]*\| "brief";/);
+    expect(src).toMatch(/export type SyncSource = [^;]*\| "brief"(?: \| "slack-reply")?;/);   // P10 stage 0: and "slack-reply" after it
     expect(src).toContain('source !== "brief"');
   });
 

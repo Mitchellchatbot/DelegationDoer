@@ -235,7 +235,11 @@ describe("getSlackReadingView (§3.16)", () => {
         dms: { watched: 11, total: 12 }, groupDms: { watched: 3, total: 4 } },
       channels: [pickerRow({ channelId: "C0GENERAL", name: S.channelName, activity30d: 12, lastActivityAt: "2026-11-08T15:00:00.000Z", version: "2026-11-01T15:05:00.000Z" })],
       lastEventAt: "2026-11-06T14:40:00.000Z", lastSweepAt: "2026-11-06T14:30:00.000Z", pendingTriage: 3, openItems: 5,
-      capUsd: 2, effectiveCapUsd: 2, spentTodayUsd: 0.42, retentionDaysSlack: 60
+      capUsd: 2, effectiveCapUsd: 2, spentTodayUsd: 0.42, retentionDaysSlack: 60,
+      // P10 (contract §3.7.5): the P10 controls' part; the P10 columns aren't installed here, so nothing else is read.
+      p10: { schemaReady: false, readAll: false, leadCounts: false, replies: false, replySend: false, replyAuto: false, replyCapUsd: 1.5, voice: true,
+        financeWatched: null, leadCoverage: null, leadRun: null, retentionDaysSlack: 60, readAllPending: false, readAllOpens: null, voiceState: null,
+        tokenHealth: null, readingPaused: false }
     });
     expect(featureSpentTodayUsd).toHaveBeenCalledWith("ep_owner", P.timezone, SLACK_CAP_FEATURES, NOW_DATE, { signal: undefined });
     expect(listPickerChannels).toHaveBeenCalledWith(P, 1000);
@@ -383,7 +387,8 @@ describe("SlackReadingSection: every state's words (§3.16, §3.17)", () => {
     for (const line of SLACK_READ_COPY.checklist) expect(items).toContain(line);
     expect(SLACK_READ_COPY.checklist).toHaveLength(5);
     expect(SLACK_READ_COPY.checklist[0]).toContain("BAA/DPA");
-    expect(SLACK_READ_COPY.checklist[4]).toBe("The team ran the pre-enable live checks, including a test lead channel that stays unread.");
+    // P10 (C57, §3.2.3): checklist[4] changed.
+    expect(SLACK_READ_COPY.checklist[4]).toBe("The team ran the pre-enable live checks, including a test lead channel whose messages stay unread (only counted, when lead counts are on).");
     // The checklist sits above the switch (N20).
     expect(html.indexOf("data-reading-checklist")).toBeLessThan(html.indexOf("data-reading-switch"));
     expect(html).toContain('data-reading-switch="off"');
@@ -672,7 +677,8 @@ describe("SlackChannelPicker (§3.16, C29)", () => {
     const html = picker(ON_VIEW, { initialFinanceConfirm: "C0PAY" });
     const confirm = /<div[^>]*data-finance-confirm="C0PAY"[^]*?<\/div>\s*<\/div>/.exec(html)?.[0] ?? "";
     expect(textOf(confirm)).toBe(`${SLACK_READ_COPY.financeConfirmTitle} ${SLACK_READ_COPY.financeConfirmBody} ${SLACK_READ_COPY.watchLabel} Cancel`);
-    expect(SLACK_READ_COPY.financeConfirmBody).toBe("Items from this channel are shown only in DD, never in Slack or in drafts. Until you watch it, nothing in it is read, not even messages to you.");
+    // P10 (C57, §3.2.3): financeConfirmBody changed.
+    expect(SLACK_READ_COPY.financeConfirmBody).toBe("Items from this channel are shown only in DD, never in Slack or in email drafts. A reply drafted here uses only this channel and is shown only in DD. Until you watch it, nothing in it is read, not even messages to you.");
     // While it is open, no row can be changed.
     expect(html).toMatch(/data-picker-choice="watched"[^>]*disabled=""/);
     const alone = renderToStaticMarkup(createElement(FinanceConfirm, { row: pickerRow({ channelId: "C0FIN" }), pending: false, onConfirm: () => {}, onCancel: () => {}, autoFocus: false }));
@@ -743,8 +749,10 @@ describe("SlackChannelPicker (§3.16, C29)", () => {
 describe("the Settings page (§3.20.2)", () => {
   it("SU12 P5a's SettingsForm no longer renders the three section 'slack' fields; every other registry field still renders", () => {
     const slackKeys = SETTINGS_FIELDS.filter((d) => d.section === "slack").map((d) => d.key);
-    expect(slackKeys.sort()).toEqual(["retentionDaysSlack", "slackDailyCapUsd", "slackReadingEnabled"]);
-    const html = renderToStaticMarkup(createElement(SettingsForm, { view: settingsView({ schema: { email: true, drafts: true, ddtext: true, chat: true, slack: true }, settings: settings({ chatSchemaReady: true, slackReadingSchemaReady: true }) }) }));
+    // P10 stage 0 (§3.7.2): the seven slackP10 rows are section "slack" too.
+    expect(slackKeys.sort()).toEqual(["retentionDaysSlack", "slackDailyCapUsd", "slackReadingEnabled",
+      "slackReadAll", "slackLeadCountsEnabled", "slackRepliesEnabled", "slackReplySendEnabled", "slackReplyAuto", "slackReplyDailyCapUsd", "slackVoiceEnabled"].sort());
+    const html = renderToStaticMarkup(createElement(SettingsForm, { view: settingsView({ schema: { email: true, drafts: true, ddtext: true, chat: true, slack: true, slackP10: false }, settings: settings({ chatSchemaReady: true, slackReadingSchemaReady: true }) }) }));
     for (const key of slackKeys) expect(html).not.toContain(`data-setting="${key}"`);
     for (const def of SETTINGS_FIELDS.filter((d) => d.section !== "slack")) expect(html, def.key).toContain(`data-setting="${def.key}"`);
   });

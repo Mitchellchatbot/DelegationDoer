@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { TokenHealthState as BriefTokenHealthState } from "@/lib/exec/brief-types";
+import type { LeadRunSummary } from "@/lib/exec/slack-p10-types";
 import type { EaReadinessReason, SendTokenReason } from "@/lib/exec/drafts-types";
 import { NonRetryableError, type ExecPrincipal } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -38,7 +39,10 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
  */
 /** P7b (stage-0 seed): "slack-intel" keys purge-log { afterId }, optouts { fp, count }, correlate { lastFullAt } (§3.2). */
 /** P8 (stage-0 seed, §3.21.1; Area A's keys): "brief" keys token-health (TokenHealthState) and slack-scrub (SlackScrubCursor). */
-export type SyncSource = "mail" | "email" | "clone-ea" | "ddtext" | "slack" | "slack-intel" | "brief";
+/** P10 (stage-0 seed, §3.12, §2.3): "slack" also keys lead-run (LeadRunSummary) and the slack-leads-lease; "slack-reply" keys
+ *  purge-cursor (ReplySweepCursor), optout-seen (OptoutSeen) and token-health (TokenHealthState, written by the send and by
+ *  the daily token check, C60). Counts, codes, times, ids and positions only (never a channel id, a name or text, C21). */
+export type SyncSource = "mail" | "email" | "clone-ea" | "ddtext" | "slack" | "slack-intel" | "brief" | "slack-reply";
 
 /** P8 (§2.3, C19): Mitchell's DD Slack token's last auth.test verdict, as exec_sync_state brief/token-health stores it. */
 export type { TokenHealthState } from "@/lib/exec/brief-types";
@@ -46,6 +50,11 @@ export type { TokenHealthState } from "@/lib/exec/brief-types";
  *  afterId never passes a purge-log row younger than BRIEF_LIMITS.purgeLogSettleMs nor one held back for a build in
  *  flight; the rows above it are re-read (and re-scrubbed, idempotently) until it may pass them. */
 export interface SlackScrubCursor { afterId: number }
+/** P10 (§3.12; stage-0 seed): the reply sweep's purge-log cursor (exec_sync_state slack-reply/purge-cursor). Like the brief's,
+ *  the stored afterId never passes a purge-log row younger than P10_LIMITS.purgeLogSettleMs. */
+export interface ReplySweepCursor { afterId: number }
+/** P10 (§3.12; stage-0 seed): slack-reply/optout-seen, the newest author opt-out the reply sweep has applied. */
+export interface OptoutSeen { at: string }
 
 export interface SyncStateOptions {
   signal?: AbortSignal;
@@ -85,7 +94,8 @@ function parseRev(text: string | null): number | null {
 }
 
 function checkRow(source: unknown, key: unknown): asserts source is SyncSource {
-  if (source !== "mail" && source !== "email" && source !== "clone-ea" && source !== "ddtext" && source !== "slack" && source !== "slack-intel" && source !== "brief") {
+  if (source !== "mail" && source !== "email" && source !== "clone-ea" && source !== "ddtext" && source !== "slack" && source !== "slack-intel" && source !== "brief"
+    && source !== "slack-reply") {   // P10 (stage-0 seed, §3.12)
     throw new NonRetryableError(`exec_sync_state: unknown source ${JSON.stringify(source)}`);
   }
   if (typeof key !== "string" || key.length === 0 || key.length > MAX_KEY_CHARS) {
@@ -295,15 +305,18 @@ export async function putSyncStateByPrincipalId(principalId: string, source: "ma
 // (P3's attention pass) and ddtext/ddtext-lease (P5a's DD text triage).
 // ---------------------------------------------------------------------------
 
-/** The leases there are, each stored under its own source (P5a §3.12.8). P7a (§3.20.1) adds the three Slack reading leases. */
-export type LeaseKey = "attention-lease" | "ddtext-lease" | "slack-discover-lease" | "slack-sweep-lease" | "slack-attention-lease";
+/** The leases there are, each stored under its own source (P5a §3.12.8). P7a (§3.20.1) adds the three Slack reading leases;
+ *  P10 (§3.12, stage-0 seed) the lead-count job's (P10_LIMITS.leadLeaseMs). */
+export type LeaseKey = "attention-lease" | "ddtext-lease" | "slack-discover-lease" | "slack-sweep-lease" | "slack-attention-lease"
+  | "slack-leads-lease";
 
 const LEASE_SOURCES: Readonly<Record<LeaseKey, SyncSource>> = Object.freeze({
   "attention-lease": "email",
   "ddtext-lease": "ddtext",
   "slack-discover-lease": "slack",
   "slack-sweep-lease": "slack",
-  "slack-attention-lease": "slack"
+  "slack-attention-lease": "slack",
+  "slack-leads-lease": "slack"
 });
 
 /** The source a lease is stored under; an unknown key is a bug (NonRetryableError). */
@@ -797,4 +810,78 @@ export function parseTokenHealthState(raw: unknown): BriefTokenHealthState | nul
  *  doesn't parse. Pure. */
 export function parseSlackScrubCursor(raw: unknown): SlackScrubCursor | null {
   return parsed(raw, (o) => ({ afterId: whole(o.afterId, 0) }));
+}
+
+// ---------------------------------------------------------------------------
+// P10 (§3.12, §2.3; stage-0 seeds, lead; Area A owns them from stage 1): the slack/lead-run and slack-reply keys
+// ---------------------------------------------------------------------------
+
+/** A DD task id as the lead summary may hold it (DD's tasks.id is text; cuid-like in practice): 1..64 of [A-Za-z0-9_-].
+ *  listFbLeadChannelsV2 (Area B) drops typed-list rows whose taskId fails the same rule (p10-bindings.md). */
+const LEAD_TASK_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const LEAD_ERROR_CODE_RE = /^[a-z0-9_]{1,64}$/;
+const LEAD_ERROR_CODES_MAX = 50;
+const LEAD_NOT_MEMBER_MAX = 50;   // P10_LIMITS.leadNotMemberMax
+
+/** errors: { <code>: count } with snake_case codes; an entry that isn't one is dropped (never a name or an id). */
+function leadErrors(v: unknown): Record<string, number> {
+  if (absent(v)) return {};
+  const o = objectOf(v);
+  const out: Record<string, number> = {};
+  for (const [code, n] of Object.entries(o).slice(0, LEAD_ERROR_CODES_MAX)) {
+    if (LEAD_ERROR_CODE_RE.test(code) && typeof n === "number" && Number.isSafeInteger(n) && n >= 0) out[code] = n;
+  }
+  return out;
+}
+
+/** v1.1 product-10: ≤ 50 { taskId, i } pairs, a well-formed task id and an integer 0..11 (a card holds ≤ 12 rows); anything
+ *  else is dropped, never rejected (the summary stays readable). */
+function leadNotMember(v: unknown): { taskId: string; i: number }[] {
+  if (!Array.isArray(v)) return [];
+  const out: { taskId: string; i: number }[] = [];
+  for (const e of v) {
+    if (out.length >= LEAD_NOT_MEMBER_MAX) break;
+    if (typeof e !== "object" || e === null || Array.isArray(e)) continue;
+    const { taskId, i } = e as Obj;
+    if (typeof taskId === "string" && LEAD_TASK_ID_RE.test(taskId) && typeof i === "number" && Number.isInteger(i) && i >= 0 && i <= 11) {
+      out.push({ taskId, i });
+    }
+  }
+  return out;
+}
+
+/** slack/lead-run (C21, C16, v1.1 correctness-2, product-2, product-10): a stored LeadRunSummary, or null when a required field
+ *  doesn't parse. Pure. Counts, codes, a time, DD task ids and positions only. failCode / notMember (v1.1) default to null / []. */
+export function parseLeadRunSummary(raw: unknown): LeadRunSummary | null {
+  return parsed(raw, (o) => ({
+    at: iso(o.at),
+    complete: bool(o.complete),
+    partial: bool(o.partial),
+    needsFinal: whole(o.needsFinal, 0),
+    channels: whole(o.channels, 0),
+    counted: whole(o.counted, 0),
+    pages: whole(o.pages, 0),
+    listedNotMember: whole(o.listedNotMember, 0, 0),
+    classifyEnqueued: whole(o.classifyEnqueued, 0, 0),
+    errors: leadErrors(o.errors),
+    failingRuns: whole(o.failingRuns, 0, 0),
+    failCode: absent(o.failCode) ? null : typeof o.failCode === "string" && LEAD_ERROR_CODE_RE.test(o.failCode) ? o.failCode : reject(),
+    notMember: leadNotMember(o.notMember)
+  }));
+}
+
+/** slack-reply/purge-cursor (§3.5.9 sweep step 2): { afterId }, a non-negative purge-log id, or null. Pure. */
+export function parseReplyCursor(raw: unknown): ReplySweepCursor | null {
+  return parsed(raw, (o) => ({ afterId: whole(o.afterId, 0) }));
+}
+
+/** slack-reply/optout-seen (§3.5.9 sweep step 3): { at }, an ISO time, or null. Pure. */
+export function parseOptoutSeen(raw: unknown): OptoutSeen | null {
+  return parsed(raw, (o) => ({ at: iso(o.at) }));
+}
+
+/** slack-reply/token-health (C60, v1.1 product-4): P8's TokenHealthState shape ({ state, checkedAt }), the one P10 key,
+ *  written by the send (step 10) and by exec.slack-reply-token-check. Pure; the same rule as parseTokenHealthState. */
+export function parseReplyTokenHealth(raw: unknown): BriefTokenHealthState | null {
+  return parseTokenHealthState(raw);
 }

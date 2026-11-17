@@ -220,9 +220,10 @@ async function loadContextBase(principal: ExecPrincipal, ri: ReadingInstallation
   };
 }
 
-/** The classifier context (§3.5), cached per principal for classifierContextTtlMs; any DD read failure throws (no partial context). */
+/** The classifier context (§3.5), cached per principal for classifierContextTtlMs; any DD read failure throws (no partial context).
+ *  P10 (C2, §3.3.2): opts.readAll is the read-all switch; the cached DD half is unchanged by it. */
 export async function classifierContext(principal: ExecPrincipal, ri: ReadingInstallation, opts: { botUserIds: ReadonlySet<string> | null;
-  slackMutedIds: ReadonlySet<string> | null; signal?: AbortSignal }): Promise<ClassifierContext> {
+  slackMutedIds: ReadonlySet<string> | null; signal?: AbortSignal; readAll?: boolean }): Promise<ClassifierContext> {
   const cache = contextCache();
   let base = cache.get(principal.id);
   if (!base || base.installationId !== ri.row.id || Date.now() - base.at > SLACK_READ_LIMITS.classifierContextTtlMs || Date.now() < base.at) {
@@ -242,7 +243,8 @@ export async function classifierContext(principal: ExecPrincipal, ri: ReadingIns
     outboundChannelId: base.outboundChannelId,
     clientEmailChannelId: base.clientEmailChannelId,
     grantedTypes: grantedTypes(ri.reading.scopes),
-    slackMutedIds: opts.slackMutedIds
+    slackMutedIds: opts.slackMutedIds,
+    readAll: opts.readAll === true
   };
 }
 

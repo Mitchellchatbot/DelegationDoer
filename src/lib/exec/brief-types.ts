@@ -4,6 +4,7 @@
 
 import type { AttentionCategory, AttentionSource, FactBasis, PriorityBand } from "@/lib/exec/attention-types";
 import type { SourceRef } from "@/lib/exec/types";
+import type { BriefLeadsBlock } from "@/lib/exec/slack-p10-types";
 
 export const BRIEF_JOB_KINDS = Object.freeze({
   build: "exec.brief", deliver: "exec.brief-deliver", fallback: "exec.brief-fallback", prep: "exec.brief-prep",
@@ -146,6 +147,9 @@ export interface BriefGather {
   restrictedEmail: number | null;          // null: couldn't be read
   slackUnanswered: number | null;
   failures: string[];                      // the read names that failed (ids only)
+  /** P10 (§3.8 item 2, C56; stage-0 seed): yesterday's lead counts, built deterministically by the gather's sixth read
+   *  (briefLeadsFor). Never an input of assembleSections or the model (B-P10-4). Absent / null = no block. */
+  leads?: BriefLeadsBlock | null;
 }
 
 export interface BriefItem {
@@ -185,6 +189,9 @@ export interface BriefContent {
   scrubbed?: true;
   /** intel-14: set (with headline null) by a scrub that changed anything; the headline can't be scrubbed by ref. */
   headlineScrubbed?: true;
+  /** P10 (§3.8 items 1, 3, C56; stage-0 seed): the stored leads block (withBriefLeads), outside the ten sections; P8's
+   *  scrubs keep it, exec_brief_strip_leads removes it. v1.1 product-2: { v: 1, unavailable: true } when the read failed. */
+  leads?: BriefLeadsBlock | null;
 }
 /** The model's raw shape (validated in brief-validate.ts, never stored as is). */
 export interface BriefModelOutput {

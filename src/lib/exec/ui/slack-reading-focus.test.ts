@@ -54,7 +54,7 @@ vi.mock("@/lib/exec/ui/settings-api", async (orig) => ({
 import type { ReactElement } from "react";
 import { useRouter } from "next/navigation";
 import { slackReadingView, pickerRow } from "@/lib/exec/__tests__/p5a-ui-fixtures";
-import { FinanceConfirm, SlackChannelPicker, focusedWatchChoice, watchChoiceKey } from "@/components/exec/settings/SlackChannelPicker";
+import { FinanceConfirm, SlackChannelPicker, focusedWatchChoice, watchChoiceKey, watchPressCommits } from "@/components/exec/settings/SlackChannelPicker";
 import { SlackReadingControls, StopReadingConfirm } from "@/components/exec/settings/SlackReadingControls";
 import { setChannelWatch, setWatchMode, stopReading } from "@/lib/exec/ui/settings-api";
 
@@ -209,6 +209,67 @@ describe("P9 F35: the picker's watch choices: arrows move focus, Space/Enter com
     await new Promise((r) => setTimeout(r, 0));
     expect(setChannelWatch).toHaveBeenCalledTimes(1);
     expect(vi.mocked(setChannelWatch).mock.calls[0]).toEqual([ROW_ID, { watchState: "muted", expectedVersion: VERSION, confirm: undefined }]);
+  });
+});
+
+// P10 fixer ui-1: the read-all confirm tells him to mute patient or lead channels first, and lists exactly the channels muted
+// by default (the finance default, his Slack mute) with no choice of his own. Their Mute is already lit: a press on it must
+// record his own mute (exec_slack_set_watch stamps watch_set_by_owner_at for muted → muted), or read-all opens the channel.
+describe("P10 fixer ui-1: Mute on a channel muted by default records his own mute", () => {
+  const SLACKMUTED = pickerRow({ channelId: "C0INTAKE", name: "zenith-house-intake", watchState: "muted", muteSource: "slack", version: VERSION });
+  const OWNERMUTED = pickerRow({ channelId: "C0MINE", name: "zenith-house-chatter", watchState: "muted", muteSource: "owner", version: VERSION });
+  const FINMUTED = pickerRow({ channelId: "C0PAYROLL", name: "acme-payroll", class: "finance", financeName: true, watchState: "muted", muteSource: "default_finance", version: VERSION });
+  const view = slackReadingView({ state: "paused", settingsVersion: VERSION, installationId: ESI, channels: [SLACKMUTED, OWNERMUTED, FINMUTED],
+    counts: { watched: 0, muted: 3, unwatched: 0, never: 0, neverByReason: {}, hubs: 0, dms: { watched: 0, total: 0 }, groupDms: { watched: 0, total: 0 } } });
+  /** The row's lit Mute option, drawn in place. */
+  function mutedOf(id: string, props: Partial<PickerProps> = {}): El {
+    render<PickerProps>(SlackChannelPicker, { view, ...props });
+    const ctl = watchControlOf(id)!;
+    const group = (ctl.type as (p: Record<string, unknown>) => El)(ctl.props);
+    return [...walk(group)].find((e) => e.props["data-picker-choice"] === "muted")!;
+  }
+
+  it("a press on the lit Mute of a Slack-muted or finance-muted row commits muted once; his own mute's lit Mute does nothing", async () => {
+    vi.mocked(setChannelWatch).mockImplementation(async (id) => ({ kind: "updated", channel: { ...SLACKMUTED, channelId: id, muteSource: "owner", version: "2026-11-01T15:06:00.000Z" } }) as never);
+    const lit = mutedOf("C0INTAKE");
+    expect(lit.props["aria-checked"]).toBe(true);
+    (lit.props.onClick as () => void)();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(vi.mocked(setChannelWatch).mock.calls).toEqual([["C0INTAKE", { watchState: "muted", expectedVersion: VERSION, confirm: undefined }]]);
+    vi.mocked(setChannelWatch).mockClear();
+    shim.slots = [];
+    shim.refs = [];
+    shim.effects = [];
+    (mutedOf("C0PAYROLL").props.onClick as () => void)();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(vi.mocked(setChannelWatch).mock.calls).toEqual([["C0PAYROLL", { watchState: "muted", expectedVersion: VERSION, confirm: undefined }]]);
+    vi.mocked(setChannelWatch).mockClear();
+    shim.slots = [];
+    shim.refs = [];
+    shim.effects = [];
+    (mutedOf("C0MINE").props.onClick as () => void)();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(setChannelWatch).not.toHaveBeenCalled();
+    expect(watchPressCommits({ watchState: "muted", muteSource: "slack" }, "muted")).toBe(true);
+    expect(watchPressCommits({ watchState: "muted", muteSource: "default_finance" }, "muted")).toBe(true);
+    expect(watchPressCommits({ watchState: "muted", muteSource: "owner" }, "muted")).toBe(false);
+    expect(watchPressCommits({ watchState: "watched", muteSource: null }, "watched")).toBe(false);
+    expect(watchPressCommits({ watchState: "watched", muteSource: null }, "unwatched")).toBe(true);
+  });
+
+  it("with the read-all switch mounted above, a saved choice re-reads the page (its confirm's list follows); without it, no refresh", async () => {
+    vi.mocked(setChannelWatch).mockResolvedValue({ kind: "updated", channel: { ...SLACKMUTED, muteSource: "owner", version: "2026-11-01T15:06:00.000Z" } } as never);
+    (mutedOf("C0INTAKE", { afterWatchMode: "read-all switch" }).props.onClick as () => void)();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(refresh).toHaveBeenCalledTimes(1);
+    refresh.mockClear();
+    shim.slots = [];
+    shim.refs = [];
+    shim.effects = [];
+    (mutedOf("C0INTAKE").props.onClick as () => void)();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(setChannelWatch).toHaveBeenCalledTimes(2);
+    expect(refresh).not.toHaveBeenCalled();
   });
 });
 

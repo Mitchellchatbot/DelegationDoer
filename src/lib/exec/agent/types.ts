@@ -11,7 +11,10 @@ export const CHAT_TOOL_NAMES = [
   "pending_approvals", "recurring_issues", "client_overview", "search_email", "get_email_thread",
   "list_commitments", "get_eod_reports", "propose_task", "create_draft", "get_source",
   // P7b (§3.15, N16; stage-0 seed): tools 17-19, always registered.
-  "search_slack", "slack_digest", "prepare_client_update"
+  "search_slack", "slack_digest", "prepare_client_update",
+  // P10 (§3.6.1, C50, H8; stage-0 seed, lead): tool 20, the last slot of the strict budget. The name only: the
+  // registry entry (agent/tool-defs.ts) and draftSlackReplyTool (agent/tools.ts) are Area C's.
+  "draft_slack_reply"
 ] as const;
 export type ToolName = (typeof CHAT_TOOL_NAMES)[number];
 
@@ -61,7 +64,9 @@ export type PrivateRefKind = "other_threads" | "dd_text" | "other_clients"
   | "private_slack";   // P7b (N15, C24; stage-0 seed): a non-public Slack consult this turn or a replayed one
 export type ChatCard =
   | { kind: "task_proposal"; id: string }
-  | { kind: "draft"; id: string; existing: boolean; privateRefKinds: PrivateRefKind[] };
+  | { kind: "draft"; id: string; existing: boolean; privateRefKinds: PrivateRefKind[] }
+  // P10 (§3.6.1; stage-0 seed): a Slack reply draft (id = esr_…); its card shows the draft from DD, never from the chat row.
+  | { kind: "slack_reply"; id: string; existing: boolean };
 
 export interface TurnUsage {
   modelCalls: number; toolCalls: number; toolCallsNotPersisted: number;   // C14: records past 100 are counted only

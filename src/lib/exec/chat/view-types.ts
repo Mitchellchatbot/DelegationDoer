@@ -22,7 +22,8 @@ export interface ProposalView {
 }
 export type CardView =
   | { kind: "task_proposal"; proposal: ProposalView }
-  | { kind: "draft"; draftId: string; href: string; existing: boolean; privateRefKinds: ("other_threads" | "dd_text" | "other_clients" | "private_slack")[] };   // P7b: + private_slack (stage-0 seed)
+  | { kind: "draft"; draftId: string; href: string; existing: boolean; privateRefKinds: ("other_threads" | "dd_text" | "other_clients" | "private_slack")[] }   // P7b: + private_slack (stage-0 seed)
+  | { kind: "slack_reply"; draftId: string; href: string; existing: boolean };   // P10 (§3.6.1; stage-0 seed): href = /executive/slack/replies/<id>
 export interface ChatMessageView {
   id: string; turnId: string; role: "user" | "assistant";
   status: ChatStatusView; statusReason: string | null;

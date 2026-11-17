@@ -598,10 +598,54 @@ export function __resetAcceptActionV2ForTests(): void {
   delete (globalThis as AcceptV2Global).__ddExecAcceptActionV2AbsentAt;
 }
 
-/** RPC 2, same rules. P8 (C43): exec_slack_accept_action_v2 first; 42883 / PGRST202 → v2 is marked absent for 5 minutes per
- *  process and P6's exec_slack_accept_action answers on the same signal; while marked, v1 is called directly. The answer is
- *  mapped exactly as P6 maps it (v1's schema missing → not_installed). */
+/** P10 (§2.1.14, §3.5.10, C38; H4): P8's v2 body plus the reply-draft buttons, versioned again; v2 and v1 are never touched. */
+const RPC_ACCEPT_ACTION_V3 = "exec_slack_accept_action_v3";
+type AcceptV3Global = typeof globalThis & { __ddExecAcceptActionV3AbsentAt?: number };
+
+function acceptV3AbsentNow(): boolean {
+  const at = (globalThis as AcceptV3Global).__ddExecAcceptActionV3AbsentAt;
+  return typeof at === "number" && Number.isFinite(at) && Date.now() - at >= 0 && Date.now() - at < ACCEPT_V2_ABSENT_MS;
+}
+
+/** Test seam: forget that v3 was found missing. */
+export function __resetAcceptActionV3ForTests(): void {
+  delete (globalThis as AcceptV3Global).__ddExecAcceptActionV3AbsentAt;
+}
+
+/** RPC 2, same rules. P10 (§3.5.10): exec_slack_accept_action_v3 first; 42883 / PGRST202 → v3 is marked absent for 5 minutes
+ *  per process and P8's v2 answers on the same signal (then v1, exactly as below). At most three round trips, once per 5
+ *  minutes per process, inside the route's 2 s budget. */
 export async function acceptAction(facts: SlackActionFacts, opts: { signal: AbortSignal }): Promise<AcceptActionResult> {
+  const signal = opts?.signal;
+  if (!acceptV3AbsentNow()) {
+    const v3 = await withSignal(db().rpc(RPC_ACCEPT_ACTION_V3, actionArgs(facts)), signal);
+    const code = v3.error ? pgCodeOf(v3.error) : null;
+    if (!(v3.error && code !== null && ACCEPT_V2_MISSING_CODES.has(code))) return acceptActionAnswer(v3, signal);
+    signal?.throwIfAborted();
+    (globalThis as AcceptV3Global).__ddExecAcceptActionV3AbsentAt = Date.now();
+  }
+  return acceptActionV2(facts, opts);
+}
+
+/** RPC 2's nine arguments (one shape for v3, v2 and v1). */
+function actionArgs(facts: SlackActionFacts): Record<string, unknown> {
+  return {
+    p_team_id: facts.teamId,
+    p_api_app_id: facts.apiAppId,
+    p_user_id: facts.userId,
+    p_trigger_id: facts.triggerId,
+    p_action_id: facts.actionId,
+    p_value: facts.value,
+    p_container_type: facts.containerType,
+    p_channel_id: facts.channelId,
+    p_message_ts: facts.messageTs
+  };
+}
+
+/** P8 (C43): exec_slack_accept_action_v2 first; 42883 / PGRST202 → v2 is marked absent for 5 minutes per process and P6's
+ *  exec_slack_accept_action answers on the same signal; while marked, v1 is called directly. The answer is mapped exactly as
+ *  P6 maps it (v1's schema missing → not_installed). Unchanged by P10 (v3's fallback). */
+async function acceptActionV2(facts: SlackActionFacts, opts: { signal: AbortSignal }): Promise<AcceptActionResult> {
   const signal = opts?.signal;
   const args = {
     p_team_id: facts.teamId,

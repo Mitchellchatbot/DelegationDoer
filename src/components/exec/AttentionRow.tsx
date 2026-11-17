@@ -90,6 +90,7 @@ export function AttentionRow({
   now,
   tz,
   draftReplyHref = null,
+  draftReplyLabel = null,
   actions = null,
   reasonsDisclosure = false
 }: {
@@ -98,6 +99,9 @@ export function AttentionRow({
   tz: string;
   /** P4 (Y9): a "Draft reply" link for an email item while drafts are on (AttentionFeed builds it). */
   draftReplyHref?: string | null;
+  /** P10 (§3.5.13, v1.1 product-16; additive): the link's words when a Slack message already has a reply draft (its status
+   *  label); null keeps "Draft reply". */
+  draftReplyLabel?: string | null;
   /** P5a (C24): the row's controls, after the sources. FeedList passes them only in a top-level window. */
   actions?: ReactNode;
   /** P5a (C24): show the band's score and reasons as an expandable list under the row. */
@@ -160,7 +164,7 @@ export function AttentionRow({
             className="inline-flex min-h-10 items-center gap-1 rounded-md border border-indigo-200 bg-white px-2 py-0.5 text-[11.5px] font-semibold text-indigo-700 hover:border-indigo-300 hover:text-indigo-900 sm:min-h-0"
           >
             <FilePen className="h-3 w-3" aria-hidden />
-            Draft reply
+            {draftReplyLabel ?? "Draft reply"}
           </Link>
         )}
         {reasonsDisclosure && <ReasonsDisclosure item={item} />}

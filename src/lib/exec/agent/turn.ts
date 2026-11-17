@@ -39,6 +39,7 @@ import { FAILED_TEXT, REDACTED_TEXT, UNCHECKED_TEXT } from "@/lib/exec/chat/copy
 import { numberSources } from "@/lib/exec/chat/markers";
 import type { CardView, ChatDonePayload, ChatMessageView, ProposalView } from "@/lib/exec/chat/view-types";
 import { draftPageHref } from "@/lib/exec/drafts-links";
+import { slackReplyPageHref } from "@/lib/exec/slack-reply-links";
 import { purgeDraftsByIds } from "@/lib/exec/drafts-store";
 import { getEmailThread, listThreadScreenRows } from "@/lib/exec/email-store";
 import type { ThinkingBindingBehavior } from "@/lib/exec/llm/request";
@@ -293,6 +294,21 @@ function draftCardView(card: Extract<ChatCard, { kind: "draft" }>): CardView {
   return { kind: "draft", draftId: card.id, href: draftPageHref(card.id), existing: card.existing === true, privateRefKinds: [...(card.privateRefKinds ?? [])] };
 }
 
+/** P10 (§3.6.1; Area C): a Slack reply draft's card; the card reads the draft (its text included) from DD by id, no read here. */
+function slackReplyCardView(card: Extract<ChatCard, { kind: "slack_reply" }>): CardView {
+  return { kind: "slack_reply", draftId: card.id, href: slackReplyPageHref(card.id), existing: card.existing === true };
+}
+
+/** The cards that need no read (drafts and Slack reply drafts): the fallback when the proposals can't be read. */
+function cardViewsWithoutReads(cards: readonly ChatCard[]): CardView[] {
+  const views: CardView[] = [];
+  for (const c of cards) {
+    if (c.kind === "draft") views.push(draftCardView(c));
+    else if (c.kind === "slack_reply") views.push(slackReplyCardView(c));
+  }
+  return views;
+}
+
 /** Cards per message id, in each message's card order. A proposal whose row is missing is left out. Reads throw. */
 async function resolveCards(principal: ExecPrincipal, sources: readonly CardSource[], now: Date, signal?: AbortSignal): Promise<Map<string, CardView[]>> {
   const withProposals = sources.filter((s) => s.cards.some((c) => c.kind === "task_proposal")).map((s) => s.messageId);
@@ -305,6 +321,10 @@ async function resolveCards(principal: ExecPrincipal, sources: readonly CardSour
     for (const card of s.cards) {
       if (card.kind === "draft") {
         views.push(draftCardView(card));
+        continue;
+      }
+      if (card.kind === "slack_reply") {
+        views.push(slackReplyCardView(card));
         continue;
       }
       const row = byId.get(card.id);
@@ -712,8 +732,8 @@ export async function runPreparedTurn(principal: ExecPrincipal, settings: ExecSe
     );
     cards = resolved.get(begin.assistantMessageId) ?? [];
   } catch {
-    // The stored cards stay; a reload of the conversation shows them. Draft cards need no read.
-    cards = agent.cards.filter((c): c is Extract<ChatCard, { kind: "draft" }> => c.kind === "draft").map(draftCardView);
+    // The stored cards stay; a reload of the conversation shows them. Draft and Slack reply cards need no read.
+    cards = cardViewsWithoutReads(agent.cards);
     console.warn(`[exec-chat] cards unavailable message=${logId(begin.assistantMessageId)}`);
   }
 

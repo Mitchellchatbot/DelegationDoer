@@ -8,10 +8,16 @@ import {
   countChannels,
   countOpenItems,
   countPendingTriage,
+  countReadAllEffects,
   isSlackReadingSchemaMissing,
   lastSweepAt,
   listPickerChannels
 } from "@/lib/exec/slack-read-store";
+import { leadRetentionDays } from "@/lib/exec/slack-leads";
+import { leadCoverage, leadSchemaReady } from "@/lib/exec/slack-leads-store";
+import { slackVoiceState } from "@/lib/exec/slack-voice";
+import { getSyncState, parseLeadRunSummary, parseReplyTokenHealth } from "@/lib/exec/sync-state";
+import { localDateString } from "@/lib/exec/time";
 import {
   SLACK_CAP_FEATURES,
   SLACK_READ_LIMITS,
@@ -23,7 +29,7 @@ import {
   type SlackReadingViewState,
   type WatchState
 } from "@/lib/exec/slack-read-types";
-import type { PickerRow, SlackReadingView } from "@/lib/exec/slack-types";
+import type { PickerRow, SlackP10ReadingPart, SlackReadingView } from "@/lib/exec/slack-types";
 import type { ExecPrincipal, ExecSettings } from "@/lib/exec/types";
 
 // P7a Settings: the reading view and the picker rows (P7a contract §3.16, N4,
@@ -55,6 +61,12 @@ import type { ExecPrincipal, ExecSettings } from "@/lib/exec/types";
 // database's error code. A missing P7a table, function or
 // column is the not_installed answer, never a failure. Never a value from a
 // row in a log: channel names are metadata the picker shows, never logged.
+//
+// P10 (contract §3.7.5; Area B): for the paused and on states the view also carries `p10`, what SlackP10Controls renders: the
+// seven switches, the read-all switch's effects (countReadAllEffects: the finance count, whether a re-discovery is pending, the
+// channels read-all would open, by their stored labels, for its confirm), the lead coverage and last run, the Slack style's
+// state, his DD Slack connection (slack-reply / token-health) and whether reading is paused. Each P10 read fails on its own
+// (its field null), never the view; nothing here calls Slack.
 
 export type { PickerRow, SlackReadingView } from "@/lib/exec/slack-types";
 
@@ -126,6 +138,65 @@ function emptyView(state: SlackReadingViewState): SlackReadingView {
     openItems: 0,
     spentTodayUsd: null
   };
+}
+
+/** One P10 read, failing on its own: null (logged by principal id and code, never a value). */
+async function p10Read<T>(principalId: string, what: string, run: () => Promise<T>): Promise<T | null> {
+  try {
+    return await run();
+  } catch (err) {
+    console.error(`[exec-slack] P10 ${what} not read for ${principalId} (${failureCode(err)})`);
+    return null;
+  }
+}
+
+/** P10 (§3.7.5): the controls' part of the view, for the paused and on states. */
+async function p10Part(principal: ExecPrincipal, settings: ExecSettings, readingPaused: boolean, now: Date, signal?: AbortSignal): Promise<SlackP10ReadingPart> {
+  const part: SlackP10ReadingPart = {
+    schemaReady: settings.slackP10SchemaReady === true,
+    readAll: settings.slackReadAll === true,
+    leadCounts: settings.slackLeadCountsEnabled === true,
+    replies: settings.slackRepliesEnabled === true,
+    replySend: settings.slackReplySendEnabled === true,
+    replyAuto: settings.slackReplyAuto === true,
+    replyCapUsd: typeof settings.slackReplyDailyCapUsd === "number" && Number.isFinite(settings.slackReplyDailyCapUsd)
+      ? settings.slackReplyDailyCapUsd : DEFAULT_SETTINGS.slackReplyDailyCapUsd,
+    voice: settings.slackVoiceEnabled === true,
+    financeWatched: null,
+    leadCoverage: null,
+    leadRun: null,
+    retentionDaysSlack: leadRetentionDays(settings),
+    readAllPending: false,
+    readAllOpens: null,
+    voiceState: null,
+    tokenHealth: null,
+    readingPaused
+  };
+  if (!part.schemaReady) return part;
+  const pid = principal.id;
+  const opts = signal ? { signal } : {};
+  const [effects, leadsReady, voiceState, tokenHealth] = await Promise.all([
+    p10Read(pid, "read-all effects", () => countReadAllEffects(principal, { readAll: part.readAll }, opts)),
+    p10Read(pid, "lead schema", () => leadSchemaReady(opts)),
+    part.replies ? p10Read(pid, "Slack style", () => slackVoiceState(principal, opts)) : Promise.resolve(null),
+    p10Read(pid, "Slack connection", async () => (await getSyncState(principal, "slack-reply", "token-health", parseReplyTokenHealth, opts))?.value ?? null)
+  ]);
+  if (effects !== null) {
+    part.financeWatched = effects.financeWatched;
+    part.readAllPending = effects.pendingDefaults > 0;
+    part.readAllOpens = effects.wouldOpen;
+  }
+  part.voiceState = voiceState;
+  part.tokenHealth = tokenHealth;
+  if (leadsReady === true && part.leadCounts) {
+    const [coverage, run] = await Promise.all([
+      p10Read(pid, "lead coverage", () => leadCoverage(principal, localDateString(now, principal.timezone), opts)),
+      p10Read(pid, "lead run", async () => (await getSyncState(principal, "slack", "lead-run", parseLeadRunSummary, opts))?.value ?? null)
+    ]);
+    part.leadCoverage = coverage;
+    part.leadRun = run;
+  }
+  return part;
 }
 
 /** §3.16's state from the reading half and the switch. */
@@ -265,6 +336,7 @@ export async function getSlackReadingView(principal: ExecPrincipal, now: Date, o
       console.error(`[exec-slack] reading spend not read for ${principalId} (${failureCode(err)})`);
       view.spentTodayUsd = null;
     }
+    view.p10 = await p10Part(principal, settings, state === "paused", at, signal);
     return view;
   } catch (err) {
     if (schemaMissing(err)) return emptyView("not_installed");

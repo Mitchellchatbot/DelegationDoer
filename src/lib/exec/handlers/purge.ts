@@ -5,9 +5,11 @@ import { auditEvent } from "@/lib/exec/audit";
 import {
   listFallbackDmsDue,
   listPrincipalIdsWithSlackLines,
+  listPrincipalsWithBriefLeads,
   markFallbackDmDeleted,
   purgeExpiredBriefs,
-  scrubBriefsForSlackSystem
+  scrubBriefsForSlackSystem,
+  stripBriefLeadsSystem
 } from "@/lib/exec/brief-store";
 import { BRIEF_LIMITS } from "@/lib/exec/brief-types";
 import { purgeExpiredChatRows } from "@/lib/exec/chat-store";
@@ -16,12 +18,15 @@ import { purgeExpiredDdtext, purgeOrphanDdtextAttention } from "@/lib/exec/ddtex
 import { purgeExpiredDrafts } from "@/lib/exec/drafts-store";
 import { purgeExpiredEmailRows } from "@/lib/exec/email-store";
 import { purgeFinishedJobs } from "@/lib/exec/jobs";
+import { loadSettings } from "@/lib/exec/principal";
 import type { SystemScheduledWork } from "@/lib/exec/scheduler";
 import { purgeUnpurgedRevocations } from "@/lib/exec/handlers/slack-uninstall";
 import { deleteExpiredOAuthStates, deleteOldSlackEvents, installationFactsForSystem, listRevokedReadingInstallations } from "@/lib/exec/slack-install";
 import { purgeExpiredSlackIntel } from "@/lib/exec/slack-intel-store";
+import { listPrincipalsWithLeadRows, purgeExpiredLeadCounts, purgeLeadCountsSystem } from "@/lib/exec/slack-leads-store";
 import { purgeExpiredSlack } from "@/lib/exec/slack-read-store";
 import { purgeReading } from "@/lib/exec/slack-reading";
+import { deleteRevokedInstallationCards, purgeExpiredReplies } from "@/lib/exec/slack-reply-store";
 import { resealSlackTokens } from "@/lib/exec/slack-token-reseal";
 import { SLACK_LIMITS, SLACK_RE } from "@/lib/exec/slack-types";
 import type { JobHandler } from "@/lib/exec/types";
@@ -124,6 +129,18 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //                         previous key. A blob under an unknown key is counted, never overwritten. Fails alone.
 //   briefs (P9 §3.1)      RPC 7 v2 keeps a purged brief's refs while its DM may still be in Slack and releases them after
 //                         (briefRefsReleased); v1 (P9's migration not applied) as before.
+//   Slack leads and       after P8's brief steps and before P9's re-seal (P10 contract §3.11, H7, C23, C44; AM-P10-23), four
+//   replies (P10)         steps, each failing alone and each tolerating the P10 migration not being applied (counts 0):
+//                         slackLeads: lead counts past the end of their local day + the lead retention and lead channel rows
+//                         past mapped_at + it (purgeExpiredLeadCounts, exec_slack_lead_purge_expired); slackReplies: open
+//                         reply drafts idle 7 days -> expired, closed and unknown drafts' content at 7 days and rows at 30,
+//                         DM card rows and the Slack voice profile at their expires_at (purgeExpiredReplies,
+//                         exec_slack_rdraft_purge_expired); slackReplyCards: the card rows of installations no longer active
+//                         (deleteRevokedInstallationCards); slackLeadRecheck: every principal with lead rows OR with a stored
+//                         brief still holding "leads" (v1.1 correctness-3: Stop reading, a revoke and an uninstall cascade the
+//                         lead rows away first) whose lead switch or reading switch is off, or whose reading half isn't live,
+//                         loses his lead rows and his briefs' "leads" (purgeLeadCountsSystem + stripBriefLeadsSystem). A
+//                         principal whose settings or installation read fails is skipped (logged by id) and fails the step.
 //
 // The deletes are global, not per principal. Rows with no principal (system
 // jobs, access attempts that never resolved to a principal) have to age out
@@ -152,6 +169,8 @@ const DAY_MS = 86_400_000;
 const REVOKED_READING_PER_DAY = BRIEF_LIMITS.revokedReadingPerDay;     // 50
 const FALLBACK_DM_DELETES_PER_DAY = BRIEF_LIMITS.fallbackDmDeletesPerDay; // 50
 const BRIEF_SLACK_PRINCIPALS = 100;
+/** P10 (§3.11): principals re-checked a day from each source (lead rows, briefs holding leads). */
+const LEAD_RECHECK_PRINCIPALS = 100;
 
 export interface PurgeCounts {
   finishedJobs: number;
@@ -211,6 +230,19 @@ export interface PurgeCounts {
   /** P8 (C49): the watchdog's DD-bot mini-brief DMs deleted, and the ones left for the next day. */
   fallbackDmsDeleted: number;
   fallbackDmsRetry: number;
+  /** P10 (§3.11): expired lead count rows and lead channel rows (exec_slack_lead_purge_expired). */
+  slackLeadCounts: number;
+  slackLeadChannels: number;
+  /** P10 (§3.11, C23): principals whose lead rows and briefs' leads the re-check removed (switch off or reading not live). */
+  slackLeadPrincipalsPurged: number;
+  /** P10 (§3.11, C44): reply drafts expired, drafts whose content was purged, draft rows deleted (exec_slack_rdraft_purge_expired). */
+  slackRepliesExpired: number;
+  slackRepliesContentPurged: number;
+  slackRepliesDeleted: number;
+  /** P10: DM card rows deleted, at their expires_at and for installations no longer active. */
+  slackReplyCards: number;
+  /** P10: Slack voice profiles past their 30 days. */
+  slackVoiceProfiles: number;
   /** P9 F13 (resealSlackTokens): Slack token blobs moved to the current key; left on an unknown key; lost to a concurrent write;
    *  not openable for another reason. */
   slackResealed: number;
@@ -320,6 +352,37 @@ async function scrubBriefSlackForRevoked(signal: AbortSignal | undefined): Promi
 }
 
 /**
+ * P10 (contract §3.11, C23; v1.1 correctness-3): the switch-off / reading-gone re-check, principal-agnostic. Candidates are the
+ * principals with lead rows and those with a stored brief still holding leads (Stop reading / revoke / uninstall cascade the lead
+ * rows away before this looks). Lead counts or reading off, or no live reading half -> his lead rows and his briefs' leads go.
+ * One failing principal (a settings or installation read) is skipped and logged by id; the first failure is rethrown at the end.
+ */
+async function recheckLeadPrincipals(signal: AbortSignal | undefined): Promise<number> {
+  const candidates = new Set<string>([
+    ...(await listPrincipalsWithLeadRows(LEAD_RECHECK_PRINCIPALS, { signal })),
+    ...(await listPrincipalsWithBriefLeads(LEAD_RECHECK_PRINCIPALS, { signal }))
+  ]);
+  let purged = 0;
+  let firstError: unknown = null;
+  for (const id of candidates) {
+    signal?.throwIfAborted();
+    try {
+      const s = await loadSettings(id);
+      const facts = await installationFactsForSystem(id, { signal });
+      if (s.slackLeadCountsEnabled && s.slackReadingEnabled && facts.readingActive) continue;
+      await purgeLeadCountsSystem(id);
+      await stripBriefLeadsSystem(id);
+      purged += 1;
+    } catch (err) {
+      console.error("[exec-purge] lead re-check of " + id + " failed (" + errName(err) + ")");
+      firstError ??= err;
+    }
+  }
+  if (firstError !== null) throw firstError;
+  return purged;
+}
+
+/**
  * P8 C49 (intel-18): the watchdog's mini-brief DMs past fallback_delete_after, deleted with the DD bot token through
  * dd-bot.ts (≤ 50 a day). "deleted" (message_not_found / channel_not_found included) → marked; "retry" or a throw → left for
  * the next day and counted. A store error marking a row fails the step.
@@ -397,6 +460,14 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
     briefSlackScrubbed: 0,
     fallbackDmsDeleted: 0,
     fallbackDmsRetry: 0,
+    slackLeadCounts: 0,
+    slackLeadChannels: 0,
+    slackLeadPrincipalsPurged: 0,
+    slackRepliesExpired: 0,
+    slackRepliesContentPurged: 0,
+    slackRepliesDeleted: 0,
+    slackReplyCards: 0,
+    slackVoiceProfiles: 0,
     slackResealed: 0,
     slackResealUnknownKey: 0,
     slackResealLost: 0,
@@ -492,6 +563,31 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
     // P8 (M10's re-check, principal-agnostic): revoked reading halves, then the briefs of principals with no live reading half.
     ["revokedReading", one("revokedReadingPurged", () => purgeRevokedReading(signal))],
     ["briefSlack", one("briefSlackScrubbed", () => scrubBriefSlackForRevoked(signal))],
+    // P10 (§3.11, AM-P10-23): after P8's brief steps, before P9's re-seal; each tolerates the P10 migration missing (zeros).
+    [
+      "slackLeads",
+      async () => {
+        const c = await purgeExpiredLeadCounts(now, { signal });
+        return { slackLeadCounts: c.counts, slackLeadChannels: c.channels };
+      }
+    ],
+    [
+      "slackReplies",
+      async () => {
+        const c = await purgeExpiredReplies(now, { signal });
+        const n = (k: string) => (typeof c[k] === "number" && Number.isSafeInteger(c[k]) && c[k] > 0 ? c[k] : 0);
+        return {
+          slackRepliesExpired: n("expired"),
+          slackRepliesContentPurged: n("contentPurged"),
+          slackRepliesDeleted: n("deleted"),
+          slackReplyCards: n("cards"),
+          slackVoiceProfiles: n("voice")
+        };
+      }
+    ],
+    // The card rows of installations no longer active (H7: a revoke and an uninstall empty them), added to the TTL's count.
+    ["slackReplyCards", async () => ({ slackReplyCards: counts.slackReplyCards + (await deleteRevokedInstallationCards()) })],
+    ["slackLeadRecheck", one("slackLeadPrincipalsPurged", () => recheckLeadPrincipals(signal))],
     // P9 F13: the Slack token re-seal (an EXEC_TOKEN_KEY rotation finishes here), after every delete; fails alone.
     [
       "slackReseal",
@@ -529,6 +625,9 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
       `briefContentPurged=${counts.briefContentPurged} briefsDeleted=${counts.briefsDeleted} briefCheckinsDeleted=${counts.briefCheckinsDeleted} ` +
       `briefMentionsDeleted=${counts.briefMentionsDeleted} briefRefsReleased=${counts.briefRefsReleased} revokedReadingPurged=${counts.revokedReadingPurged} ` +
       `briefSlackScrubbed=${counts.briefSlackScrubbed} fallbackDmsDeleted=${counts.fallbackDmsDeleted} fallbackDmsRetry=${counts.fallbackDmsRetry} ` +
+      `slackLeadCounts=${counts.slackLeadCounts} slackLeadChannels=${counts.slackLeadChannels} slackLeadPrincipalsPurged=${counts.slackLeadPrincipalsPurged} ` +
+      `slackRepliesExpired=${counts.slackRepliesExpired} slackRepliesContentPurged=${counts.slackRepliesContentPurged} ` +
+      `slackRepliesDeleted=${counts.slackRepliesDeleted} slackReplyCards=${counts.slackReplyCards} slackVoiceProfiles=${counts.slackVoiceProfiles} ` +
       `slackResealed=${counts.slackResealed} slackResealUnknownKey=${counts.slackResealUnknownKey} slackResealLost=${counts.slackResealLost} ` +
       `slackResealFailed=${counts.slackResealFailed}` +
       `${failures.length > 0 ? ` failed=${failures.length}` : ""}`

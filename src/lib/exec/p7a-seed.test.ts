@@ -52,7 +52,8 @@ type Obj = Record<string, unknown>;
 /** sha256 of JSON.stringify(SLACK_READ_COPY), checked at stage -1 against the contract's §3.17 block evaluated as JS; moved by
  *  the P7a fixer's copy changes (ui-3 readFailed, ui-5 checklist[4], ui-6 readingNotice / enableConfirmBody, ui-8 pickerShowing,
  *  ui-9 watchModeLabel, ui-10 disconnectAlsoStops; the contract's "Fixer amendments" lists them for the lead). */
-const SLACK_READ_COPY_SHA256 = "5d10fd2652ced1049d13832ff3f07318be6b10ca08a2829cc4db331c1fcd1dbd";
+// P10 (C57): readingWhat[3], financeConfirmBody, checklist[4]
+const SLACK_READ_COPY_SHA256 = "0a12c25f3ba5d8c30dfdb837d2370f0896049ae843aac57a106ddd97625193c4";
 
 function frozenDeep(v: unknown): boolean {
   if (typeof v !== "object" || v === null) return true;
@@ -144,7 +145,8 @@ describe("P7a seed: slack-read-copy.ts (§3.17) and P6's SLACK_COPY", () => {
     expect(frozenDeep(SLACK_READ_COPY)).toBe(true);
     expect(SLACK_READ_COPY.checklist).toHaveLength(5);
     expect(SLACK_READ_COPY.checklist[0]).toContain("42 CFR Part 2");
-    expect(SLACK_READ_COPY.checklist[4]).toBe("The team ran the pre-enable live checks, including a test lead channel that stays unread.");
+    // P10 (C57, §3.2.3): the test lead channel's messages stay unread; with lead counts on DD only counts them.
+    expect(SLACK_READ_COPY.checklist[4]).toBe("The team ran the pre-enable live checks, including a test lead channel whose messages stay unread (only counted, when lead counts are on).");
   });
 
   it("(fixer ui-6) the consent words say what reaches Anthropic besides the message itself: the earlier messages of the thread or DM and his replies", () => {
@@ -197,7 +199,8 @@ describe("P7a seed: additive changes to earlier phases' files (§0.2 step 5, §3
     const src = read("sync-state.ts");
     // P7b stage 0: SyncSource gains "slack-intel" after "slack" (expectation change, P7b bindings).
     // P8 stage 0: and "brief" after it (expectation change, p8-bindings.md).
-    expect(src).toMatch(/export type SyncSource = [^;]*"slack"(?: \| "slack-intel")?(?: \| "brief")?;/);
+    // P10 stage 0: and "slack-reply" after it (expectation change, p10-bindings.md).
+    expect(src).toMatch(/export type SyncSource = [^;]*"slack"(?: \| "slack-intel")?(?: \| "brief")?(?: \| "slack-reply")?;/);
     for (const k of ["slack-discover-lease", "slack-sweep-lease", "slack-attention-lease"]) expect(src).toContain(`"${k}": "slack"`);
   });
 

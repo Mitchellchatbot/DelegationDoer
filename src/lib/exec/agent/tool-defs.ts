@@ -1,7 +1,8 @@
 import type { ToolName } from "@/lib/exec/agent/types";
 import type { ExecToolDef } from "@/lib/exec/llm/request";
 
-// The 19 strict chat tool definitions (P5b contract §3.10 + P7b §3.15.1; Area B, then P7b Area D; pure):
+// The 20 strict chat tool definitions (P5b contract §3.10 + P7b §3.15.1 + P10 §3.6.1; Area B, then P7b Area D, then P10 Area C;
+// pure; 20 of 20: a later tool must merge into an existing one):
 // constants built at module load from literals only, in request order (the
 // cached prefix, PLAN:188; never reorder). Imports types only (test 5), so
 // TOOLS_VERSION's sha256 is computed by a small local implementation rather
@@ -52,7 +53,7 @@ const TOOLS: ExecChatTool[] = [
     "read",
     false,
     READ_MS,
-    "Company snapshot for a time window. Returns what changed in the window (tasks finished and created, new Needs Attention items) and what stands now (open overdue work, approvals waiting, projects in trouble, email buckets when email is on, today's activity). Use it first for broad questions such as 'catch me up', 'what is happening across the company' or 'what did I miss yesterday'.",
+    "Company snapshot for a time window. Returns what changed in the window (tasks finished and created, new Needs Attention items) and what stands now (open overdue work, approvals waiting, projects in trouble, email buckets when email is on, today's activity). Use it first for broad questions such as 'catch me up', 'what is happening across the company' or 'what did I miss yesterday'. With lead counts on, it also returns new posts in the clients' lead channels by kind (VOBs, non-VOBs, Calendly posts, Zapier errors; Calendly posts include reminders, so they aren't calls booked) as whole local days (the last 24 hours come as yesterday and today so far), with an all-clients total; nothing else from those channels.",
     {
       since: {
         type: "string",
@@ -163,7 +164,7 @@ const TOOLS: ExecChatTool[] = [
     "read",
     false,
     SLOW_MS,
-    "One client: status, health and touchpoint labels with when they were computed, open and recently finished tasks, work waiting on the client, related projects, open Needs Attention items, recent meetings with their AI-assessed risks, and, when email is on, his recent threads with the client and open commitments. Pass a client id or exact name; an ambiguous or partial name returns the matches to choose from.",
+    "One client: status, health and touchpoint labels with when they were computed, open and recently finished tasks, work waiting on the client, related projects, open Needs Attention items, recent meetings with their AI-assessed risks, and, when email is on, his recent threads with the client and open commitments. Pass a client id or exact name; an ambiguous or partial name returns the matches to choose from. With lead counts on, it includes that client's lead-channel post counts for today so far, yesterday and the last 7 days.",
     {
       client: { type: "string", description: "A client id or name." }
     }
@@ -303,6 +304,18 @@ const TOOLS: ExecChatTool[] = [
     {
       thread_id: { type: "string", description: "The client's email thread, from search_email, an attention item or an earlier answer." },
       project_id: { type: "string", description: "'' to derive projects from the thread, or a project id or name." }
+    }
+  ),
+  // P10 (contract §3.6.1, C50; stage-0 seed): tool 20, the last slot of the strict budget.
+  tool(
+    "draft_slack_reply",
+    "Drafting a Slack reply",
+    "staged",
+    false,
+    SLOW_MS,
+    "Start a reply draft to one Slack message addressed to him, only when his newest message asks for a Slack reply. Pass the ref of that message from this conversation (a Slack item from search_slack, slack_digest, list_attention or get_source). The drafter gets his newest message word for word as its instruction and only that Slack conversation's own messages, never anything else from this chat. Nothing is posted: he reviews it and presses Send himself, in DD or in his Slack DM. Returns a link to the draft; if the message already has an open draft, that draft is rewritten with his newest message (unless he edited it by hand). Messages the assistant only read live can't be replied to. At most 3 per question.",
+    {
+      ref: { type: "string", description: "The ref of the Slack message, such as r7." }
     }
   )
 ];

@@ -56,6 +56,8 @@ export interface ClassifierContext {
   clientEmailChannelId: string | null;     // workspace_settings.client_email_channel_id
   grantedTypes: ReadonlySet<ConvType>;
   slackMutedIds: ReadonlySet<string> | null;   // C34
+  /** P10 (C2): the read-all switch (slack_read_all). Absent or false = P7a's defaults exactly. */
+  readAll?: boolean;
 }
 
 const isNamedType = (t: ConvType): boolean => t === "channel" || t === "group";
@@ -73,21 +75,24 @@ function hub(kind: HubKind, meta: ConversationMeta): Classification {
   return { class: "hub", denyReason: null, hubKind: kind, financeName: false, defaultWatch: meta.isMember ? "watched" : "unwatched", defaultMute: null };
 }
 
-/** standard / external / finance with §3.5's defaults, then C34 (his Slack mutes) on a default of watched. */
+/** standard / external / finance with §3.5's defaults, then C34 (his Slack mutes) on a default of watched. P10 (C2): under
+ *  read-all a finance-named member channel defaults to watched with no mute, and his Slack mutes are ignored; the class and
+ *  financeName are unchanged, so every finance protection on Slack surfaces stays (H9). */
 function readable(cls: Extract<ChannelClass, "standard" | "external" | "finance">, financeName: boolean, meta: ConversationMeta,
-  slackMutedIds: ReadonlySet<string> | null): Classification {
+  slackMutedIds: ReadonlySet<string> | null, readAll: boolean): Classification {
   let defaultWatch: WatchState;
   let defaultMute: "default_finance" | "slack" | null = null;
-  if (financeName) {
+  if (financeName && !readAll) {
     // C10: finance, and a finance-named Slack Connect channel: muted by default (never bypassed, N11), unwatched when not a member.
     defaultWatch = meta.isMember ? "muted" : "unwatched";
     defaultMute = meta.isMember ? "default_finance" : null;
   } else if (meta.convType === "im" || meta.convType === "mpim") {
     defaultWatch = "watched";
   } else {
+    // P10 (C2): under read-all a finance member channel joins here: watched when a member, unwatched otherwise.
     defaultWatch = meta.isMember ? "watched" : "unwatched";
   }
-  if (defaultWatch === "watched" && slackMutedIds !== null && slackMutedIds.has(meta.id)) {
+  if (!readAll && defaultWatch === "watched" && slackMutedIds !== null && slackMutedIds.has(meta.id)) {
     defaultWatch = "muted";
     defaultMute = "slack";
   }
@@ -136,11 +141,13 @@ export function classifyConversation(meta: ConversationMeta, ctx: ClassifierCont
   if (ctx.clientEmailChannelId !== null && meta.id === ctx.clientEmailChannelId) return hub("client_email", meta);
 
   // 15: Slack Connect is never standard or finance (N10); a finance name keeps every finance protection (C10).
-  if (meta.isExtShared || meta.isPendingExtShared) return readable("external", name !== null && isFinanceName(name), meta, ctx.slackMutedIds);
+  if (meta.isExtShared || meta.isPendingExtShared) {
+    return readable("external", name !== null && isFinanceName(name), meta, ctx.slackMutedIds, ctx.readAll === true);
+  }
 
   // 16-17.
-  if (name !== null && isFinanceName(name)) return readable("finance", true, meta, ctx.slackMutedIds);
-  return readable("standard", false, meta, ctx.slackMutedIds);
+  if (name !== null && isFinanceName(name)) return readable("finance", true, meta, ctx.slackMutedIds, ctx.readAll === true);
+  return readable("standard", false, meta, ctx.slackMutedIds, ctx.readAll === true);
 }
 
 /** The name split into lowercase alphanumeric tokens (a superset of §3.5's "-", "_", "." split: fail closed). */

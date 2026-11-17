@@ -180,7 +180,10 @@ describe("getSlackPageView: catch-up (§3.12.1, C7, AM-P7b-2, UI02, UI03)", () =
     vi.mocked(readOpenSlackItems).mockResolvedValue({ items: [slackItem()], mutedHidden: 0 });
     const view = await getSlackPageView(principal, { date: "" }, { now: NOW });
     if (!view.catchUp.ok) throw new Error("catch-up failed");
-    expect(Object.keys(view.catchUp.data.rows[0]).sort()).toEqual(["ageLabel", "assessed", "at", "channelLabel", "itemId", "kind", "permalink", "privacy", "quote", "summary"]);
+    // P10 (contract §3.9.1): the row also carries its message's channel id and ts and its reply draft (null while replies are off).
+    expect(Object.keys(view.catchUp.data.rows[0]).sort()).toEqual(["ageLabel", "assessed", "at", "channelId", "channelLabel", "itemId", "kind", "permalink", "privacy",
+      "quote", "reply", "summary", "ts"]);
+    expect(view.catchUp.data.rows[0].reply).toBeNull();
     expect(JSON.stringify(view)).not.toContain(INTEL_SENTINELS.authorName);
     expect(JSON.stringify(view)).not.toContain("U0ALICE");
   });

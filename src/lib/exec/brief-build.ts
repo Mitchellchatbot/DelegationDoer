@@ -36,6 +36,7 @@ import { enqueueJob } from "@/lib/exec/jobs";
 import { notifyOps } from "@/lib/exec/ops";
 import { dmUpdate } from "@/lib/exec/slack-dm";
 import { openActiveInstallation } from "@/lib/exec/slack-install";
+import { withBriefLeads } from "@/lib/exec/slack-leads";
 import { getSyncState, parseTokenHealthState } from "@/lib/exec/sync-state";
 import { newNonce } from "@/lib/exec/text/untrusted";
 import type { ExecPrincipal, ExecSettings } from "@/lib/exec/types";
@@ -210,7 +211,8 @@ export async function runBriefBuild(req: BuildRequest): Promise<BuildResult> {
     console.warn(`[exec-brief] principal ${principal.id} compose_failed (${errName(err)})`);
     return { outcome: "failed", stage: "post_model", code: "compose" };
   }
-  const content = compose.content;
+  // P10 (§3.8 item 3, B-P10-4): the gather's lead block joins the stored content outside the model's sections.
+  const content = withBriefLeads(compose.content, gather.leads ?? null);
   const mode: BriefMode = compose.kind;
   const modeReason: BriefModeReason | null = compose.kind === "deterministic" ? compose.reason : null;
 

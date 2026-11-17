@@ -1,4 +1,6 @@
 import type { ErrorClass, WatchMode } from "@/lib/exec/types";
+import type { TokenHealthState } from "@/lib/exec/brief-types";
+import type { LeadCoverage, LeadRunSummary } from "@/lib/exec/slack-p10-types";
 import type {
   DenyReason,
   MuteSource,
@@ -65,21 +67,27 @@ export const SLACK_RE = Object.freeze({
 });
 
 /** P8 (§3.21.3, stage-0 seed): ea_ci_send / ea_ci_rewrite, the brief's check-in buttons. P8's RPC 2 v2 enqueues them as
- *  exec.checkin-send / exec.checkin-rewrite (never exec.slack-action). */
+ *  exec.checkin-send / exec.checkin-rewrite (never exec.slack-action). P10 (§3.5.10, stage-0 seed): ea_sr_send /
+ *  ea_sr_rewrite / ea_sr_discard, the reply-draft card's buttons; P10's RPC 2 v3 enqueues them as P10_JOB_KINDS.replySend
+ *  (the only path that starts a DM send, B-P10-14) / exec.slack-rdraft-act (never exec.slack-action). */
 export type SlackActionId =
   | "ea_draft_save" | "ea_draft_regen" | "ea_card_refresh" | "ea_task_create" | "ea_task_dismiss" | "ea_fb_up" | "ea_fb_down"
-  | "ea_ci_send" | "ea_ci_rewrite";
+  | "ea_ci_send" | "ea_ci_rewrite"
+  | "ea_sr_send" | "ea_sr_rewrite" | "ea_sr_discard";
 /** URL buttons: acked by the route, never enqueued. */
 export type SlackLinkActionId = "ea_open_dd";
 export const SLACK_ACTION_IDS: readonly SlackActionId[] =
-  ["ea_draft_save", "ea_draft_regen", "ea_card_refresh", "ea_task_create", "ea_task_dismiss", "ea_fb_up", "ea_fb_down", "ea_ci_send", "ea_ci_rewrite"];
+  ["ea_draft_save", "ea_draft_regen", "ea_card_refresh", "ea_task_create", "ea_task_dismiss", "ea_fb_up", "ea_fb_down", "ea_ci_send", "ea_ci_rewrite",
+    "ea_sr_send", "ea_sr_rewrite", "ea_sr_discard"];
 
-/** C14 value formats. P8 (C6): checkin = "c1.<ebc_ id>.<rev>.<32-hex MAC>" (≤ 90 characters). */
+/** C14 value formats. P8 (C6): checkin = "c1.<ebc_ id>.<rev>.<32-hex MAC>" (≤ 90 characters). P10 (§3.5.10): reply =
+ *  "r1.<esr_ id>.<version>.<32-hex MAC>" (≤ 90 characters; v3's own check is the same pattern). */
 export const SLACK_VALUE_RE = Object.freeze({
   draft: /^d1\.(ed_[0-9a-f]{32})\.([0-9]{1,9})$/,          // v2: no ".p" suffix (C15)
   proposal: /^t1\.(etp_[0-9a-f]{32})\.([0-9a-f]{64})$/,
   feedback: /^f1\.(ecm_[0-9a-f]{32})$/,
-  checkin: /^c1\.(ebc_[0-9a-f]{32})\.([0-9]{1,4})\.([0-9a-f]{32})$/
+  checkin: /^c1\.(ebc_[0-9a-f]{32})\.([0-9]{1,4})\.([0-9a-f]{32})$/,
+  reply: /^r1\.(esr_[0-9a-f]{32})\.([0-9]{1,4})\.([0-9a-f]{32})$/
 });
 
 export type ReplyState = "queued" | "started" | "placeholder" | "answered" | "failed" | "skipped" | "swept";
@@ -124,6 +132,9 @@ export interface InstallationRow {
 /** The only object that carries a usable bot token (opened in memory, never logged, never serialized). */
 export interface DmTarget { readonly token: string; readonly dmChannelId: string }
 export interface OpenInstallation { row: InstallationRow; target: DmTarget }
+/** P10 (B-P10-9): the only object that carries his DD user token for a post into a conversation; built only in
+ *  slack-reply-post.ts, frozen, its JSON and inspect forms leave the token out. */
+export interface OwnerPostTarget { readonly token: string; readonly channelId: string }
 
 /** Block Kit subset P6 emits. */
 export type MrkdwnText = { type: "mrkdwn"; text: string; verbatim: true };
@@ -194,7 +205,22 @@ export interface SlackReadingView {
   /** (additive, P7a fixer ui-3) DD couldn't read the view (a store error, a timeout, the page's deadline): state is "error" but
    *  nothing was rejected by Slack; the section says so (readFailed) and offers at most Stop reading, never Allow. */
   readFailed?: true;
+  /** P10 (contract §3.7.5; Area B, additive and optional so every P7a literal still compiles): the P10 controls' part. Absent or
+   *  null before the P7a reading half exists (and when the view couldn't be read). */
+  p10?: SlackP10ReadingPart | null;
 }
+/** P10 (§3.7.5, v1.1 product-4, -12, -13, -14, security-5): what SlackP10Controls renders. Settings values, counts, enums,
+ *  codes, times and (readAllOpens only, for the read-all confirm) the stored channel labels; never content. */
+export interface SlackP10ReadingPart {
+  schemaReady: boolean; readAll: boolean; leadCounts: boolean; replies: boolean; replySend: boolean; replyAuto: boolean; replyCapUsd: number;
+  voice: boolean; financeWatched: number | null; leadCoverage: LeadCoverage | null; leadRun: LeadRunSummary | null; retentionDaysSlack: number;
+  readAllPending: boolean; readAllOpens: { labels: string[]; more: number } | null; voiceState: SlackVoiceStateView;
+  tokenHealth: TokenHealthState | null; readingPaused: boolean;
+}
+/** P10 (v1.1 product-12): slack-voice.ts slackVoiceState's answer, restated here so client code imports no server module. */
+export type SlackVoiceStateView =
+  | { state: "ready"; samples: number; builtAt: string } | { state: "insufficient"; fallback: "email" | "house" }
+  | { state: "failed"; reason: string; fallback: "email" | "house" } | { state: "none" } | null;
 export type SlackErrorClassOf = (code: string) => ErrorClass;
 export const slackClientTurnId = (ts: string): string => `slk_${ts.replace(".", "_")}`;
 export const slackConversationKey = (channel: string, rootTs: string): string => `slkc_${channel}_${rootTs.replace(".", "_")}`;

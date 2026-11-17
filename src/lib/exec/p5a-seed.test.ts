@@ -105,7 +105,10 @@ describe("P5a seed: settings (§3.1.2, §3.7.1)", () => {
       // P5b (bindings AM4): appended.
       { key: "chat", columns: ["chat_enabled", "ask_ai_uses_exec", "chat_daily_cap_usd"] },
       // P7a (contract §3.2, C30): appended after chat.
-      { key: "slack", columns: ["slack_reading_enabled", "slack_daily_cap_usd"] }
+      { key: "slack", columns: ["slack_reading_enabled", "slack_daily_cap_usd"] },
+      // P10 (contract §3.7.1; Area B): the slackP10 group appended after slack (the loader's column order moved).
+      { key: "slackP10", columns: ["slack_read_all", "slack_lead_counts_enabled", "slack_replies_enabled", "slack_reply_send_enabled", "slack_reply_auto",
+        "slack_reply_daily_cap_usd", "slack_voice_enabled"] }
     ]);
   });
 
@@ -123,7 +126,15 @@ describe("P5a seed: settings (§3.1.2, §3.7.1)", () => {
       // P7a (contract §3.2): appended, section "slack".
       { key: "slackReadingEnabled", column: "slack_reading_enabled", group: "slack", kind: "boolean", min: undefined, max: undefined },
       { key: "slackDailyCapUsd", column: "slack_daily_cap_usd", group: "slack", kind: "money", min: 0, max: 100 },
-      { key: "retentionDaysSlack", column: "retention_days_slack", group: "base", kind: "int", min: 7, max: 365 }
+      { key: "retentionDaysSlack", column: "retention_days_slack", group: "base", kind: "int", min: 7, max: 365 },
+      // P10 stage 0 (contract §3.7.2, p10-bindings.md): appended, section "slack", group "slackP10".
+      { key: "slackReadAll", column: "slack_read_all", group: "slackP10", kind: "boolean", min: undefined, max: undefined },
+      { key: "slackLeadCountsEnabled", column: "slack_lead_counts_enabled", group: "slackP10", kind: "boolean", min: undefined, max: undefined },
+      { key: "slackRepliesEnabled", column: "slack_replies_enabled", group: "slackP10", kind: "boolean", min: undefined, max: undefined },
+      { key: "slackReplySendEnabled", column: "slack_reply_send_enabled", group: "slackP10", kind: "boolean", min: undefined, max: undefined },
+      { key: "slackReplyAuto", column: "slack_reply_auto", group: "slackP10", kind: "boolean", min: undefined, max: undefined },
+      { key: "slackReplyDailyCapUsd", column: "slack_reply_daily_cap_usd", group: "slackP10", kind: "money", min: 0, max: 20 },
+      { key: "slackVoiceEnabled", column: "slack_voice_enabled", group: "slackP10", kind: "boolean", min: undefined, max: undefined }
     ]);
   });
 });
@@ -169,7 +180,9 @@ describe("P5a seed: constants (§3.1.4, §3.3.1, §3.9, §3.11.1, §3.12)", () =
       // P7b stage 0 (§0.2 step 5): the tag route's and the digest route's buckets.
       "slack_digest_build", "slack_disconnect", "slack_links", "slack_reading",
       // P8 stage 0 (§3.17.4, p8-bindings.md): Regenerate, its dry run and the brief settings.
-      "brief_dry_run", "brief_regenerate", "brief_settings"
+      "brief_dry_run", "brief_regenerate", "brief_settings",
+      // P10 stage 0 (§3.12, p10-bindings.md): Slack reply create, edit and send.
+      "slack_reply_create", "slack_reply_edit", "slack_reply_send"
     ].sort());
     for (const def of Object.values(RATE_BUCKETS)) expect(typeof def.nthNewestAt).toBe("function");
   });

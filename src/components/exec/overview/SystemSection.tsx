@@ -4,6 +4,7 @@ import { formatCount, formatInZone } from "@/lib/exec/format";
 import type { MailSummary } from "@/lib/exec/email-view";
 import type { OverviewBriefSystem, OverviewDraftsSystem, OverviewSection, OverviewSystem, OverviewTokenVerdict } from "@/lib/exec/overview";
 import type { SlackReadingSummary, SlackSystemSummary } from "@/lib/exec/slack-types";
+import { SLACK_P10_COPY, fillP10 } from "@/lib/exec/slack-p10-copy";
 import { reasonWords, sendTokenReasonWords, voiceErrorWords } from "../drafts/copy";
 import { cn } from "@/lib/utils";
 import { SectionCard } from "../SectionCard";
@@ -381,6 +382,73 @@ export function BriefSystemRows({ system, now, tz, briefLate = false }: { system
   );
 }
 
+// ---------------------------------------------------------------------------
+// P10 (contract §3.9.3, C58, v1.1 product-2, -4, -12): the Slack lead counts, Slack replies and Slack style rows
+// ---------------------------------------------------------------------------
+
+/** "Last run {time}: {channels} channels, …" / "Last run {time} failed ({code})" (amber while failingRuns > 0) / "Not run yet". */
+export function slackLeadsLine(l: NonNullable<OverviewSystem["slackLeads"]>, now: string, tz: string): { value: string; tone: Tone } {
+  const sys = SLACK_P10_COPY.system;
+  if (l.lastRunAt === null) return { value: sys.leadsNever, tone: "muted" };
+  const time = formatInZone(l.lastRunAt, tz, "datetime", now);
+  if (l.failingRuns > 0) return { value: fillP10(sys.leadsFailed, { time, code: l.failCode ?? l.lastError ?? "error" }), tone: "amber" };
+  // P10 fixer ui-10: "1 channel" (leadsLineOne) for one counted channel.
+  return {
+    value: fillP10(l.channels === 1 ? sys.leadsLineOne : sys.leadsLine,
+      { time, channels: formatCount(l.channels), unlinked: formatCount(l.unlinked), notMember: formatCount(l.listedNotMember) }),
+    tone: "ok"
+  };
+}
+
+/** "{open} drafts open, {sent} sent today, {unknown} unconfirmed · Slack connection: {token}" with P8's tokenState words. */
+export function slackRepliesLine(r: NonNullable<OverviewSystem["slackReplies"]>, now: string, tz: string): { value: string; tone: Tone } {
+  const words: string = BRIEF_COPY.system.tokenState[r.tokenState] ?? BRIEF_COPY.system.tokenState.unchecked;
+  const token = fillBrief(words.replace(" ({code})", ""), { time: formatInZone(r.checkedAt, tz, "datetime", now) });
+  // P10 fixer ui-10: "1 draft open" (repliesLineOne) for one open draft.
+  const value = fillP10(r.open === 1 ? SLACK_P10_COPY.system.repliesLineOne : SLACK_P10_COPY.system.repliesLine,
+    { open: formatCount(r.open), sent: formatCount(r.sentToday), unknown: formatCount(r.unknown), token });
+  const tone: Tone = r.tokenState === "mismatch" || r.tokenState === "revoked" ? "rose" : r.unknown > 0 || r.tokenState === "missing" || r.tokenState === "error" ? "amber" : "ok";
+  return { value, tone };
+}
+
+/** The Slack style row in the Settings words (v1.1 product-12). */
+export function slackStyleLine(s: NonNullable<OverviewSystem["slackStyle"]>, now: string, tz: string): { value: string; tone: Tone } {
+  const st = SLACK_P10_COPY.settings;
+  switch (s.state) {
+    case "ready":
+      return { value: fillP10(st.voiceReady, { n: formatCount(s.samples ?? 0), date: formatInZone(s.builtAt, tz, "date", now) }), tone: "ok" };
+    case "insufficient":
+      return { value: s.fallback === "email" ? st.voiceInsufficientEmail : st.voiceInsufficientHouse, tone: "muted" };
+    case "failed": {
+      const reasons = st.voiceReasons as Readonly<Record<string, string>>;
+      const reason = s.reason !== null && Object.prototype.hasOwnProperty.call(reasons, s.reason) ? reasons[s.reason] : reasons.read_failed;
+      return { value: fillP10(st.voiceFailed, { reason }), tone: "amber" };
+    }
+    default:
+      return { value: st.voiceNone, tone: "muted" };
+  }
+}
+
+/** P10: the three rows; nothing at all for a part the overview didn't read (undefined). */
+export function SlackP10SystemRows({ system, now, tz }: { system: OverviewSystem; now: string; tz: string }) {
+  const { slackLeads, slackReplies, slackStyle } = system;
+  if (slackLeads === undefined && slackReplies === undefined && slackStyle === undefined) return null;
+  const rows: { key: string; label: string; line: { value: string; tone: Tone } }[] = [];
+  if (slackLeads !== undefined) rows.push({ key: "leads", label: SLACK_P10_COPY.system.leadsRow, line: slackLeads === null ? UNAVAILABLE_LINE : slackLeadsLine(slackLeads, now, tz) });
+  if (slackReplies !== undefined) rows.push({ key: "replies", label: SLACK_P10_COPY.system.repliesRow, line: slackReplies === null ? UNAVAILABLE_LINE : slackRepliesLine(slackReplies, now, tz) });
+  if (slackStyle !== undefined) rows.push({ key: "style", label: SLACK_P10_COPY.system.styleRow, line: slackStyle === null ? UNAVAILABLE_LINE : slackStyleLine(slackStyle, now, tz) });
+  return (
+    <ul data-slack-p10-system className="divide-y divide-slate-100 border-t border-slate-100">
+      {rows.map((r) => (
+        <li key={r.key} data-slack-p10-system-row={r.key} data-tone={r.line.tone} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-4 py-2 text-[12px]">
+          <span className="font-medium text-ink">{r.label}</span>
+          <span className={cn("min-w-0 break-words text-right", TONE_CLASS[r.line.tone])}>{r.line.value}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /** The mail sync line (P3, when email is on): what reconcile and the live socket last reported. */
 function MailLine({ mail, now }: { mail: OverviewSection<MailSummary>; now: string }) {
   if (!mail.ok) {
@@ -478,6 +546,7 @@ export function SystemSection({
       <SlackRow slack={system.data.slack} now={now} tz={tz} />
       <TokenKeysRow tokenKeys={system.data.tokenKeys} />
       <BriefSystemRows system={system.data} now={now} tz={tz} briefLate={briefLate} />
+      <SlackP10SystemRows system={system.data} now={now} tz={tz} />
     </SectionCard>
   );
 }

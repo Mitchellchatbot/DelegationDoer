@@ -221,7 +221,8 @@ describe("docs/exec-assistant.md (P9 contract §4)", () => {
     expect(grid).toContain(`count(*) = ${sequences},`);
     expect(grid).toContain(`inventory: exec functions = ${functions.size}`);
     expect(grid).toContain(`count(*) = ${functions.size},`);
-    expect([tables.size, sequences, functions.size]).toEqual([39, 6, 78]);
+    // P10 (20261112100000_exec_slack_leads_replies.sql): five tables and 22 functions more, no sequence (P9: 39 / 6 / 78).
+    expect([tables.size, sequences, functions.size]).toEqual([44, 6, 100]);
     // The one function pinned to search_path=public still exists.
     expect(functions.has("exec_ddtext_replace_item")).toBe(true);
   });
@@ -251,6 +252,23 @@ describe("docs/exec-assistant.md (P9 contract §4)", () => {
       expect(DOC, key).toContain(`\`${key}`);
       expect(code, key).toContain(key);
     }
+  });
+
+  it("RB-P10 (P10 fixer ui-4, ui-3, ui-1) the never-list says what P10 does; the P10 setup has every step, the step-up and the DM gap", () => {
+    const never = section(0).replace(/\s+/g, " ");
+    // Posting as him: the check-in, and P10's Slack reply on his Send plus its confirm.
+    expect(never).toContain("**Nothing is posted as Mitchell** except a check-in he clicks himself and, while \"Let me send drafted replies\" is on (P10), a Slack reply draft he sends with \"Send as you…\" plus its confirm");
+    // Lead channels: never their content; with lead counts on, only the whole-number count per channel per day.
+    expect(never).toContain("their content is never read, stored, logged or sent anywhere; with lead counts on (P10), only the number of new top-level app posts per channel per local day is read");
+    expect(never).not.toContain("they are never read, stored, logged or sent anywhere.");
+    const setup = section(4).replace(/\s+/g, " ");
+    const p10 = setup.slice(setup.indexOf("**P10 (Slack: read all, lead counts, reply drafts):**"));
+    for (const s of ["`EXEC_REQUIRE_PASSWORD_SIGNIN`", "a sign-in link a DD leader mints", "\"Allow reading again\" before the read-all switch",
+      "Direct messages and group DMs he muted in Slack are opened too", "DD has no per-DM control", "Lead coverage: counts cover only the lead channels he is already a member of",
+      "(information, not a to-do)", "run the count check during his work hours", "Lead counts aren't installed yet."]) {
+      expect(p10, s).toContain(s);
+    }
+    expect(p10.indexOf("Allow reading again")).toBeLessThan(p10.indexOf("Also read finance, HR and legal channels"));
   });
 
   it("RB12 (2026-11-10) the authenticator is gone: its pin variable and alerts are named only in §4's removal note, which says to delete the variable, and no code reads or raises them", () => {

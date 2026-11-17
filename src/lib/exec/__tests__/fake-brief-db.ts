@@ -39,6 +39,11 @@ import type { FakeSlackDbError, Row } from "./fake-slack-db";
 // them after, and holds the row until the local date + 740 days; RPCs 5 / 6 v2 also reach a purged delivered or
 // delivery_unknown row. exec_slack_posts and exec_settings are plain rows here (no DDL), read only by RPC 7 v2.
 // scrubBriefThreadRowsV2 is the RPC 5 v2 mirror fake-email-db.ts shares.
+//
+// P10 (contract §2.1.15, p10-bindings.md AM-P10-32; Area A, additive): RPC 21 exec_brief_strip_leads (content - 'leads' on the
+// principal's rows that hold the key, updated_at stamped, the count of rows changed) and function 22
+// exec_brief_principals_with_leads (the distinct principals with a content holding 'leads', ordered, limit
+// greatest(1, least(coalesce(p_limit, 100), 1000))), mirrored from 20261112100000_exec_slack_leads_replies.sql.
 
 /** The tables the fake holds (§5.19). */
 export type FakeBriefTable =
@@ -53,7 +58,9 @@ export type FakeBriefRpc =
   | "exec_brief_claim_build" | "exec_brief_finish_build" | "exec_brief_delivery_step" | "exec_brief_claim_fallback"
   | "exec_brief_scrub_threads" | "exec_brief_scrub_slack" | "exec_brief_purge_expired"
   // P9 (§3.1): the versioned RPCs 7, 5 and 6.
-  | "exec_brief_purge_expired_v2" | "exec_brief_scrub_threads_v2" | "exec_brief_scrub_slack_v2";
+  | "exec_brief_purge_expired_v2" | "exec_brief_scrub_threads_v2" | "exec_brief_scrub_slack_v2"
+  // P10 (§2.1.15): RPC 21 and function 22.
+  | "exec_brief_strip_leads" | "exec_brief_principals_with_leads";
 
 export const FAKE_BRIEF_TABLES: readonly FakeBriefTable[] = Object.freeze([
   "exec_briefs", "exec_brief_checkins", "exec_brief_mentions",
@@ -65,7 +72,8 @@ export const FAKE_BRIEF_RPCS: readonly FakeBriefRpc[] = Object.freeze([
   "exec_brief_item_hit", "exec_brief_scrub_content", "exec_brief_ref_array",
   "exec_brief_claim_build", "exec_brief_finish_build", "exec_brief_delivery_step", "exec_brief_claim_fallback",
   "exec_brief_scrub_threads", "exec_brief_scrub_slack", "exec_brief_purge_expired",
-  "exec_brief_purge_expired_v2", "exec_brief_scrub_threads_v2", "exec_brief_scrub_slack_v2"
+  "exec_brief_purge_expired_v2", "exec_brief_scrub_threads_v2", "exec_brief_scrub_slack_v2",
+  "exec_brief_strip_leads", "exec_brief_principals_with_leads"
 ] as FakeBriefRpc[]);
 
 export type FakeBriefFilter =
@@ -137,7 +145,7 @@ const SS = "exec_sync_state";
 const WRITE_RPCS: ReadonlySet<string> = new Set([
   "exec_brief_claim_build", "exec_brief_finish_build", "exec_brief_delivery_step", "exec_brief_claim_fallback",
   "exec_brief_scrub_threads", "exec_brief_scrub_slack", "exec_brief_purge_expired",
-  "exec_brief_purge_expired_v2", "exec_brief_scrub_threads_v2", "exec_brief_scrub_slack_v2"
+  "exec_brief_purge_expired_v2", "exec_brief_scrub_threads_v2", "exec_brief_scrub_slack_v2", "exec_brief_strip_leads"
 ]);
 
 const TS = /^[0-9]{1,12}\.[0-9]{1,8}$/;
@@ -901,6 +909,27 @@ export function createFakeBriefDb(seed?: FakeBriefDbSeed): FakeBriefDb {
     return { contentPurged: c.length, refsReleased: r.length, briefsDeleted: d.length, checkinsDeleted: k.length, mentionsDeleted: m.length };
   }
 
+  // P10 (§2.1.15): RPC 21, only the `leads` key of the principal's stored contents.
+  function stripLeads(a: Row): number {
+    const nowIso = now().toISOString();
+    const hit = rowsOf(EB).filter((b) => b.principal_id === a.p_principal && !isNull(b.content) && typeof b.content === "object"
+      && Object.prototype.hasOwnProperty.call(b.content, "leads"));
+    for (const b of hit) {
+      const rest = { ...(b.content as Json) };
+      delete rest.leads;
+      updateRows(EB, [b], { content: rest, updated_at: nowIso });
+    }
+    return hit.length;
+  }
+
+  // P10 (§2.1.15, v1.1 correctness-3): function 22.
+  function principalsWithLeads(a: Row): string[] {
+    const lim = Math.max(1, Math.min(isNull(a.p_limit) ? 100 : Number(a.p_limit), 1000));
+    const ids = rowsOf(EB).filter((b) => !isNull(b.content) && typeof b.content === "object" && Object.prototype.hasOwnProperty.call(b.content, "leads"))
+      .map((b) => String(b.principal_id));
+    return [...new Set(ids)].sort().slice(0, lim);
+  }
+
   function purgeExpired(a: Row): Row {
     if (isNull(a.p_now) || isNull(a.p_mention_cutoff)) throw raise("exec_brief_purge_expired: now and the mention cutoff are required");
     const lim = Math.min(Math.max(isNull(a.p_limit) ? 1000 : Number(a.p_limit), 1), 5000);
@@ -937,7 +966,9 @@ export function createFakeBriefDb(seed?: FakeBriefDbSeed): FakeBriefDb {
     exec_brief_purge_expired: purgeExpired,
     exec_brief_purge_expired_v2: purgeExpiredV2,
     exec_brief_scrub_threads_v2: (a) => scrubBriefThreadRowsV2(tables as Record<string, Row[]>, a, now()),
-    exec_brief_scrub_slack_v2: (a) => scrubSlack(a, true)
+    exec_brief_scrub_slack_v2: (a) => scrubSlack(a, true),
+    exec_brief_strip_leads: stripLeads,
+    exec_brief_principals_with_leads: principalsWithLeads
   };
 
   // --- one request ------------------------------------------------------------

@@ -11,6 +11,7 @@ import { slackCountValue } from "../overview/OverviewTileRow";
 import { CatchUpList } from "./CatchUpList";
 import { DigestCard } from "./DigestCard";
 import { DigestDayNav } from "./DigestDayNav";
+import { LeadCountsCard } from "./LeadCountsCard";
 import { fill } from "./parts";
 import { SlackStateNotice } from "./SlackStateNotice";
 
@@ -21,6 +22,9 @@ import { SlackStateNotice } from "./SlackStateNotice";
 //
 // Every piece of Slack-derived text is a React text node: no markdown, no HTML, no links but "Open in Slack" for an
 // allowed permalink (UI06). No author, no per-person count, anywhere (C29, P7-4).
+// P10 (contract §3.9.2, v1.1 product-9): the lead counts card, full width, right after the counts strip and before the
+// catch-up list (id="leads": the brief's leads card links here). P10 §3.5.13 (product-16): the catch-up list gets
+// view.repliesOn, so its rows offer "Draft reply" / the draft's status only while reply drafts are on.
 
 // The counts strip's labels (not in the frozen §3.14 copy; the Overview tile's own words are its sub line).
 const COUNT_LABELS = { unanswered: "Unanswered", decisionsPending: "Decisions pending", notAssessed: "Not assessed" } as const;
@@ -100,8 +104,9 @@ export function SlackPageView({ view }: { view: SlackPageModel }) {
       ) : (
         <>
           <Counts counts={view.counts} />
+          <LeadCountsCard section={view.leads} tz={tz} now={now} />
           <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
-            <CatchUpList section={view.catchUp} tz={tz} now={now} />
+            <CatchUpList section={view.catchUp} tz={tz} now={now} repliesOn={view.repliesOn} />
             <Digests view={view} />
           </div>
         </>

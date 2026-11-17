@@ -7,6 +7,9 @@
 // besides the message itself (ui-6); checklist[4] names the pre-enable live
 // checks (ui-5); readFailed (ui-3), pickerShowing (ui-8) and
 // disconnectAlsoStops (ui-10) are new.)
+// P10 (contract §3.2.3, C57; Area B): exactly three strings change: readingWhat[3] (the classifier denies only lead channels
+// on a card or named like one; v1.1 security-5), financeConfirmBody (a reply drafted there stays in DD) and checklist[4] (the
+// test lead channel's messages stay unread, only counted when lead counts are on).
 
 export const SLACK_READ_COPY = Object.freeze({
   readingHeading: "Reading Slack",
@@ -16,7 +19,7 @@ export const SLACK_READ_COPY = Object.freeze({
     "Channels you're a member of, and your private channels.",
     "Your direct messages and group DMs, if you allow them on Slack's screen.",
     "Public channels you haven't joined, only if you choose \"Active public channels\" below.",
-    "Never: lead and patient-intake channels, your DMs with bots (including DD's bot), notes to yourself, or DD's own announcement channels."
+    "Never read: lead channels listed on a client's FB onboarding card or named like one (with lead counts on, DD only counts their new posts), your DMs with bots (including DD's bot), notes to yourself, or DD's own announcement channels."
   ]),
   readingNotice: "Messages addressed to you, with up to 8 earlier messages of the same thread or DM and your own replies for context, are sent to Anthropic's Claude for a short summary. Summaries and short quotes are kept in DD for {days} days. You can stop at any time.",
   allowReading: "Allow the assistant to read your Slack",
@@ -29,7 +32,7 @@ export const SLACK_READ_COPY = Object.freeze({
     "The employee notice says the assistant reads Slack.",
     "Slack Connect partners have been told.",
     "There is a runbook for deleting one person's messages on request.",
-    "The team ran the pre-enable live checks, including a test lead channel that stays unread."
+    "The team ran the pre-enable live checks, including a test lead channel whose messages stay unread (only counted, when lead counts are on)."
   ]),
   fieldReadingLabel: "Read Slack",
   fieldReadingHelp: "Reads messages addressed to you and turns them into Needs Attention items.",
@@ -73,7 +76,7 @@ export const SLACK_READ_COPY = Object.freeze({
   activity: "{n} messages in 30 days",
   watchLabel: "Watch", muteLabel: "Mute", unwatchLabel: "Don't watch",
   financeConfirmTitle: "Watch a finance channel?",
-  financeConfirmBody: "Items from this channel are shown only in DD, never in Slack or in drafts. Until you watch it, nothing in it is read, not even messages to you.",
+  financeConfirmBody: "Items from this channel are shown only in DD, never in Slack or in email drafts. A reply drafted here uses only this channel and is shown only in DD. Until you watch it, nothing in it is read, not even messages to you.",
   pickerConflict: "This channel changed since the page loaded. Its current setting is shown.",
   pickerFailed: "Couldn't change this channel. Try again.",
   connectResult: Object.freeze({

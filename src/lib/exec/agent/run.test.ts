@@ -507,7 +507,7 @@ describe("the request (tests 54-56)", () => {
       expect(r.thinking?.type).toBe("adaptive");
       expect(r.thinking).not.toHaveProperty("display");
       for (const k of ["temperature", "top_p", "top_k"]) expect(r).not.toHaveProperty(k);
-      expect(r.tools).toHaveLength(19);   // P7b stage 0 (§3.15, N16): 19 tools
+      expect(r.tools).toHaveLength(20);   // P7b stage 0 (§3.15, N16): 19 tools; P10 stage 0: the fake mirrors the 20 names
     }
   });
 

@@ -79,13 +79,24 @@ describe("CE01 headers and fetch options", () => {
 });
 
 describe("CE02 path ids", () => {
-  it("are encoded with their case kept", async () => {
-    expect(CLONE_EA_PATHS.draft("AAkA=b-C_")).toBe("/api/outlook-drafts/AAkA%3Db-C_");
-    expect(CLONE_EA_PATHS.send("AAkA=b-C_")).toBe("/api/outlook-drafts/AAkA%3Db-C_/send");
+  // CL2 refuses any "%" in a scoped token's path (403), so a draft id goes in as it is: its characters
+  // (CLONE_GRAPH_ID_RE) need no encoding. Thread ids are still encoded. Case is kept either way.
+  it("draft ids go in as they are, thread ids are encoded, case kept", async () => {
+    expect(CLONE_EA_PATHS.draft("AAkA=b-C_")).toBe("/api/outlook-drafts/AAkA=b-C_");
+    expect(CLONE_EA_PATHS.send("AAkA=b-C_")).toBe("/api/outlook-drafts/AAkA=b-C_/send");
     expect(CLONE_EA_PATHS.createReply("t/1 x")).toBe("/api/threads/t%2F1%20x/outlook-draft");
     await cloneEaFetch(base({ path: CLONE_EA_PATHS.draft("AAkA=b-C_") }));
-    expect(clone.requests[0].url.href).toBe(`${CLONE_URL}/api/outlook-drafts/AAkA%3Db-C_`);
-    expect(decodeURIComponent(clone.requests[0].path)).toBe("/api/outlook-drafts/AAkA=b-C_");
+    expect(clone.requests[0].url.href).toBe(`${CLONE_URL}/api/outlook-drafts/AAkA=b-C_`);
+    expect(clone.requests[0].path).toBe("/api/outlook-drafts/AAkA=b-C_");
+    expect(clone.requests[0].path).not.toContain("%");
+  });
+
+  it("a draft id outside ^[A-Za-z0-9_=-]{1,512}$ throws before any request", () => {
+    for (const bad of ["AAk%3D", "a/b", "a b", "a+b", "..", "", "x".repeat(513)]) {
+      expect(() => CLONE_EA_PATHS.draft(bad), JSON.stringify(bad)).toThrow(NonRetryableError);
+      expect(() => CLONE_EA_PATHS.send(bad), JSON.stringify(bad)).toThrow(NonRetryableError);
+    }
+    expect(clone.requests).toHaveLength(0);
   });
 });
 
@@ -180,7 +191,7 @@ describe("CE09 the base URL", () => {
     process.env.MISSIVE_API_URL = "  https://clone.test///  ";
     expect(cloneEaBaseUrl()).toBe("https://clone.test");
     await cloneEaFetch(base());
-    expect(clone.requests[0].url.href).toBe("https://clone.test/api/outlook-drafts/AAMk%3D");
+    expect(clone.requests[0].url.href).toBe("https://clone.test/api/outlook-drafts/AAMk=");
     delete process.env.MISSIVE_API_URL;
     expect(() => cloneEaBaseUrl()).toThrow(NonRetryableError);
     let caught: unknown;

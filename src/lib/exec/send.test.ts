@@ -147,7 +147,7 @@ describe("SD03 the body and the header", () => {
     expect(req.headers["idempotency-key"]).toBe(KEY);
     expect(req.headers.authorization).toBe(`Bearer ${SEND_TOKEN}`);
     expect(req.headers["content-type"]).toBe("application/json");
-    expect(req.path).toBe("/api/outlook-drafts/AAMkAGraphId%3D/send");
+    expect(req.path).toBe("/api/outlook-drafts/AAMkAGraphId=/send");
     expect(req.method).toBe("POST");
     expect(Object.keys(req.json as object)).toEqual(["confirmHash", "idempotencyKey"]);
     expect(req.json).toEqual({ confirmHash: HASH, idempotencyKey: KEY });

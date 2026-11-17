@@ -1,6 +1,6 @@
 import "server-only";
 
-import { CLONE_IDEMPOTENCY_KEY_RE, CloneEaError, parseCloneErrorBody, parseRetryAfterMs, type CloneEaRoute } from "@/lib/exec/clone-ea-types";
+import { CLONE_GRAPH_ID_RE, CLONE_IDEMPOTENCY_KEY_RE, CloneEaError, parseCloneErrorBody, parseRetryAfterMs, type CloneEaRoute } from "@/lib/exec/clone-ea-types";
 import { NonRetryableError } from "@/lib/exec/types";
 
 // The one module that makes CL2 HTTP calls (P4 contract §3.2.2; boundary B4:
@@ -31,7 +31,18 @@ export interface CloneEaCall {
 }
 export interface CloneEaResponse { status: number; body: unknown; replay: boolean }
 
-/** The CL2 routes (CL2C §3.0-§3.6, DD-consumer view). Ids are encoded, case kept (Graph ids are case-sensitive). */
+/**
+ * An Outlook draft id as a path segment: as it is, never percent-encoded. CL2 refuses any "%" in a scoped token's path
+ * (403), so encoding a "=" as "%3D" would make that draft unreachable (and read as rejected credentials). The id must
+ * match CLONE_GRAPH_ID_RE (^[A-Za-z0-9_=-]{1,512}$), whose characters need no encoding in a path segment; anything
+ * else throws (every caller already checks it first).
+ */
+function draftIdSegment(graphId: string): string {
+  if (typeof graphId !== "string" || !CLONE_GRAPH_ID_RE.test(graphId)) throw new NonRetryableError("clone path: the Outlook draft id is malformed");
+  return graphId;
+}
+
+/** The CL2 routes (CL2C §3.0-§3.6, DD-consumer view). Thread ids are encoded; draft ids go in as they are (draftIdSegment); case kept (Graph ids are case-sensitive). */
 export const CLONE_EA_PATHS: {
   status(): string; authMe(): string; createReply(threadId: string): string; createNew(): string;
   draft(graphId: string): string; send(graphId: string): string;
@@ -40,8 +51,8 @@ export const CLONE_EA_PATHS: {
   authMe: () => "/api/auth/me",
   createReply: (threadId: string) => `/api/threads/${encodeURIComponent(threadId)}/outlook-draft`,
   createNew: () => "/api/compose/outlook-draft",
-  draft: (graphId: string) => `/api/outlook-drafts/${encodeURIComponent(graphId)}`,
-  send: (graphId: string) => `/api/outlook-drafts/${encodeURIComponent(graphId)}/send`
+  draft: (graphId: string) => `/api/outlook-drafts/${draftIdSegment(graphId)}`,
+  send: (graphId: string) => `/api/outlook-drafts/${draftIdSegment(graphId)}/send`
 });
 
 /** A read-back body can be about 1 MB plus the quoted thread; anything past this is cut and reported as invalid_body. */

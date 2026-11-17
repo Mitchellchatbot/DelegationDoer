@@ -238,7 +238,7 @@ describe("MA04 request bodies", () => {
     const result = await recreateOutlookDraft(principal, recreateReply);
     const reply = fake.of("recreate")[0];
     expect(reply.method).toBe("PATCH");
-    expect(reply.path).toBe("/api/outlook-drafts/AAMkAGraphId%3D");
+    expect(reply.path).toBe("/api/outlook-drafts/AAMkAGraphId=");
     expect(reply.json).toEqual({ to: [{ address: "client@acme.io", name: "Client" }], cc: [], bodyHtml: "<p>v2</p>", timezone: "America/New_York", ifContentHash: HASH });
     expect(result.readBack.replaces).toBe(GRAPH_ID);
 

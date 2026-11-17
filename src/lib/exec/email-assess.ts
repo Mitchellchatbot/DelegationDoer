@@ -17,7 +17,7 @@ import { AuditUnavailableError, type ExecPrincipal } from "@/lib/exec/types";
 //
 // Checks, in this order, each failing closed. The route file itself runs the
 // first three (boundary rule 13 sees the gate and the same-origin call there):
-//   1. the owner gate with the step-up (a password or MFA session; a link
+//   1. the owner gate with the step-up (a password sign-in; a link
 //      session gets the same 404 as everyone else);
 //   2. same origin (http.ts's isSameOriginRequest, through assertSameOrigin):
 //      403 forbidden;

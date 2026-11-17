@@ -321,7 +321,7 @@ export function setupDraftEnv(opts: DraftEnvOptions = {}): DraftEnv {
   return { db, fake, settings, auditIds };
 }
 
-/** The gate refusing (non-owner, link session) or failing (outage). */
+/** The gate refusing (a non-owner, or a link session while the step-up is switched on) or failing (outage). */
 export function gateAnswers(status: 401 | 404 | 503): void {
   vi.mocked(requireExecPrincipal).mockResolvedValue({ ok: false, response: NextResponse.json({ error: "x" }, { status }) });
 }

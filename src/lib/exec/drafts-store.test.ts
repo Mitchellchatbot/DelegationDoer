@@ -519,11 +519,9 @@ describe("the card and System counts", () => {
     dbRow(10, { status: "draft", principal_id: "ep_2" })
   ];
   it("countDraftsForCard: active rows and the attention rows of the bucket", async () => {
-    // P10 integrator: countDraftsForCard reads the real clock (bucketCountRows(principal, new Date(), ...)) while the fixture is
-    // keyed to NOW, so the clock is pinned to NOW here; unpinned, the 7-day mismatch row (5) aged out on 2026-11-13 and the
-    // attention count read 6 on every later day.
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(NOW);
+    // countDraftsForCard reads the real clock; pin Date to the fixture's NOW so the 7-day mismatch window (row 5) is
+    // measured from the fixture's dates, not from whenever the suite runs.
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
     try {
       useDb({ tables: { exec_drafts: fixture() } });
       // Attention: unknown (2), two failed generations (3, 4), the mismatch within 7 days (5), gone unconfirmed (7), restricted linked (8), changed in Outlook (9).

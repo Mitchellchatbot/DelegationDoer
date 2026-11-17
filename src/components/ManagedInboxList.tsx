@@ -14,7 +14,8 @@ interface InboxRow {
 // Leader-only inbox list with full-delete affordance. The default
 // DELETE on /api/inboxes/accounts/[id] just drops the caller's
 // assignment row, but leaders here want to fully remove the inbox
-// (cascades sync state + messages on the clone), so we pass ?nuke=1.
+// (the clone drops its sync state and scheduled sends; its messages stay,
+// detached from any mailbox), so we pass ?nuke=1.
 
 export function ManagedInboxList({ inboxes: initial }: { inboxes: InboxRow[] }) {
   const router = useRouter();

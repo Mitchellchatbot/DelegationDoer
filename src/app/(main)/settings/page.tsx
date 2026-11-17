@@ -2,8 +2,6 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getDepartments } from "@/lib/server-data";
 import { ProfileAvatarSection } from "@/components/ProfileAvatarSection";
 import { ResetPasswordSection } from "@/components/ResetPasswordSection";
-import { TwoStepSection } from "@/components/TwoStepSection";
-import { isOwner } from "@/lib/access";
 import { ReportIncidentSection } from "@/components/ReportIncidentSection";
 import { WorkScheduleSection } from "@/components/WorkScheduleSection";
 import { DesktopAppSection } from "@/components/DesktopAppSection";
@@ -46,10 +44,6 @@ export default async function SettingsPage() {
       {me && <ProfileAvatarSection user={me} />}
 
       <ResetPasswordSection />
-
-      {/* P9 (F2 step 5, LD-1): two-step sign-in, on the owner's account only. DD asks for a second factor nowhere
-          else, so offering it to everyone would promise a protection DD doesn't give. */}
-      {me && isOwner(me) && <TwoStepSection />}
 
       <ReportIncidentSection />
 

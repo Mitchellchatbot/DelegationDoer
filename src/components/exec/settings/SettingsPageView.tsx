@@ -33,8 +33,8 @@ export const SETTINGS_PAGE_COPY = {
   voiceNotInstalled: "Not available yet: the team needs to apply the database update.",
   voiceNone: "No profile yet. It builds once a week from your sent email.",
   teamSet: "Set by the team. Shown here for reference.",
-  // P9 (F2 step 6): a session on his account the step-up turned away (a sign-in link, or a password without his code).
-  stepUpRefused: "Refused: not your password and code"
+  // P9 (F2 step 6): a session on his account the step-up turned away (one that wasn't a password sign-in, e.g. a sign-in link).
+  stepUpRefused: "Refused: not a password sign-in"
   // P8 (AM-P8-15): the morning brief has its own section now (BriefSettingsSection); the read-only "Not set up yet"
   // row is gone. The Slack app (P6) has its own section (SlackSection); the old Slack check-in columns stay unshown.
 } as const;

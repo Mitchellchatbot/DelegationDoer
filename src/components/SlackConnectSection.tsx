@@ -60,7 +60,12 @@ function SlackCard() {
       if (!res.ok) return;
       const data = await res.json();
       setStatus({
-        connected: !!data?.user?.slackUserId,
+        // Connected = OAuth completed (a user token is stored). Not
+        // slackUserId: that gets cached by any bot-DM email lookup or the
+        // leader linker, which used to show "Connected" (and hide the
+        // Connect button) for people who never authorized — so the status
+        // mirror silently did nothing for them.
+        connected: data?.user?.slackAuthorized === true,
         slackUserId: data?.user?.slackUserId ?? null,
         slackTeamId: data?.user?.slackTeamId ?? null,
         connectedAt: data?.user?.slackConnectedAt ?? null,
@@ -182,6 +187,19 @@ function SlackCard() {
             {status?.connected && status.slackUserId && (
               <div className="text-[11px] text-ink/55 mt-1.5 font-mono">
                 {status.slackUserId}{status.slackTeamId ? ` · ${status.slackTeamId}` : ""}
+              </div>
+            )}
+            {status && !status.connected && (
+              <div className="text-[11px] text-amber-700 mt-1.5">
+                Not connected yet — click Connect Slack and approve the
+                Slack prompt.
+                {status.slackUserId && (
+                  <span className="text-ink/55">
+                    {" "}(Your Slack account
+                    <span className="font-mono"> {status.slackUserId}</span> is
+                    already linked for DM notifications.)
+                  </span>
+                )}
               </div>
             )}
             {status?.connected && status.lastSyncAt && (

@@ -138,10 +138,10 @@ export const SETTINGS_FIELDS: readonly SettingsFieldDef[] = Object.freeze([
     group: "chat",
     kind: "boolean",
     label: "Use the assistant for Ask AI",
-    // P9 fixer ui-3: the step-up is his password AND his authenticator code since P9 F1/F2.
+    // 2026-11-10: the step-up is off by default (EXEC_REQUIRE_PASSWORD_SIGNIN), so this no longer names a sign-in method.
     help:
-      "When on, Ask AI on DD pages answers with the assistant while you're signed in with your password and your authenticator code. " +
-      "Other people, sign-in links and sign-ins without the code keep the current Ask AI."
+      "When on, Ask AI on DD pages answers with the assistant on your account. " +
+      "Other people keep the current Ask AI."
   },
   {
     key: "chatDailyCapUsd",

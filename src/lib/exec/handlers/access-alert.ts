@@ -12,10 +12,11 @@ import { openActiveInstallation } from "@/lib/exec/slack-install";
 import { localDateString } from "@/lib/exec/time";
 import { NonRetryableError, type ExecPrincipal, type JobContext, type JobHandler } from "@/lib/exec/types";
 
-// exec.access-alert (P8 contract §3.13.10, §3.19, M13, C20; Area B): a strong web session from a network or user-agent
-// family not seen on a surface = 'web' access row in 30 days → an exec-bot DM (when installed) and an ops alert. The
-// payload holds the network prefix and UA family only (never the IP or the user agent). noteStrongWebAccess is the
-// fire-and-forget hook access.ts calls (lazily) after the step-up ran.
+// exec.access-alert (P8 contract §3.13.10, §3.19, M13, C20; Area B): a strong web session (a password sign-in) from a
+// network or user-agent family not seen on a surface = 'web' access row in 30 days → an exec-bot DM (when installed)
+// and an ops alert. The payload holds the network prefix and UA family only (never the IP or the user agent).
+// noteStrongWebAccess is the fire-and-forget hook access.ts calls (lazily) for an admitted password sign-in on a
+// surface that asks for the step-up, whether or not the step-up is switched on; sign-in link sessions never reach it.
 //
 // The network prefix and the family are the only access data that leave exec_access_log, and only on this path (the DM and
 // the ops alert's detail; §0.3 rule 4). Nothing here logs them: logs carry the principal id and an error's name.

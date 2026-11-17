@@ -179,9 +179,10 @@ describe("SlackSection: each state (SE01-SE06)", () => {
     }
   });
 
-  it("SE03 not connected: the intro, the password note, Connect to the start route; no Disconnect, no rows", () => {
+  it("SE03 not connected: just the intro and Connect to the start route; no Disconnect, no rows", () => {
     const html = render(slackSettingsView());
-    expect(textOf(html)).toBe(`Slack ${SLACK_COPY.settingsIntro} ${SLACK_COPY.settingsPasswordNote} ${SLACK_COPY.settingsConnect}`);
+    // 2026-11-10: no password note any more (the step-up is off unless EXEC_REQUIRE_PASSWORD_SIGNIN=true).
+    expect(textOf(html)).toBe(`Slack ${SLACK_COPY.settingsIntro} ${SLACK_COPY.settingsConnect}`);
     expect(html).toContain('data-slack-state="not_connected"');
     expect(html).toMatch(new RegExp(`<a[^>]*data-slack-connect[^>]*href="${START}"[^>]*>${SLACK_COPY.settingsConnect}</a>`));
     expect(startLinks(html)).toBe(1);

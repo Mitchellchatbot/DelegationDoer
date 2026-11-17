@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 // P8 contract §5.15 NA01, NA04, NA10, NA12 (M13, C20, C21): clientIp's right-most hop, and the strong-web-access hook in
-// the shared gate body: only after the step-up ran, fire-and-forget, loaded lazily. The hook module is mocked here (its
+// the shared gate body: only for an admitted password sign-in on a surface that asks for the step-up, whether or not the
+// step-up is switched on (EXEC_REQUIRE_PASSWORD_SIGNIN=true; while it is off, the default since 2026-11-10, the team's
+// sign-in link sessions get in but never reach it), fire-and-forget, loaded lazily. The hook module is mocked here (its
 // own suite is handlers/access-alert.test.ts); its factory can hold the import open or fail it.
 
 const hookState = vi.hoisted(() => ({
@@ -22,7 +24,7 @@ vi.mock("@/lib/exec/handlers/access-alert", async () => {
 
 import { STEP_UP_REFUSED_SUFFIX, clientIp, requireExecPrincipal } from "@/lib/exec/access";
 import { loadPrincipalForUser } from "@/lib/exec/principal";
-import { fakeFactorAdmin, passwordOnlyToken, pinFactors, settle as settleAll, strongToken } from "@/lib/exec/__tests__/step-up-fixtures";
+import { linkWithOwnFactorToken, settle as settleAll, strongToken } from "@/lib/exec/__tests__/step-up-fixtures";
 import type { ExecPrincipal } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getSupabaseServer } from "@/lib/supabase-server";
@@ -31,7 +33,7 @@ const OWNER_AUTH_ID = "11111111-1111-4111-8111-111111111111";
 const ROUTE = "GET /api/exec/overview";
 const b64url = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
 const jwt = (payload: unknown) => `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url(payload)}.c2ln`;
-// P9 (F2, AM-P9-15): a strong session is his password plus his pinned code (aal2); the pin is set in beforeEach.
+// P9 (AM-P9-15): the strong session every real-gate test builds, from the shared fixtures: his password sign-in (aal1).
 const STRONG = strongToken("sess-strong", OWNER_AUTH_ID);
 const LINK = jwt({ sub: OWNER_AUTH_ID, session_id: "sess-link", aal: "aal1", amr: [{ method: "otp", timestamp: 1793977000 }] });
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
@@ -52,7 +54,6 @@ function fakeServer(token: string) {
 function fakeAdmin() {
   const logRows: Record<string, unknown>[] = [];
   const client = {
-    auth: fakeFactorAdmin().auth,
     from(table: string) {
       if (table === "users") {
         const b = { select: () => b, eq: () => b, maybeSingle: async () => ({ data: { id: "u_1", email: "mitchell@scaledai.org" }, error: null }) };
@@ -78,7 +79,6 @@ let warnSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   vi.mocked(loadPrincipalForUser).mockResolvedValue(PRINCIPAL);
   vi.stubEnv("EXEC_ENABLED", "true");
-  pinFactors();
   hookState.note.mockReset();
   hookState.fail = false;
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -108,7 +108,7 @@ describe("the strong-web-access hook: the request never waits (NA10)", () => {
 });
 
 describe("the strong-web-access hook (NA04)", () => {
-  it("NA04 runs only when the step-up ran: a gate call without requireStrongSignIn enqueues nothing", async () => {
+  it("NA04 runs only on a surface that asks for the step-up: a gate call without requireStrongSignIn enqueues nothing", async () => {
     fakeServer(STRONG);
     fakeAdmin();
     expect((await requireExecPrincipal(request(), ROUTE)).ok).toBe(true);
@@ -116,7 +116,8 @@ describe("the strong-web-access hook (NA04)", () => {
     expect(hookState.note).not.toHaveBeenCalled();
   });
 
-  it("NA04 a refused step-up (a link sign-in) never reaches it", async () => {
+  it("NA04 (step-up on) a refused step-up (a link sign-in) never reaches it", async () => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
     fakeServer(LINK);
     fakeAdmin();
     expect((await requireExecPrincipal(request(), ROUTE, { requireStrongSignIn: true })).ok).toBe(false);
@@ -124,8 +125,11 @@ describe("the strong-web-access hook (NA04)", () => {
     expect(hookState.note).not.toHaveBeenCalled();
   });
 
-  it("P9 F2: a password-only session (aal1) under the step-up never reaches it; its refusal row is not a sighting", async () => {
-    fakeServer(passwordOnlyToken("sess-pw", OWNER_AUTH_ID));
+  // P9 F2 sent a password-only session (aal1) here; with his authenticator code no longer required (2026-11-10) that is
+  // the strong session, which the NA04 test below sends to the hook.
+  it("P9 F1 (step-up on): a link session with its own factor (aal2) never reaches it; its refusal row is not a sighting", async () => {
+    vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
+    fakeServer(linkWithOwnFactorToken("sess-own", OWNER_AUTH_ID));
     const admin = fakeAdmin();
     expect((await requireExecPrincipal(request(), ROUTE, { requireStrongSignIn: true })).ok).toBe(false);
     await settleAll();
@@ -133,7 +137,10 @@ describe("the strong-web-access hook (NA04)", () => {
     expect(admin.logRows).toEqual([expect.objectContaining({ route: `${ROUTE}${STEP_UP_REFUSED_SUFFIX}`, ip: "203.0.113.7" })]);
   });
 
-  it("NA04 a strong session: the hook gets the principal, the right-most hop, the user agent and the time, after the access row", async () => {
+  // A password sign-in reaches it whether or not the step-up is switched on: off, the gate still reads the session's
+  // token (for the access log) and makes the same strong check on it.
+  it.each(["on", "off"])("NA04 a strong session (step-up %s): the hook gets the principal, the right-most hop, the user agent and the time, after the access row", async (stepUp) => {
+    if (stepUp === "on") vi.stubEnv("EXEC_REQUIRE_PASSWORD_SIGNIN", "true");
     fakeServer(STRONG);
     const admin = fakeAdmin();
     const before = Date.now();
@@ -148,6 +155,22 @@ describe("the strong-web-access hook (NA04)", () => {
     expect(Object.keys(entry).sort()).toEqual(["ip", "now", "userAgent"]);
     expect(admin.logRows).toHaveLength(1);
     expect(admin.logRows[0]).toMatchObject({ ip: "203.0.113.7", user_agent: UA, surface: "web" });
+  });
+
+  // Off (the default since 2026-11-10), the team's link sessions are admitted on the same surface and expected, so they
+  // never raise the alert: the hook isn't reached, and the access row is an ordinary one.
+  it.each([
+    ["a sign-in link session (aal1, amr [otp])", LINK, "sess-link"],
+    ["a link session with its own factor (aal2, amr [totp, otp])", linkWithOwnFactorToken("sess-own", OWNER_AUTH_ID), "sess-own"]
+  ])("NA04 step-up off (the default): %s is admitted and never reaches it; its access row is an ordinary one", async (_n, token, sessionId) => {
+    fakeServer(token);
+    const admin = fakeAdmin();
+    expect((await requireExecPrincipal(request(), ROUTE, { requireStrongSignIn: true })).ok).toBe(true);
+    await settle();
+    expect(hookState.note).not.toHaveBeenCalled();
+    expect(admin.logRows).toEqual([
+      { principal_id: "ep_1", auth_user_id: OWNER_AUTH_ID, session_id: sessionId, ip: "203.0.113.7", user_agent: UA, route: ROUTE, surface: "web" }
+    ]);
   });
 
   it("NA10 a failing hook (or a rejected import) is logged by route and error name only, and the gate still answers", async () => {

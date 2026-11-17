@@ -5726,7 +5726,9 @@ const USER_TOKEN_FILES: ReadonlySet<string> = new Set([
   "src/app/api/integrations/slack/callback/route.ts", "src/app/api/integrations/slack/clear/route.ts",
   "src/app/api/integrations/slack/disconnect/route.ts", "src/app/api/integrations/slack/test/route.ts", "src/app/api/kudos/route.ts",
   "src/app/api/slack/interactions/route.ts", "src/app/api/tasks/[id]/comments/route.ts", "src/app/api/tasks/[id]/notify/route.ts",
-  "src/lib/slack-status-sync.ts", CHECKIN_POST_FILE, REPLY_POST_FILE
+  "src/lib/slack-status-sync.ts", CHECKIN_POST_FILE, REPLY_POST_FILE,
+  // #535 (2026-11-17): reads it server-side only to return a boolean (slackAuthorized); the token never leaves the server.
+  "src/app/api/users/me/route.ts"
 ]);
 const CHECKIN_POST_MODULE = "src/lib/exec/checkin-post";
 const CHECKIN_POST_IMPORTERS: ReadonlySet<string> = new Set(["src/lib/exec/handlers/checkin-send.ts", "src/lib/exec/handlers/brief-health.ts"]);

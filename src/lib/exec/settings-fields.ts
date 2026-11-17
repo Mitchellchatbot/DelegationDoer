@@ -10,11 +10,12 @@
 // copy is SLACK_READ_COPY's (slack-read-copy.ts), repeated here as literals
 // because this file imports nothing (principal.test.ts pins the equality).
 
-/** One optional exec_settings column group per migration (principal.ts SETTINGS_COLUMN_GROUPS). P5b added "chat", P7a "slack". */
-export type SettingsSchemaKey = "email" | "drafts" | "ddtext" | "chat" | "slack";
+/** One optional exec_settings column group per migration (principal.ts SETTINGS_COLUMN_GROUPS). P5b added "chat", P7a "slack",
+ *  P10 "slackP10" (contract §3.7.2; stage-0 seed: the loader group itself is Area B's). */
+export type SettingsSchemaKey = "email" | "drafts" | "ddtext" | "chat" | "slack" | "slackP10";
 
 /** The fields the owner may change from Settings. P5b added chatEnabled, askAiUsesExec, chatDailyCapUsd; P7a
- *  slackReadingEnabled, slackDailyCapUsd and retentionDaysSlack. */
+ *  slackReadingEnabled, slackDailyCapUsd and retentionDaysSlack; P10 the seven slackP10 fields (§3.7.2). */
 export interface SettingsPatch {
   ddtextEnabled?: boolean;
   retentionDaysEmail?: number;
@@ -28,6 +29,14 @@ export interface SettingsPatch {
   slackReadingEnabled?: boolean;
   slackDailyCapUsd?: number;
   retentionDaysSlack?: number;
+  // P10 (contract §3.7.2; stage-0 seed): the "slackP10" group. Rendered by SlackP10Controls (section "slack").
+  slackReadAll?: boolean;
+  slackLeadCountsEnabled?: boolean;
+  slackRepliesEnabled?: boolean;
+  slackReplySendEnabled?: boolean;
+  slackReplyAuto?: boolean;
+  slackReplyDailyCapUsd?: number;
+  slackVoiceEnabled?: boolean;
 }
 
 export interface SettingsFieldDef {
@@ -177,6 +186,76 @@ export const SETTINGS_FIELDS: readonly SettingsFieldDef[] = Object.freeze([
     section: "slack",
     label: "Keep Slack items for (days)",
     help: "Applies to items saved from now on."
+  },
+  // P10 (contract §3.7.2; stage-0 seed, lead): seven rows, section "slack" (P5a's SettingsForm skips them; Area B's
+  // SlackP10Controls renders them), group "slackP10", in this order. Copy = SLACK_P10_COPY.settings' strings (slack-p10-copy.ts),
+  // repeated here as literals because this file imports nothing (Area B pins the equality). The confirms
+  // (slack_read_all_notice, slack_lead_counts_notice, slack_replies_notice, slack_reply_send_notice) and the dependencies
+  // are settings.ts's (§3.7.3, Area B).
+  {
+    key: "slackReadAll",
+    column: "slack_read_all",
+    group: "slackP10",
+    kind: "boolean",
+    section: "slack",
+    label: "Also read finance, HR and legal channels and channels I muted in Slack",
+    help: "Also reads finance-type channels (finance, payroll, HR, legal, billing, accounting, tax, contracts, compliance) and channels you muted in Slack. What it finds in finance-type channels shows only in DD."
+  },
+  {
+    key: "slackLeadCountsEnabled",
+    column: "slack_lead_counts_enabled",
+    group: "slackP10",
+    kind: "boolean",
+    section: "slack",
+    label: "Count leads in client lead channels",
+    help: "Counts each day's new posts in every lead channel you're in (the ones on your clients' FB onboarding cards and any channel named like one), by kind. Nothing from the posts is kept."
+  },
+  {
+    key: "slackRepliesEnabled",
+    column: "slack_replies_enabled",
+    group: "slackP10",
+    kind: "boolean",
+    section: "slack",
+    label: "Draft Slack replies",
+    help: "Drafts a reply in your style when you ask, from that conversation only. Nothing is posted until you press Send."
+  },
+  {
+    key: "slackReplySendEnabled",
+    column: "slack_reply_send_enabled",
+    group: "slackP10",
+    kind: "boolean",
+    section: "slack",
+    label: "Let me send drafted replies",
+    help: "Posts a reply as you only when you press Send and confirm."
+  },
+  {
+    key: "slackReplyAuto",
+    column: "slack_reply_auto",
+    group: "slackP10",
+    kind: "boolean",
+    section: "slack",
+    label: "Draft replies automatically",
+    help: "For requests, questions and decisions addressed to you in internal conversations, up to 15 a day, drafted from each conversation's recent messages. Urgent ones also appear in your assistant DM during work hours. Never sent on its own."
+  },
+  {
+    key: "slackReplyDailyCapUsd",
+    column: "slack_reply_daily_cap_usd",
+    group: "slackP10",
+    kind: "money",
+    min: 0,
+    max: 20,
+    section: "slack",
+    label: "Automatic drafts daily budget",
+    help: "Automatic drafts stop for the day at this amount. Drafts you ask for count only toward the daily AI budget."
+  },
+  {
+    key: "slackVoiceEnabled",
+    column: "slack_voice_enabled",
+    group: "slackP10",
+    kind: "boolean",
+    section: "slack",
+    label: "Learn my Slack writing style",
+    help: "Once a week, reads up to 60 of your own recent messages in internal conversations. Only the style is kept."
   }
 ] satisfies SettingsFieldDef[]);
 

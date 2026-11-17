@@ -52,10 +52,13 @@ import { refusalsSince, spentTodayUsd } from "@/lib/exec/llm/usage";
 import { DD_ATTENTION_KINDS } from "@/lib/exec/producers/dd";
 import { currentKeyIds } from "@/lib/exec/crypto";
 import { slackSystemSummary, slackTokenKeyIds } from "@/lib/exec/slack-install";
+import { leadSystemRow } from "@/lib/exec/slack-leads-view";
+import { countRepliesToday } from "@/lib/exec/slack-reply-store";
+import { slackVoiceState } from "@/lib/exec/slack-voice";
 import type { SlackSystemSummary } from "@/lib/exec/slack-types";
 import { eaTokenConfigured, listAllReplyArtifacts, loadScreeningPolicy } from "@/lib/exec/sources/mail";
 import { spendTodayByFeature } from "@/lib/exec/settings";
-import { getSyncState, parseAccountsState, parseEaTokenState, parseSendTokenState, parseSocketState, parseTokenHealthState } from "@/lib/exec/sync-state";
+import { getSyncState, parseAccountsState, parseEaTokenState, parseReplyTokenHealth, parseSendTokenState, parseSocketState, parseTokenHealthState } from "@/lib/exec/sync-state";
 import {
   getPendingApprovals,
   listActivitySince,
@@ -304,6 +307,16 @@ export interface OverviewSystem {
    *  token blobs are sealed under EXEC_TOKEN_KEY_PREVIOUS's key id (previousKey) or under a key id neither key has
    *  (unknownKey), compared by stored key ids only (never decrypted). Absent = no installation; null = the read failed. */
   tokenKeys?: { previousKey: number; unknownKey: number } | null;
+  /** P10 (§3.9.3, C58, v1.1 product-2): the "Slack lead counts" row, from the last run's summary and the coverage only (never
+   *  calls Slack). Absent while lead counts are off or not installed; null = the read failed. */
+  slackLeads?: { lastRunAt: string | null; channels: number; unlinked: number; listedNotMember: number; lastError: string | null;
+    failingRuns: number; failCode: string | null } | null;
+  /** P10 (§3.9.3, C58, v1.1 product-4): the "Slack replies" row: today's drafts and his DD Slack connection from P10's own key
+   *  (slack-reply / token-health; "unchecked" = none stored). Absent while reply drafts are off; null = a read failed. */
+  slackReplies?: { open: number; sentToday: number; unknown: number; tokenState: TokenHealthState["state"] | "unchecked"; checkedAt: string | null } | null;
+  /** P10 (§3.9.3, v1.1 product-12): the "Slack style" row (the voice profile's state). Absent while reply drafts are off. */
+  slackStyle?: { state: "ready" | "insufficient" | "failed" | "none"; samples: number | null; builtAt: string | null; reason: string | null;
+    fallback: "email" | "house" | null } | null;
 }
 
 /** P8 (§3.17.6, M12): the System card's "Morning brief" row (ids, enums, times and counts only). */
@@ -922,6 +935,8 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
   const tokenKeys = tokenKeysRead(principal, read, emailGate);
   // P8 (§3.17.6, M12): the brief, check-in token and AI rows, read only while the brief is on.
   const briefSystem = briefSystemReads(principal, now, read, emailGate);
+  // P10 (§3.9.3, C58): the lead counts, Slack replies and Slack style rows, read only while their switch is on.
+  const p10System = p10SystemReads(principal, now, read, emailGate);
   // P8 (§3.17.2, C41): the brief card, only when the page asks for it. getBriefCardView takes no signal: it races the deadline.
   const briefCard = opts?.brief === true ? build("brief card", () => untilAborted(getBriefCardView(principal, now), signal)) : null;
 
@@ -939,8 +954,9 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
     const slack = await slackSystem;
     const brief = await briefSystem;
     const keys = await tokenKeys;
+    const p10 = await p10System;
     return { ...health, ...(drafts === undefined ? {} : { drafts }), ...(slack === undefined ? {} : { slack }), ...brief,
-      ...(keys === undefined ? {} : { tokenKeys: keys }) };
+      ...(keys === undefined ? {} : { tokenKeys: keys }), ...p10 };
   });
 
   const [tilesResult, attentionResult, approvalsResult, deadlinesResult, projectsResult, systemResult, emailResult, slackResult, briefResult] = await Promise.all([
@@ -1170,6 +1186,62 @@ async function briefSystemReads(principal: ExecPrincipal, now: Date, read: Overv
           refusals24h: refusals.value
         }
       : null;
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// P10 (contract §3.9.3, C58, v1.1 product-2, -4, -12): the Slack lead counts, Slack replies and Slack style rows
+// ---------------------------------------------------------------------------
+
+type P10SystemRows = Pick<OverviewSystem, "slackLeads" | "slackReplies" | "slackStyle">;
+
+/**
+ * The System card's P10 rows, each read only while its switch is on (and the P10 columns exist); none calls Slack. Each
+ * fails on its own (null = "couldn't load"). The lead row comes from the run summary and the coverage (leadSystemRow; null =
+ * the P10 tables aren't installed → no row); the replies row from today's draft counts and P10's own token-health key; the
+ * style row from the voice profile's state. Counts, enums, codes and times only.
+ */
+async function p10SystemReads(principal: ExecPrincipal, now: Date, read: OverviewRead, gateRead: Promise<Settled<EmailGate>>): Promise<P10SystemRows> {
+  const gate = await gateRead;
+  if (!gate.ok || gate.value.settings.slackP10SchemaReady !== true) return {};
+  const settings = gate.value.settings;
+  const leadsOn = settings.slackLeadCountsEnabled === true;
+  const repliesOn = settings.slackRepliesEnabled === true;
+  const off = Promise.resolve(null);
+  const [leads, counts, token, style] = await Promise.all([
+    leadsOn ? read("slack lead counts", (o) => leadSystemRow(principal, o)) : off,
+    repliesOn ? read("slack replies", () => countRepliesToday(principal, startOfLocalDayUtc(now, principal.timezone).toISOString())) : off,
+    repliesOn ? read("slack reply connection", (o) => getSyncState(principal, "slack-reply", "token-health", parseReplyTokenHealth, o)) : off,
+    repliesOn ? read("slack style", (o) => slackVoiceState(principal, o)) : off
+  ]);
+  const out: P10SystemRows = {};
+  if (leads !== null) {
+    if (!leads.ok) out.slackLeads = null;
+    else if (leads.value !== null) out.slackLeads = leads.value;
+  }
+  if (counts !== null && token !== null) {
+    out.slackReplies = !counts.ok || !token.ok
+      ? null
+      : {
+          open: counts.value.open,
+          sentToday: counts.value.sent,
+          unknown: counts.value.unknown,
+          tokenState: token.value === null ? "unchecked" : token.value.value.state,
+          checkedAt: token.value === null ? null : token.value.value.checkedAt ?? null
+        };
+  }
+  if (style !== null) {
+    const v = style.ok ? style.value : null;
+    out.slackStyle = v === null
+      ? null
+      : v.state === "ready"
+        ? { state: "ready", samples: v.samples, builtAt: v.builtAt, reason: null, fallback: null }
+        : v.state === "insufficient"
+          ? { state: "insufficient", samples: null, builtAt: null, reason: null, fallback: v.fallback }
+          : v.state === "failed"
+            ? { state: "failed", samples: null, builtAt: null, reason: v.reason, fallback: v.fallback }
+            : { state: "none", samples: null, builtAt: null, reason: null, fallback: null };
+  }
   return out;
 }
 

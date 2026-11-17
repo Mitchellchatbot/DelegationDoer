@@ -45,6 +45,10 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //     notice confirmation ("slack_reading_notice"); turning it off writes only
 //     the flag (reading pauses; stored items stay until their TTL, and
 //     deletes, edits and lifecycle purges keep applying, C43).
+//   * P10 (contract §3.7.3): read-all, lead counts, reply drafts and sending
+//     each need their own notice confirmation to turn on (one switch per
+//     request); sending or automatic drafts can't be on while reply drafts are
+//     off, and turning reply drafts off turns both off in the same write.
 //   * The page model's sections fail soft ({ ok: false }, never a zero); only
 //     the settings read itself fails the page.
 //   * Nothing here logs a value: errors name the section and the database's
@@ -68,7 +72,25 @@ export type UpdateSettingsResult =
   | { outcome: "conflict"; snapshot: SettingsSnapshot }
   | { outcome: "not_installed"; field: keyof SettingsPatch }
   | { outcome: "invalid"; field: keyof SettingsPatch | "patch"; detail: string }
-  | { outcome: "confirmation_required"; field: "ddtextEnabled" | "slackReadingEnabled" };   // P7a §3.2 widens field
+  | { outcome: "confirmation_required"; field: SettingsConfirmField };   // P7a §3.2, P10 §3.7.3 widen field
+
+/** The switches whose turning on needs a notice confirmation (P5a C14, P7a N20, P10 §3.7.3). */
+export type SettingsConfirmField = "ddtextEnabled" | "slackReadingEnabled" | "slackReadAll" | "slackLeadCountsEnabled" | "slackRepliesEnabled"
+  | "slackReplySendEnabled";
+
+/** The confirm values the settings route accepts (P5a, P7a, and P10's four, §3.7.3). */
+export const SETTINGS_CONFIRMS = Object.freeze([
+  "ddtext_notice", "slack_reading_notice", "slack_read_all_notice", "slack_lead_counts_notice", "slack_replies_notice", "slack_reply_send_notice"
+] as const);
+export type SettingsConfirm = (typeof SETTINGS_CONFIRMS)[number];
+
+/** P10 (§3.7.3): each P10 notice switch and the confirm it needs to turn on, checked in this order after P7a's. */
+const P10_CONFIRMS: readonly { field: Extract<SettingsConfirmField, keyof SettingsPatch>; confirm: SettingsConfirm }[] = [
+  { field: "slackReadAll", confirm: "slack_read_all_notice" },
+  { field: "slackLeadCountsEnabled", confirm: "slack_lead_counts_notice" },
+  { field: "slackRepliesEnabled", confirm: "slack_replies_notice" },
+  { field: "slackReplySendEnabled", confirm: "slack_reply_send_notice" }
+];
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -113,12 +135,16 @@ function checkPatch(patch: SettingsPatch): { ok: true; fields: { def: SettingsFi
  * Turning ddtextEnabled false→true needs opts.confirm === "ddtext_notice".
  * P7a (§3.2, N20): turning slackReadingEnabled false→true needs opts.confirm === "slack_reading_notice"; a P7a key
  * ("slack" group) before the P7a migration is applied answers not_installed (the schema check above).
+ * P10 (§3.7.3): slackReadAll, slackLeadCountsEnabled, slackRepliesEnabled and slackReplySendEnabled false→true each need
+ * their own confirm (P10_CONFIRMS, one switch per request); slackReplySendEnabled or slackReplyAuto true while
+ * slackRepliesEnabled is (or becomes) false → invalid naming that field; a patch turning slackRepliesEnabled off also
+ * writes slackReplySendEnabled and slackReplyAuto false.
  * Throws on a database error (the route answers 503).
  */
 export async function updateSettings(
   principal: ExecPrincipal,
   patch: SettingsPatch,
-  opts: { expectedVersion: string | null; confirm?: "ddtext_notice" | "slack_reading_notice"; now?: Date; signal?: AbortSignal }
+  opts: { expectedVersion: string | null; confirm?: SettingsConfirm; now?: Date; signal?: AbortSignal }
 ): Promise<UpdateSettingsResult> {
   requirePrincipal(principal);
   const now = validNow(opts.now);
@@ -140,9 +166,25 @@ export async function updateSettings(
   if (patch.slackReadingEnabled === true && current.settings.slackReadingEnabled !== true && opts.confirm !== "slack_reading_notice") {
     return { outcome: "confirmation_required", field: "slackReadingEnabled" };
   }
+  // P10 (§3.7.3): the dependencies first (an impossible combination is invalid whatever was confirmed), then the confirms.
+  const repliesAfter = patch.slackRepliesEnabled !== undefined ? patch.slackRepliesEnabled === true : current.settings.slackRepliesEnabled === true;
+  if (!repliesAfter) {
+    if (patch.slackReplySendEnabled === true) return { outcome: "invalid", field: "slackReplySendEnabled", detail: "needs reply drafts on" };
+    if (patch.slackReplyAuto === true) return { outcome: "invalid", field: "slackReplyAuto", detail: "needs reply drafts on" };
+  }
+  for (const { field, confirm } of P10_CONFIRMS) {
+    if (patch[field] === true && current.settings[field] !== true && opts.confirm !== confirm) {
+      return { outcome: "confirmation_required", field };
+    }
+  }
 
   const columns: Record<string, unknown> = {};
   for (const { def, value } of checked.fields) columns[def.column] = value;
+  // P10 (§3.7.3): reply drafts off takes sending and the automatic drafts with it (the writer adds them).
+  if (patch.slackRepliesEnabled === false) {
+    columns.slack_reply_send_enabled = false;
+    columns.slack_reply_auto = false;
+  }
   // The new token must differ from the one it replaces, even if this server's
   // clock is behind the last writer's: otherwise a concurrent writer holding
   // the old token would pass the CAS too. (Date.parse drops microseconds, so

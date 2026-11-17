@@ -34,7 +34,10 @@ describe("feature tables", () => {
       // P7a stage -1 (contract §3.20.1): Slack triage.
       slack_triage: "claude-haiku-5-5",
       // P8 stage 0 (contract §3.21.1, p8-bindings.md): the brief's check-in notes.
-      checkin: "claude-opus-5-5"
+      checkin: "claude-opus-5-5",
+      // P10 stage 0 (contract §3.12, p10-bindings.md): Slack reply drafts and his Slack style.
+      slack_reply: "claude-opus-5-5",
+      slack_voice: "claude-haiku-5-5"
     });
     expect(FEATURE_EFFORT).toEqual({
       triage: "low",
@@ -46,7 +49,9 @@ describe("feature tables", () => {
       ddtext: "low",
       slack_triage: "low",
       brief: "high",
-      checkin: "medium"
+      checkin: "medium",
+      slack_reply: "medium",
+      slack_voice: "low"
     });
     expect(FEATURE_MAX_TOKENS).toEqual({
       chat: 16000,
@@ -58,7 +63,9 @@ describe("feature tables", () => {
       spike: 4000,
       ddtext: 4000,
       slack_triage: 4000,
-      checkin: 4000
+      checkin: 4000,
+      slack_reply: 8000,
+      slack_voice: 4000
     });
     expect(HAIKU_MAX_PROMPT_TOKENS).toBe(90_000);
   });

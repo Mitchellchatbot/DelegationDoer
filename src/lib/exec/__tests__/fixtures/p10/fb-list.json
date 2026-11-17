@@ -1,0 +1,188 @@
+{
+  "_doc": [
+    "P10 typed-list fixtures for leadLinkOf / leadMapRows (contract §3.4.2, C20, LK03-LK07; lead-owned, frozen). Each case: the list",
+    "(exec_slack_fb_lead_channels_v2's rows as FbLeadListRow, names in channelSlug's form; typedAs = what was typed on the card), one",
+    "channel { id, slackName }, and the expected { link, taskId, clientId } (the matched group's first row by taskId). Invented names only."
+  ],
+  "cases": [
+    {
+      "id": "LK03 fb_id wins over a name match to another onboarding",
+      "list": [
+        {
+          "taskId": "t_zen",
+          "clientId": "cl_zenith",
+          "clientLabel": "Zenith House",
+          "name": "zenith-vob",
+          "channelId": "C0LEADVOB1",
+          "i": 0
+        },
+        {
+          "taskId": "t_acme",
+          "clientId": "cl_acme",
+          "clientLabel": "Acme Recovery",
+          "name": "zenith-house-vob-leads",
+          "channelId": null,
+          "i": 0
+        }
+      ],
+      "channel": {
+        "id": "C0LEADVOB1",
+        "slackName": "zenith-house-vob-leads"
+      },
+      "expect": {
+        "link": "fb_id",
+        "taskId": "t_zen",
+        "clientId": "cl_zenith"
+      }
+    },
+    {
+      "id": "LK04 fb_name through channelSlug",
+      "typedAs": "#Zenith House VOB Leads",
+      "list": [
+        {
+          "taskId": "t_zen",
+          "clientId": "cl_zenith",
+          "clientLabel": "Zenith House",
+          "name": "zenith-house-vob-leads",
+          "channelId": null,
+          "i": 0
+        }
+      ],
+      "channel": {
+        "id": "C0LEADVOB9",
+        "slackName": "zenith-house-vob-leads"
+      },
+      "expect": {
+        "link": "fb_name",
+        "taskId": "t_zen",
+        "clientId": "cl_zenith"
+      }
+    },
+    {
+      "id": "LK05 fb_sibling: only zenith-house-vob-leads typed, on one onboarding",
+      "list": [
+        {
+          "taskId": "t_zen",
+          "clientId": "cl_zenith",
+          "clientLabel": "Zenith House",
+          "name": "zenith-house-vob-leads",
+          "channelId": null,
+          "i": 0
+        }
+      ],
+      "channel": {
+        "id": "C0LEADCAL1",
+        "slackName": "zenith-house-calendly"
+      },
+      "expect": {
+        "link": "fb_sibling",
+        "taskId": "t_zen",
+        "clientId": "cl_zenith"
+      }
+    },
+    {
+      "id": "LK06a two onboardings of different clients share the prefix: ambiguous",
+      "list": [
+        {
+          "taskId": "t_lake_e",
+          "clientId": "cl_lake_e",
+          "clientLabel": "Lakeside Recovery East",
+          "name": "lakeside-recovery-vob-leads",
+          "channelId": null,
+          "i": 0
+        },
+        {
+          "taskId": "t_lake_w",
+          "clientId": "cl_lake_w",
+          "clientLabel": "Lakeside Recovery West",
+          "name": "lakeside-recovery-nonvob-leads",
+          "channelId": null,
+          "i": 0
+        }
+      ],
+      "channel": {
+        "id": "C0LAKECAL1",
+        "slackName": "lakeside-recovery-calendly"
+      },
+      "expect": {
+        "link": "ambiguous",
+        "taskId": null,
+        "clientId": null
+      }
+    },
+    {
+      "id": "LK06b two onboardings of the same client: linked (one group)",
+      "list": [
+        {
+          "taskId": "t_pine_2",
+          "clientId": "cl_pine",
+          "clientLabel": "Pinecrest Recovery",
+          "name": "pinecrest-nonvob-leads",
+          "channelId": null,
+          "i": 0
+        },
+        {
+          "taskId": "t_pine_1",
+          "clientId": "cl_pine",
+          "clientLabel": "Pinecrest Recovery",
+          "name": "pinecrest-vob-leads",
+          "channelId": null,
+          "i": 0
+        }
+      ],
+      "channel": {
+        "id": "C0PINECAL1",
+        "slackName": "pinecrest-calendly"
+      },
+      "expect": {
+        "link": "fb_sibling",
+        "taskId": "t_pine_1",
+        "clientId": "cl_pine"
+      }
+    },
+    {
+      "id": "LK07 nothing matches: none",
+      "list": [
+        {
+          "taskId": "t_zen",
+          "clientId": "cl_zenith",
+          "clientLabel": "Zenith House",
+          "name": "zenith-house-vob-leads",
+          "channelId": null,
+          "i": 0
+        }
+      ],
+      "channel": {
+        "id": "C0NORTHV1",
+        "slackName": "northwind-detox-vob-leads"
+      },
+      "expect": {
+        "link": "none",
+        "taskId": null,
+        "clientId": null
+      }
+    },
+    {
+      "id": "a task with no DD client links by task (group task:<id>; label = the task's title)",
+      "list": [
+        {
+          "taskId": "t_harbor",
+          "clientId": null,
+          "clientLabel": "Harbor Light onboarding",
+          "name": "harbor-light-vob-leads",
+          "channelId": null,
+          "i": 0
+        }
+      ],
+      "channel": {
+        "id": "C0HARBOR1",
+        "slackName": "harbor-light-vob-leads"
+      },
+      "expect": {
+        "link": "fb_name",
+        "taskId": "t_harbor",
+        "clientId": null
+      }
+    }
+  ]
+}

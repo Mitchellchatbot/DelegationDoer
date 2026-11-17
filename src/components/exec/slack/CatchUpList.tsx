@@ -1,7 +1,12 @@
-import { MessagesSquare } from "lucide-react";
+import Link from "next/link";
+import { FilePen, MessagesSquare } from "lucide-react";
 import { formatCount, formatInZone } from "@/lib/exec/format";
 import { SLACK_INTEL_COPY } from "@/lib/exec/slack-intel-copy";
-import type { SlackPageView } from "@/lib/exec/slack-page";
+import type { CatchUpRow, SlackPageView } from "@/lib/exec/slack-page";
+import { SLACK_P10_COPY } from "@/lib/exec/slack-p10-copy";
+import { REPLY_OFFER_KINDS } from "@/lib/exec/slack-p10-types";
+import { slackNewReplyHref, slackReplyPageHref } from "@/lib/exec/slack-reply-links";
+import { replyStatusLabel } from "./replies/reply-logic";
 import { BasisLabel } from "../BasisLabel";
 import { SectionCard } from "../SectionCard";
 import { OpenInSlack, fill, kindLabel } from "./parts";
@@ -12,15 +17,30 @@ import { SlackPrivacyChip } from "./SlackPrivacyChip";
 // (labelled AI-assessed) or "Not assessed", then P7a's stored quote when there is one (never for an external author; this
 // list is the only place a quote is shown), then "Open in Slack" for an allowed permalink. No author anywhere (C29).
 // The muted/unwatched line counts what the policy kept back. A failed read is this card's "Couldn't load" only. Server.
+//
+// P10 (§3.5.13, C45, v1.1 product-16; Area D): while reply drafts are on (repliesOn), a row whose message has a draft shows
+// that draft's status label (replies.statusLabels; "Replied {time}" once sent) linking to its page; otherwise a request,
+// question or decision offers "Draft reply" (the new-reply page; nothing is created until he presses its button).
 
 type CatchUp = SlackPageView["catchUp"];
+/** P10 (v1.1 product-16): the row's reply link: its draft's status label and page, else "Draft reply" for the kinds C45 offers. */
+export function catchUpReplyLink(r: Pick<CatchUpRow, "kind" | "channelId" | "ts" | "reply">, repliesOn: boolean, tz: string, now: string):
+  { href: string; label: string; kind: "status" | "new" } | null {
+  if (!repliesOn) return null;
+  if (r.reply !== null) {
+    const label = replyStatusLabel(r.reply.status, r.reply.sentAt, tz, now);
+    if (label !== null) return { href: slackReplyPageHref(r.reply.id), label, kind: "status" };
+  }
+  if (!(REPLY_OFFER_KINDS as readonly string[]).includes(r.kind)) return null;
+  return { href: slackNewReplyHref(r.channelId, r.ts), label: SLACK_P10_COPY.replies.draftReply, kind: "new" };
+}
 
 /** P9 F30: "Showing the newest 50 of 73". */
 export function catchUpShownText(shown: number, total: number): string {
   return `Showing the newest ${formatCount(shown)} of ${formatCount(total)}`;
 }
 
-export function CatchUpList({ section, tz, now }: { section: CatchUp; tz: string; now: string }) {
+export function CatchUpList({ section, tz, now, repliesOn = false }: { section: CatchUp; tz: string; now: string; repliesOn?: boolean }) {
   if (!section.ok) return <SectionCard title={SLACK_INTEL_COPY.catchUpTitle} icon={MessagesSquare} error />;
   const { rows, hiddenMuted, total } = section.data;
   return (
@@ -63,6 +83,7 @@ export function CatchUpList({ section, tz, now }: { section: CatchUp; tz: string
                   </blockquote>
                 )}
                 <OpenInSlack permalink={r.permalink} />
+                <ReplyLink link={catchUpReplyLink(r, repliesOn, tz, now)} />
               </li>
             ))}
           </ul>
@@ -80,5 +101,20 @@ export function CatchUpList({ section, tz, now }: { section: CatchUp; tz: string
         )}
       </div>
     </SectionCard>
+  );
+}
+
+function ReplyLink({ link }: { link: ReturnType<typeof catchUpReplyLink> }) {
+  if (link === null) return null;
+  return (
+    <Link
+      href={link.href}
+      prefetch={false}
+      data-catchup-reply={link.kind}
+      className="inline-flex min-h-10 items-center gap-1 rounded-md border border-indigo-200 bg-white px-2 py-0.5 text-[11.5px] font-semibold text-indigo-700 hover:border-indigo-300 hover:text-indigo-900 sm:min-h-0"
+    >
+      <FilePen className="h-3 w-3" aria-hidden />
+      {link.label}
+    </Link>
   );
 }

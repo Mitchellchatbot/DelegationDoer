@@ -144,8 +144,9 @@ function richTextOf(blocks: unknown): string {
 }
 
 /** The message's text as the model reads it: wire format → plain, invisible characters out, whitespace normalized, his
- *  <@id> (with or without a label) as "@YOU". When `text` is empty, the rich_text blocks' text. Never stored. */
-function plainTextOf(m: Pick<SlackReadMessage, "text" | "blocks">, hisId: string): string {
+ *  <@id> (with or without a label) as "@YOU". When `text` is empty, the rich_text blocks' text. Never stored.
+ *  P10 (contract §3.13, B-P10-5; Area C): exported for the reply pack, the unknown check and the voice sampler; unchanged. */
+export function plainTextOf(m: Pick<SlackReadMessage, "text" | "blocks">, hisId: string): string {
   const raw = typeof m.text === "string" && m.text.trim() !== "" ? m.text : richTextOf(m.blocks);
   const you = USER_ID.test(hisId) ? raw.replace(new RegExp(`<@${hisId}(?:[|][^>]*)?>`, "g"), "@YOU") : raw;
   return normalizeWhitespace(sanitizeText(slackTextToPlain(you)));
@@ -154,8 +155,9 @@ function plainTextOf(m: Pick<SlackReadMessage, "text" | "blocks">, hisId: string
 // "[M3 …" at the start of a line (spaces allowed, any case) would look like one of our entry headers.
 const SLACK_HEADER_LIKE = /^([^\S\n]*)\[(?=[^\S\n]*m\d+(?![A-Za-z0-9_]))/gim;
 
-/** One character for one: a line that starts like "[M<n>" loses its "[" (P5a's neutralizer handles the tags and its own refs). */
-function defaceSlackHeaders(s: string): string {
+/** One character for one: a line that starts like "[M<n>" loses its "[" (P5a's neutralizer handles the tags and its own refs).
+ *  P10 (contract §3.13; Area C): exported for the reply pack; unchanged. */
+export function defaceSlackHeaders(s: string): string {
   return s.replace(SLACK_HEADER_LIKE, `$1${DEFACED}`);
 }
 
@@ -165,7 +167,8 @@ function defaceSlackHeaders(s: string): string {
 
 type Labels = ReadonlyMap<string, { label: string; briefTeamId: string | null; resolved: boolean }>;
 
-function placeholderOf(m: SlackReadMessage, ddBot: { userId: string | null; appId: string | null }, optedOut: ReadonlySet<string>):
+/** C49's placeholder rule for one fetched message. P10 (contract §3.13; Area C): exported for the reply pack; unchanged. */
+export function placeholderOf(m: SlackReadMessage, ddBot: { userId: string | null; appId: string | null }, optedOut: ReadonlySet<string>):
   TriageWindowMessage["placeholder"] {
   if (isDdTemplate(m.blocks, m.attachments) || (ddBot.userId !== null && m.user === ddBot.userId) || (ddBot.appId !== null && m.appId === ddBot.appId)) return "dd";
   if (isBotMessage({ bot_id: m.botId, bot_profile: m.botProfile ? {} : undefined, subtype: m.subtype, user: m.user }) || m.appId !== null) return "app";
@@ -187,6 +190,17 @@ function convLabelOf(convType: ChannelRow["convType"]): SlackTriageWindow["convL
 }
 
 const tsOrder = (a: SlackReadMessage, b: SlackReadMessage): number => tsToMs(a.ts) - tsToMs(b.ts) || (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0);
+
+/** P10 (contract §3.13, v1.1 correctness-12; Area C; pure): whether a fetched message may enter a reply pack: not a tombstone,
+ *  not hidden, and a subtype that is null or one of WINDOW_SUBTYPES. buildTriageWindow's own filter (below) applies the same
+ *  subtype and tombstone rule without the hidden one and is unchanged; only the reply pack uses this. */
+export function windowKeeps(m: Pick<SlackReadMessage, "subtype" | "hidden">): boolean {
+  if (m === null || typeof m !== "object") return false;
+  if (m.hidden === true) return false;
+  if (isTombstone({ subtype: m.subtype })) return false;
+  const subtype: unknown = m.subtype;
+  return subtype === null || subtype === undefined || (typeof subtype === "string" && WINDOW_SUBTYPES.has(subtype));
+}
 
 /** C49: every fetched message that isDdTemplate / is by ddBot.userId / carries ddBot.appId → placeholder "dd"; isBotMessage or
  *  any other app_id → "app"; author in optedOut → "optout"; such a message is never a candidate (its candidate row → `missing`

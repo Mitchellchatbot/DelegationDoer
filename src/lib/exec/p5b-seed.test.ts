@@ -28,9 +28,11 @@ describe("P5b seed: agent/types.ts", () => {
       "pending_approvals", "recurring_issues", "client_overview", "search_email", "get_email_thread",
       "list_commitments", "get_eod_reports", "propose_task", "create_draft", "get_source",
       // P7b stage 0 (§3.15, N16): tools 17-19, appended.
-      "search_slack", "slack_digest", "prepare_client_update"
+      "search_slack", "slack_digest", "prepare_client_update",
+      // P10 stage 0 (§3.6.1, C50, H8; p10-bindings.md): tool 20, appended (the name; Area C appends the registry entry).
+      "draft_slack_reply"
     ]);
-    expect(new Set(CHAT_TOOL_NAMES).size).toBe(19);
+    expect(new Set(CHAT_TOOL_NAMES).size).toBe(20);
   });
 });
 

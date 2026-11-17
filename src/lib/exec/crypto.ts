@@ -365,3 +365,88 @@ export function parseCheckinValue(value: string): { checkinId: string; rev: numb
   if (!Number.isSafeInteger(rev)) return null;
   return { checkinId: m[1], rev, mac: m[3] };
 }
+
+// ---------------------------------------------------------------------------
+// P10 reply-draft MAC (contract §3.5.10, C32, C38, B-P10-14 (b); Area D)
+//
+// mac = the first 32 hex characters of HMAC-SHA256(K, "exec-slack-reply:v1\n" + draftId + "\n" + version + "\n" + channelId +
+// "\n" + (replyThreadTs ?? "-") + "\n" + sha256hex(text.normalize("NFC"))), K = HKDF-SHA256(EXEC_TOKEN_KEY bytes, salt empty,
+// info "exec-mac:v1:slack-reply", 32 bytes): the check-in MAC's derivation with its own info, so a check-in value can never
+// pass for a reply value or the other way round. Always computed from the STORED row (its destination and its exact text),
+// never from a button's payload. replyButtonValue / replyMac are imported only by slack-reply-view.ts; verifyReplyMac only by
+// slack-reply-send.ts and handlers/slack-rdraft-act.ts (B-P10-14 (b)).
+// ---------------------------------------------------------------------------
+
+export interface ReplyMacFields { draftId: string; version: number; channelId: string; replyThreadTs: string | null; text: string }
+
+const REPLY_MAC_INFO = "exec-mac:v1:slack-reply";
+const REPLY_MAC_HEX = 32;
+const REPLY_MAC = /^[0-9a-f]{32}$/;
+const REPLY_DRAFT_ID = /^esr_[0-9a-f]{32}$/;
+const REPLY_VALUE_MAX = 200;
+
+/** The reply MAC's message: the fields joined by "\n" (no id may hold a newline: each is shaped). */
+function replyMacMessage(f: ReplyMacFields): string {
+  if (!f || typeof f.draftId !== "string" || typeof f.channelId !== "string" || typeof f.text !== "string" ||
+    typeof f.version !== "number" || !Number.isSafeInteger(f.version) || f.version < 0 ||
+    (f.replyThreadTs !== null && typeof f.replyThreadTs !== "string")) {
+    throw new TypeError("replyMac: the stored draft's id, version, channel, thread and text are required");
+  }
+  const thread = f.replyThreadTs === null ? "-" : f.replyThreadTs;
+  if ([f.draftId, f.channelId, thread].some((s) => s.length === 0 || /[\r\n]/.test(s))) throw new TypeError("replyMac: an id is malformed");
+  const textHash = createHash("sha256").update(f.text.normalize("NFC"), "utf8").digest("hex");
+  return `exec-slack-reply:v1\n${f.draftId}\n${f.version}\n${f.channelId}\n${thread}\n${textHash}`;
+}
+
+function replyMacWith(key: Key, message: string): string {
+  const k = Buffer.from(hkdfSync("sha256", key.bytes, Buffer.alloc(0), REPLY_MAC_INFO, 32));
+  return createHmac("sha256", k).update(message, "utf8").digest("hex").slice(0, REPLY_MAC_HEX);
+}
+
+/** 32 hex of HMAC-SHA256(HKDF(EXEC_TOKEN_KEY, info "exec-mac:v1:slack-reply"), the message above). Always from the STORED row.
+ *  SecretUnavailableError propagates (no key, no value). */
+export function replyMac(f: ReplyMacFields): string {
+  const message = replyMacMessage(f);
+  const { current } = keyring();
+  return replyMacWith(current, message);
+}
+
+/** Current key, then EXEC_TOKEN_KEY_PREVIOUS; every key checked (no early exit); timingSafeEqual; a non-32-hex mac → false.
+ *  SecretUnavailableError (a missing or broken key config) propagates: an outage to report, not a bad click. */
+export function verifyReplyMac(f: ReplyMacFields, mac: string): boolean {
+  const { all } = keyring();
+  if (typeof mac !== "string" || !REPLY_MAC.test(mac)) return false;
+  let message: string;
+  try {
+    message = replyMacMessage(f);
+  } catch {
+    return false;
+  }
+  const given = Buffer.from(mac, "ascii");
+  let valid = false;
+  // Every key is checked (no early exit), so the timing doesn't say which key matched.
+  for (const key of all) {
+    const want = Buffer.from(replyMacWith(key, message), "ascii");
+    if (want.length === given.length && timingSafeEqual(want, given)) valid = true;
+  }
+  return valid;
+}
+
+/** "r1.<esr_…>.<version>.<mac>" (≤ 90 characters; P6's RPC 2 value pattern and v3's reply pattern accept it). */
+export function replyButtonValue(f: ReplyMacFields): string {
+  if (!f || typeof f.draftId !== "string" || !REPLY_DRAFT_ID.test(f.draftId)) throw new TypeError("replyButtonValue: a reply draft id (esr_…) is required");
+  if (typeof f.version !== "number" || !Number.isSafeInteger(f.version) || f.version < 0 || f.version > 9999) {
+    throw new TypeError("replyButtonValue: version must be 0..9999");
+  }
+  return `r1.${f.draftId}.${f.version}.${replyMac(f)}`;
+}
+
+/** The inverse of replyButtonValue's shape (SLACK_VALUE_RE.reply); null on anything else. Checks no MAC. */
+export function parseReplyValue(value: string): { draftId: string; version: number; mac: string } | null {
+  if (typeof value !== "string" || value.length > REPLY_VALUE_MAX) return null;
+  const m = SLACK_VALUE_RE.reply.exec(value);
+  if (!m) return null;
+  const version = Number(m[2]);
+  if (!Number.isSafeInteger(version)) return null;
+  return { draftId: m[1], version, mac: m[3] };
+}

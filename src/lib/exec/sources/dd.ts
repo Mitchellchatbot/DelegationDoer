@@ -44,6 +44,7 @@ import type {
   TouchpointLabel,
   UserRole
 } from "@/lib/exec/sources/dd-types";
+import type { FbLeadListRow } from "@/lib/exec/slack-p10-types";
 import type { ExecPrincipal } from "@/lib/exec/types";
 
 // Company-wide reads of DD's own tables for the assistant (plan §3 "DD data").
@@ -1879,6 +1880,49 @@ export async function listFbLeadChannels(principal: ExecPrincipal, opts?: DdRead
   }
   return out;
 }
+/** P10 (contract §2.1.3, §3.4.3, C20; Area B): the typed list's v2 rows (task id, DD client id and label). */
+const FB_TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const FB_CLIENT_ID = /^[A-Za-z0-9_.:-]{1,64}$/;
+/** channelSlug's form (the function's names are slugs; exec_slack_fb_lead_channels_v2 keeps only these). */
+const FB_SLUG_NAME = /^[a-z0-9][a-z0-9-]{0,79}$/;
+const FB_LABEL_MAX = 120;
+const FB_LABEL_FALLBACK = "Unnamed onboarding";
+
+/** RPC exec_slack_fb_lead_channels_v2() (§2.1.3). Any error → DdReadError (the lead run skips; nothing changes). Rows with a
+ *  malformed taskId are dropped; clientLabel is clipped to 120; name must match channelSlug's form; channelId ^[CG]. v1.1: `i` =
+ *  the row's position among its task's rows in the returned order (counted before any row is dropped, so it is stable). The only
+ *  caller of the v2 function (B-P10-1); its names are DD data typed on the FB onboarding cards, never Slack's. */
+export async function listFbLeadChannelsV2(principal: ExecPrincipal, opts?: DdReadOptions): Promise<FbLeadListRow[]> {
+  void principal;
+  let query = getSupabaseAdmin().rpc("exec_slack_fb_lead_channels_v2");
+  if (opts?.signal) query = query.abortSignal(opts.signal);
+  const { data, error } = await query;
+  if (error) throw new DdReadError("exec_slack_fb_lead_channels_v2", codeOf(error));
+  if (!Array.isArray(data)) throw new DdReadError("exec_slack_fb_lead_channels_v2", "the response carried no rows");
+  const positions = new Map<string, number>();
+  const out: FbLeadListRow[] = [];
+  for (const row of data as unknown[]) {
+    const r = (typeof row === "object" && row !== null ? row : {}) as {
+      task_id?: unknown; client_id?: unknown; client_label?: unknown; name?: unknown; channel_id?: unknown;
+    };
+    const taskId = typeof r.task_id === "string" ? r.task_id : null;
+    // The position counts every row of the task in the returned order, before any row is dropped.
+    let i = -1;
+    if (taskId !== null) {
+      i = positions.get(taskId) ?? 0;
+      positions.set(taskId, i + 1);
+    }
+    if (taskId === null || !FB_TASK_ID.test(taskId)) continue;
+    const name = typeof r.name === "string" && FB_SLUG_NAME.test(r.name) ? r.name : null;
+    const channelId = typeof r.channel_id === "string" && SLACK_CHANNEL_ID.test(r.channel_id) ? r.channel_id : null;
+    if (name === null && channelId === null) continue;
+    const clientId = typeof r.client_id === "string" && FB_CLIENT_ID.test(r.client_id) ? r.client_id : null;
+    const label = typeof r.client_label === "string" ? r.client_label.trim().slice(0, FB_LABEL_MAX).trim() : "";
+    out.push({ taskId, clientId, clientLabel: label.length > 0 ? label : FB_LABEL_FALLBACK, name, channelId, i });
+  }
+  return out;
+}
+
 /** workspace_settings: client_email_channel_id where id = 'workspace' (20260814000000_client_email_slack_notifs.sql:12-21). */
 export async function getClientEmailChannelId(principal: ExecPrincipal, opts?: DdReadOptions): Promise<string | null> {
   void principal;

@@ -23,6 +23,7 @@ import { enqueueJob, isJobLive } from "@/lib/exec/jobs";
 import { notifyOps } from "@/lib/exec/ops";
 import { loadSettings } from "@/lib/exec/principal";
 import { appOrigin } from "@/lib/exec/refs";
+import { briefLeadsVisible } from "@/lib/exec/slack-leads-view";
 import { asSlackApiError, dmPost, dmRead, errLabel } from "@/lib/exec/slack-dm";
 import { openActiveInstallation, recordSlackPost } from "@/lib/exec/slack-install";
 import type { OpenInstallation, SlackMessageParts } from "@/lib/exec/slack-types";
@@ -309,13 +310,15 @@ async function deliverFull(principal: ExecPrincipal, payload: BriefDeliverPayloa
     return moved ? result("page_only", "page_only", "screen_unavailable", row.postAttempts, "none") : { skipped: "not_won" };
   }
   // 6 (before the CAS: pure, so a render failure never counts a post).
+  const leadsVisible = await briefLeadsVisible(principal, settings);
   if (row.content === null) {
     const moved = await toPageOnly(row, from, "delivery_failed", "no_content");
     return moved ? result("page_only", "page_only", "delivery_failed", row.postAttempts, "none") : { skipped: "not_won" };
   }
   let parts: SlackMessageParts;
   try {
-    parts = renderBriefDm(briefDmToView(row.content, { tz: row.tz, briefHref: briefHref(), screen }));
+    // P10 (§3.8 item 7, C56): the lead block shows only while lead counts are on and reading is live (or the read failed).
+    parts = renderBriefDm(briefDmToView(row.content, { tz: row.tz, briefHref: briefHref(), screen, leadsVisible }));
   } catch (err) {
     await toPageOnly(row, from, "delivery_failed", "dm_over_budget");
     console.error(`[exec-brief] brief DM over budget (brief ${row.id}): ${errLabel(err)}`);

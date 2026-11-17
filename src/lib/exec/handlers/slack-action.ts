@@ -42,6 +42,8 @@ type Family = "draft" | "proposal" | "feedback";
 // P8 (stage-0 seed, §3.21.3): the check-in buttons are SlackActionIds too, but they never reach exec.slack-action (P8's
 // RPC 2 v2 enqueues exec.checkin-send / exec.checkin-rewrite), so they have no family here and a payload naming one is
 // refused like an unknown action.
+// P10 (stage-0 seed, §3.5.10): the reply-draft buttons likewise never reach exec.slack-action (P10's RPC 2 v3 enqueues
+// P10_JOB_KINDS.replySend / .replyAct), so they have no family either.
 const FAMILY: Readonly<Record<SlackActionId, Family | null>> = Object.freeze({
   ea_draft_save: "draft",
   ea_draft_regen: "draft",
@@ -51,7 +53,10 @@ const FAMILY: Readonly<Record<SlackActionId, Family | null>> = Object.freeze({
   ea_fb_up: "feedback",
   ea_fb_down: "feedback",
   ea_ci_send: null,
-  ea_ci_rewrite: null
+  ea_ci_rewrite: null,
+  ea_sr_send: null,
+  ea_sr_rewrite: null,
+  ea_sr_discard: null
 });
 
 /** The payload RPC 2 wrote, shape-checked; null for anything else. */

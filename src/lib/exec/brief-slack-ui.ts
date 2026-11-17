@@ -8,6 +8,9 @@ import { chunkMrkdwn, escapeMrkdwn, safeMrkdwn, sanitizeChars, section, slackLin
 import { SLACK_LIMITS } from "@/lib/exec/slack-types";
 import type { MrkdwnText, PlainText, SlackBlock, SlackButton, SlackMessageParts } from "@/lib/exec/slack-types";
 import type { SourceRef } from "@/lib/exec/types";
+import { briefLeadsText } from "@/lib/exec/slack-leads";
+import type { BriefLeadsBlock } from "@/lib/exec/slack-p10-types";
+import { P10_LIMITS } from "@/lib/exec/slack-p10-types";
 
 // P8 Block Kit (contract §3.16, C25, M7; Area D; pure, B-P8-5): every Slack message P8 emits, built only from P6's
 // slack-ui primitives (section, safeMrkdwn, escapeMrkdwn, slackLink, chunkMrkdwn): every mrkdwn text verbatim, every
@@ -15,6 +18,10 @@ import type { SourceRef } from "@/lib/exec/types";
 // answers null for anything else, and then no link is printed at all, never a raw URL). unfurl_links / unfurl_media off is
 // postInDm's job. The top-level text of every message is a fixed neutral string (its copy), never content, except
 // renderCheckinPost (his own note is the notification).
+//
+// P10 (contract §3.8 item 6, C56): the "Leads yesterday" section, right after the top 3, built from the stored content.leads
+// (counts and DD labels only) by slack-leads.ts' briefLeadsText, the one rule the page shares; labels through
+// escapeMrkdwn(sanitizeChars(…)) (DD data, never a link); shown only when briefDmToView's opts.leadsVisible is true.
 
 export interface BriefDmView {
   prettyDate: string;                       // "Friday, Nov 6" in the brief zone
@@ -28,6 +35,8 @@ export interface BriefDmView {
   restrictedEmail: number | null;
   briefHref: string;                        // appOrigin() + "/executive/brief"
   generatedAt: string; tz: string;
+  /** P10 (§3.8 item 6, C56; stage-0 seed): content.leads, copied only when briefDmToView's opts.leadsVisible is true. */
+  leads?: BriefLeadsBlock | null;
 }
 
 // --- small pieces ------------------------------------------------------------------------------
@@ -102,7 +111,7 @@ function stateLineOf(s: BriefSectionContent): string | null {
 /** content → view: drops scrubbed lines' links, keeps each line's first ref whose url passes isAllowedLinkUrl (else null).
  *  opts.screen (§3.17.7, intel-13): a withheld item renders removedRestricted / removedSlack / removedUnavailable (P9) with no link; withheld pending lines and
  *  top-3 entries are left out; headline null when screen.hideHeadline. Pure (BriefScreen is an `import type`). */
-export function briefDmToView(content: BriefContent, opts: { tz: string; briefHref: string; screen: BriefScreen }): BriefDmView {
+export function briefDmToView(content: BriefContent, opts: { tz: string; briefHref: string; screen: BriefScreen; leadsVisible?: boolean }): BriefDmView {
   const screen = opts.screen;
   const withheldItems = screen?.items ?? new Map<string, BriefWithheldReason>();
   const withheldPending = screen?.pending ?? new Set<string>();
@@ -141,7 +150,7 @@ export function briefDmToView(content: BriefContent, opts: { tz: string; briefHr
     .map((t) => ({ title: t.title, next: typeof t.next === "string" && t.next.trim().length > 0 ? t.next : null, href: firstHref(t.refs) }));
 
   const c = content.counts;
-  return {
+  const view: BriefDmView = {
     prettyDate: briefPrettyDate(content.localDate),
     modeLine,
     headline,
@@ -153,6 +162,20 @@ export function briefDmToView(content: BriefContent, opts: { tz: string; briefHr
     generatedAt: content.builtAt,
     tz: opts.tz
   };
+  // P10 (§3.8 item 6): content.leads only when the caller says the block is visible (lead counts on, reading live).
+  const leads = content.leads;
+  if (opts.leadsVisible === true && leads !== null && leads !== undefined && typeof leads === "object") view.leads = leads;
+  return view;
+}
+
+/** P10 (§3.8 item 6, C56): the leads section's mrkdwn, or null when the view carries no block. One section (≤ 3,000
+ *  characters: labels clipped, ≤ leadDmRows client lines). */
+function leadsSection(leads: BriefLeadsBlock | null | undefined): string | null {
+  if (leads === null || leads === undefined || typeof leads !== "object") return null;
+  const { title, lines } = briefLeadsText(leads, { maxRows: P10_LIMITS.leadDmRows, labelMax: LABEL_MAX, datePhrase: briefPrettyDate(leads.localDate) });
+  const text = (s: string) => escapeMrkdwn(sanitizeChars(s));
+  const body = lines.map((l) => (l.kind === "client" ? `• ${text(l.text)}` : text(l.text)));
+  return [`*${text(title)}*`, ...body].join("\n");
 }
 
 type DmSection = BriefDmView["sections"][number];
@@ -186,6 +209,9 @@ function briefBlocks(v: BriefDmView, sections: readonly DmSection[]): SlackBlock
     });
     for (const piece of chunkMrkdwn(`*${escapeMrkdwn(BRIEF_COPY.top3Title)}*\n${lines.join("\n")}`)) blocks.push(section(piece));
   }
+  // P10 (§3.8 item 6): the leads section after the top 3, before the divider.
+  const leads = leadsSection(v.leads);
+  if (leads !== null) blocks.push(section(leads));
   blocks.push(divider());
   for (const s of sections) {
     const body = sectionBody(s);

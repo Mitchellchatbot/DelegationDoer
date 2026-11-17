@@ -28,6 +28,8 @@ import type { OwnerHomeBrief } from "@/lib/exec/slack-ui";
 import { listUsers } from "@/lib/exec/sources/dd";
 import { addLocalDays, localDateString } from "@/lib/exec/time";
 import type { ExecPrincipal, ExecSettings, SourceRef } from "@/lib/exec/types";
+import type { BriefLeadsBlock } from "@/lib/exec/slack-p10-types";
+import { briefLeadsVisible } from "@/lib/exec/slack-leads-view";
 
 // P8 brief views (contract §3.17.1, M3-M5, M12, C31, C41, C42; Area E; server-only): the page, the Overview card, the header
 // pill, the App Home line and the System card row. Every stored line goes through brief-screen.ts screenBriefContent at
@@ -52,6 +54,8 @@ export interface BriefContentView {
       refs: { label: string; href: string | null }[]; withheld: BriefWithheldReason | null }[];
     pending: { title: string; withheld: boolean }[]; unchanged: number; more: number; stats: Record<string, number> }[];
   restrictedEmail: number | null; financeHref: "/finance";
+  /** P10 (§3.8 items 1, 7, C56; stage-0 seed): the "Leads yesterday" card's block, present only when visible. */
+  leads?: BriefLeadsBlock | null;
 }
 
 export interface CheckinPageRow { id: string; firstName: string; text: string; status: CheckinStatus; statusLine: string; sentAt: string | null }
@@ -227,7 +231,7 @@ const STAT_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,40}$/;
  * Sections come in BRIEF_SECTION_KEYS order; a section the content lacks is left out. stats keeps the named counters (never
  * the gather's dropped count, which `more` carries).
  */
-export function briefContentView(content: BriefContent, screen: BriefScreen): BriefContentView {
+export function briefContentView(content: BriefContent, screen: BriefScreen, opts?: { leadsVisible?: boolean }): BriefContentView {
   const reasonKey = content.mode === "deterministic" && content.modeReason !== null && content.modeReason in BRIEF_COPY.modeReason ? content.modeReason : "model_error";
   const modeLine = content.mode === "ai" ? BRIEF_COPY.modeAi : fillBrief(BRIEF_COPY.modeDeterministic, { reason: BRIEF_COPY.modeReason[reasonKey] });
   const itemReason = new Map<string, BriefWithheldReason>();
@@ -275,7 +279,7 @@ export function briefContentView(content: BriefContent, screen: BriefScreen): Br
     return { title: t.title, next: t.next ?? null, href, withheld: false };
   });
   const restricted = content.counts?.restrictedEmail;
-  return {
+  const view: BriefContentView = {
     headline: screen.hideHeadline || content.headlineScrubbed === true || typeof content.headline !== "string" ? null : content.headline,
     modeLine,
     top3,
@@ -283,6 +287,10 @@ export function briefContentView(content: BriefContent, screen: BriefScreen): Br
     restrictedEmail: typeof restricted === "number" && Number.isFinite(restricted) ? restricted : null,
     financeHref: "/finance"
   };
+  // P10 (§3.8 item 7, C56): the "Leads yesterday" card's block, only when visible (the DM's rule).
+  const leads = content.leads;
+  if (opts?.leadsVisible === true && leads !== null && leads !== undefined && typeof leads === "object") view.leads = leads;
+  return view;
 }
 
 type CheckinStatusKey = keyof typeof BRIEF_COPY.checkinStatus;
@@ -355,12 +363,13 @@ function todayOf(principal: ExecPrincipal, settings: ExecSettings, now: Date): T
 
 /** C31: one screen over the content; a failed screen read → withholdAllEmail plus the Slack rule (slackIntelState never throws).
  *  Exported (additive) for the dry run, which screens its unpersisted content exactly as the page does (UI12). */
-export async function screenedContent(principal: ExecPrincipal, settings: ExecSettings, content: BriefContent, now: Date): Promise<BriefContentView> {
+export async function screenedContent(principal: ExecPrincipal, settings: ExecSettings, content: BriefContent, now: Date,
+  opts?: { leadsVisible?: boolean }): Promise<BriefContentView> {
   const r = await screenBriefContent(principal, settings, content, { now });
-  if (r.ok) return briefContentView(content, r.screen);
+  if (r.ok) return briefContentView(content, r.screen, opts);
   console.warn(`[exec-brief] principal ${principal.id} screen_unavailable at render`);
   const slackOk = (await slackIntelState(principal, settings)) === "ok";
-  return briefContentView(content, withholdAllEmail(content, slackOk));
+  return briefContentView(content, withholdAllEmail(content, slackOk), opts);
 }
 
 const firstWord = (v: unknown): string => (typeof v === "string" ? (v.trim().split(/\s+/)[0] ?? "").slice(0, 40) : "");
@@ -420,7 +429,9 @@ export async function getBriefPageView(principal: ExecPrincipal, now: Date): Pro
     return briefIsLate(today.dueAt, now) ? { ...base, state: "none", late: true } : { ...base, state: "none" };
   }
   const state: BriefPageState = row.status === "building" ? "building" : row.status === "failed" ? "failed" : "ready";
-  const content = row.content !== null && row.status !== "building" ? await screenedContent(principal, settings, row.content, now) : null;
+  // P10 (§3.8 item 7): the leads card follows the DM's visibility rule.
+  const leadsVisible = row.content !== null && row.content.leads != null ? await briefLeadsVisible(principal, settings) : false;
+  const content = row.content !== null && row.status !== "building" ? await screenedContent(principal, settings, row.content, now, { leadsVisible }) : null;
   const checkins = await pageCheckins(principal, row, today.tz);
   return {
     ...base,

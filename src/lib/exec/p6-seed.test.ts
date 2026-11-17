@@ -45,7 +45,9 @@ describe("P6 seed: slack-types.ts (§3.1)", () => {
       uninstall: "exec.slack-uninstall", sweep: "exec.slack-sweep", dmPurge: "exec.slack-dm-purge"
     });
     // P8 stage 0 (§3.21.3, p8-bindings.md AM-P8-31): the brief's two check-in buttons follow P6's seven (enqueued by P8's v2).
-    expect([...SLACK_ACTION_IDS]).toEqual(["ea_draft_save", "ea_draft_regen", "ea_card_refresh", "ea_task_create", "ea_task_dismiss", "ea_fb_up", "ea_fb_down", "ea_ci_send", "ea_ci_rewrite"]);
+    // P10 stage 0 (§3.5.10, p10-bindings.md): the reply-draft card's three buttons follow (enqueued by P10's v3).
+    expect([...SLACK_ACTION_IDS]).toEqual(["ea_draft_save", "ea_draft_regen", "ea_card_refresh", "ea_task_create", "ea_task_dismiss", "ea_fb_up", "ea_fb_down", "ea_ci_send", "ea_ci_rewrite",
+      "ea_sr_send", "ea_sr_rewrite", "ea_sr_discard"]);
     expect(Object.isFrozen(SLACK_LIMITS) && Object.isFrozen(SLACK_RE) && Object.isFrozen(SLACK_VALUE_RE) && Object.isFrozen(SLACK_JOB_KINDS)).toBe(true);
   });
 

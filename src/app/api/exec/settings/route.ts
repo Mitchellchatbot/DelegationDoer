@@ -3,9 +3,10 @@ import { z } from "zod";
 import { requireExecPrincipal } from "@/lib/exec/access";
 import { assertSameOrigin, jsonAnswer, jsonError, rateLimit, readJsonBodyOrError, runAudited } from "@/lib/exec/http";
 import { loadSettings, settingsSchemaFlags } from "@/lib/exec/principal";
-import { getSettingsView, updateSettings } from "@/lib/exec/settings";
+import { SETTINGS_CONFIRMS, getSettingsView, updateSettings } from "@/lib/exec/settings";
 import { SETTINGS_FIELDS, isSettingsFieldInstalled, validateSettingsField, type SettingsPatch } from "@/lib/exec/settings-fields";
-import type { ExecPrincipal } from "@/lib/exec/types";
+import { afterSlackP10Settings } from "@/lib/exec/slack-p10-settings";
+import type { ExecPrincipal, ExecSettings } from "@/lib/exec/types";
 import type { SettingsView } from "@/lib/exec/view-types";
 
 // GET /api/exec/settings: the Settings page model. PATCH: change the
@@ -45,8 +46,8 @@ const PatchBody = z
         }
       }),
     expectedVersion: z.string().max(64).regex(VERSION_RE).nullable(),
-    // P7a (§3.2, N20; AM-P7a-9): turning Slack reading on takes its own notice confirmation.
-    confirm: z.enum(["ddtext_notice", "slack_reading_notice"]).optional()
+    // P7a (§3.2, N20; AM-P7a-9): turning Slack reading on takes its own notice confirmation; P10 (§3.7.3) adds four.
+    confirm: z.enum(SETTINGS_CONFIRMS).optional()
   })
   .strict();
 
@@ -97,8 +98,11 @@ export async function PATCH(req: Request) {
   const { expectedVersion, confirm } = parsed.data;
 
   let schema: ReturnType<typeof settingsSchemaFlags>;
+  // P10 (§3.7.4): the settings read for the schema check is the "before" of the side effects.
+  let before: ExecSettings;
   try {
-    schema = settingsSchemaFlags(await loadSettings(principal.id));
+    before = await loadSettings(principal.id);
+    schema = settingsSchemaFlags(before);
   } catch (err) {
     console.error(`[exec-settings] ${PATCH_ROUTE} settings read failed: ${errMessage(err)}`);
     return jsonError(503, "unavailable");
@@ -117,6 +121,15 @@ export async function PATCH(req: Request) {
   );
   if (!audited.ok) return audited.response;
   const result = audited.value;
+
+  if (result.outcome === "updated") {
+    // P10 (§3.3.4, §3.7.4): the switches' side effects, after a successful write only; best effort, never changes the answer.
+    try {
+      await afterSlackP10Settings(principal, before, result.snapshot.settings, now);
+    } catch (err) {
+      console.error(`[exec-settings] ${PATCH_ROUTE} P10 side effects failed: ${err instanceof Error ? err.name : "error"}`);
+    }
+  }
 
   switch (result.outcome) {
     case "updated":

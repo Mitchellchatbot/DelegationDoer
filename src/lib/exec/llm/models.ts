@@ -33,7 +33,10 @@ export const EXEC_MODELS: Readonly<Record<ExecLlmFeature, ExecModelId>> = Object
   // P7a (contract §3.20.1): Slack triage. Not streamed, not cached by default.
   slack_triage: HAIKU_MODEL,
   // P8 (contract §3.21.1; stage-0 seed, then Area C's): the brief's check-in notes. Not streamed, not cached by default.
-  checkin: OPUS_MODEL
+  checkin: OPUS_MODEL,
+  // P10 (contract §3.12, C26, C25; stage-0 seed, lead, then Area C's): Slack reply drafts and his Slack style profile.
+  slack_reply: OPUS_MODEL,
+  slack_voice: HAIKU_MODEL
 });
 
 // Set explicitly on every request: both 5.5 models default to "medium", and a
@@ -48,7 +51,10 @@ export const FEATURE_EFFORT: Readonly<Record<ExecLlmFeature, Effort>> = Object.f
   ddtext: "low",
   slack_triage: "low",
   brief: "high",
-  checkin: "medium"
+  checkin: "medium",
+  // P10 (contract §3.12; stage-0 seed): C26 medium, C25 low.
+  slack_reply: "medium",
+  slack_voice: "low"
 });
 
 // Output ceilings, not spend: a call bills only what it generates. Thinking is
@@ -68,7 +74,10 @@ export const FEATURE_MAX_TOKENS: Readonly<Record<ExecLlmFeature, number>> = Obje
   spike: 4000,
   ddtext: 4000,
   slack_triage: 4000,
-  checkin: 4000
+  checkin: 4000,
+  // P10 (contract §3.12; stage-0 seed): C26's 8,000 (P10_LIMITS.replyMaxTokens), C25's 4,000 (voiceMaxTokens).
+  slack_reply: 8000,
+  slack_voice: 4000
 });
 
 /** USD per million tokens. */

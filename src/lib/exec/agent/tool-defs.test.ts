@@ -12,6 +12,10 @@ import { buildExecRequest, type ExecToolDef } from "@/lib/exec/llm/request";
 const SOURCE = readFileSync(new URL("./tool-defs.ts", import.meta.url), "utf8");
 const ALLOWED = new Set(["type", "enum", "description", "properties", "required", "additionalProperties"]);
 
+/** P10 (§3.6.1-§3.6.2, AM-P10-16): TOOLS_VERSION moved once, with draft_slack_reply (Area C) and Area B's two lead-count
+ *  description sentences (§3.6.2's exact text, in get_overview and client_overview). */
+const P10_TOOLS_VERSION = "c47cb8e2c3b4361c";
+
 type Node = Record<string, unknown>;
 function nodes(schema: unknown, path = "input_schema", out: { path: string; node: Node }[] = []): { path: string; node: Node }[] {
   if (typeof schema !== "object" || schema === null || Array.isArray(schema)) return out;
@@ -22,17 +26,19 @@ function nodes(schema: unknown, path = "input_schema", out: { path: string; node
 }
 
 describe("the strict budget (test 1)", () => {
-  it("16 tools, zero optional, zero unions, nothing forbidden; with P7's two tools still inside the API's limits", () => {
+  it("20 tools, zero optional, zero unions, nothing forbidden; the registry is full (CT02)", () => {
     const b = strictBudget(CHAT_TOOL_DEFS);
-    // P7b stage 0 (§3.15.1, N16, §1.3 #1): 19 of 20; one slot stays for P8/P9.
-    expect(b).toEqual({ tools: 19, optional: 0, unions: 0, forbidden: [] });
+    // P7b stage 0 (§3.15.1, N16, §1.3 #1): 19 of 20. P10 (§3.6.1, C50, H8; Area C): draft_slack_reply took the last slot.
+    expect(b).toEqual({ tools: 20, optional: 0, unions: 0, forbidden: [] });
     expect(b.tools).toBeLessThanOrEqual(20);
     const p7 = (name: string): ExecToolDef => ({ name, description: "P7", input_schema: { type: "object", properties: { q: { type: "string" } }, required: ["q"], additionalProperties: false }, strict: true });
-    // P7b stage 0: P7's tools are in the registry now; the one slot left (P8/P9) still fits the API's limits.
-    const withP7 = strictBudget([...CHAT_TOOL_DEFS, p7("next_phase_tool")]);
-    expect(withP7.tools).toBeLessThanOrEqual(20);
-    expect(withP7.optional).toBeLessThanOrEqual(24);
-    expect(withP7.unions).toBeLessThanOrEqual(16);
+    // P10 CT02: no headroom is left: one more strict tool would be 21 > 20, past the API's per-request limit, so a later
+    // tool must merge into an existing one (§7.5). The optional and union budgets are still untouched.
+    const withOneMore = strictBudget([...CHAT_TOOL_DEFS, p7("next_phase_tool")]);
+    expect(withOneMore.tools).toBe(21);
+    expect(withOneMore.tools).toBeGreaterThan(20);
+    expect(withOneMore.optional).toBeLessThanOrEqual(24);
+    expect(withOneMore.unions).toBeLessThanOrEqual(16);
   });
 
   it("counts what it should: optional params, unions and forbidden keywords", () => {
@@ -72,6 +78,7 @@ describe("every schema (test 2)", () => {
 
 describe("names and order (test 3)", () => {
   it("equal CHAT_TOOL_NAMES; no excluded or acting tool", () => {
+    // P10 (§3.6.1; Area C): draft_slack_reply's entry is appended, so the registry equals the names again.
     expect(CHAT_TOOLS.map((t) => t.name)).toEqual([...CHAT_TOOL_NAMES]);
     expect(CHAT_TOOL_DEFS.map((d) => d.name)).toEqual([...CHAT_TOOL_NAMES]);
     for (const excluded of ["search_inbox", "list_client_recent_emails", "propose_email", "create_task", "remember", "forget", "get_my_calendar"]) {
@@ -133,8 +140,9 @@ describe("version, labels, descriptions (test 6)", () => {
     const json = JSON.stringify(CHAT_TOOL_DEFS);
     expect(TOOLS_VERSION).toBe(createHash("sha256").update(json, "utf8").digest("hex").slice(0, 16));
     // The pin moves only when a definition changes (the cached prefix changes with it).
-    // P7b stage 0: tools 17-19 appended (e2f5be0f92be1f15 → 412de02dba59ab78); P7b D3: list_commitments' description.
-    expect(TOOLS_VERSION).toBe("00dd2f88e6831f97");   // fixer security-6 / ui-4: the Slack-commitment wording moved it
+    // P7b stage 0: tools 17-19 appended (e2f5be0f92be1f15 → 412de02dba59ab78); P7b D3: list_commitments' description;
+    // fixer security-6 / ui-4: the Slack-commitment wording moved it to 00dd2f88e6831f97.
+    expect(TOOLS_VERSION).toBe(P10_TOOLS_VERSION);
     for (const s of ["", "abc", "é → ‹", "x".repeat(1000), String.fromCodePoint(0x1f600)]) {
       expect(sha256Hex(s)).toBe(createHash("sha256").update(s, "utf8").digest("hex"));
     }
@@ -142,17 +150,18 @@ describe("version, labels, descriptions (test 6)", () => {
 
   it("labels non-empty and unique; descriptions non-empty; timeouts as §3.10; deep-frozen", () => {
     const labels = CHAT_TOOLS.map((t) => t.label);
-    expect(new Set(labels).size).toBe(19);
+    expect(new Set(labels).size).toBe(20);
     for (const t of CHAT_TOOLS) {
       expect(t.label.length).toBeGreaterThan(0);
       expect(t.def.description.length).toBeGreaterThan(40);
     }
     const slow = CHAT_TOOLS.filter((t) => t.timeoutMs === 40_000).map((t) => t.name);
-    expect(slow).toEqual(["project_health", "client_overview", "search_email", "get_email_thread", "create_draft", "get_source", "search_slack"]);
+    // P10 (C50): draft_slack_reply is a 40 s staged tool.
+    expect(slow).toEqual(["project_health", "client_overview", "search_email", "get_email_thread", "create_draft", "get_source", "search_slack", "draft_slack_reply"]);
     // P7b stage 0 (C21): prepare_client_update's own 60 s class.
     expect(CHAT_TOOLS.filter((t) => t.timeoutMs === 60_000).map((t) => t.name)).toEqual(["prepare_client_update"]);
     expect(CHAT_TOOLS.filter((t) => t.usesEmail).map((t) => t.name)).toEqual(["search_email", "get_email_thread", "list_commitments", "create_draft", "prepare_client_update"]);
-    expect(CHAT_TOOLS.filter((t) => t.kind === "staged").map((t) => t.name)).toEqual(["propose_task", "create_draft", "prepare_client_update"]);
+    expect(CHAT_TOOLS.filter((t) => t.kind === "staged").map((t) => t.name)).toEqual(["propose_task", "create_draft", "prepare_client_update", "draft_slack_reply"]);
     expect(Object.isFrozen(CHAT_TOOLS)).toBe(true);
     expect(Object.isFrozen(CHAT_TOOL_DEFS[0].input_schema.properties)).toBe(true);
   });
@@ -170,12 +179,13 @@ describe("the request guard (test 7)", () => {
 describe("P7b's three Slack tools (TL01, TL02, TL04, TL12)", () => {
   const CHANNELS = JSON.parse(readFileSync(new URL("../__tests__/fixtures/slack-intel/channels.json", import.meta.url), "utf8")) as { rows: Record<string, { name: string | null; channelId: string }> };
 
-  it("TL01 the registry: 19 tools in order (17-19 after get_source), 55 parameters, no optional, no union, nothing forbidden; no enum holds data", () => {
+  it("TL01 the registry: 20 tools in order (17-19 after get_source, P10's 20th last), 56 parameters, no optional, no union, nothing forbidden; no enum holds data", () => {
+    // P10 (§3.6.1, C50; Area C's TL01 re-pin, CT01): draft_slack_reply is the 20th tool, its one parameter the 56th.
     expect(CHAT_TOOLS.map((t) => t.name)).toEqual([...CHAT_TOOL_NAMES]);
-    expect(CHAT_TOOLS.map((t) => t.name).slice(15)).toEqual(["get_source", "search_slack", "slack_digest", "prepare_client_update"]);
-    expect(strictBudget(CHAT_TOOL_DEFS)).toEqual({ tools: 19, optional: 0, unions: 0, forbidden: [] });
+    expect(CHAT_TOOLS.map((t) => t.name).slice(15)).toEqual(["get_source", "search_slack", "slack_digest", "prepare_client_update", "draft_slack_reply"]);
+    expect(strictBudget(CHAT_TOOL_DEFS)).toEqual({ tools: 20, optional: 0, unions: 0, forbidden: [] });
     const params = CHAT_TOOL_DEFS.reduce((n, d) => n + Object.keys(d.input_schema.properties ?? {}).length, 0);
-    expect(params).toBe(55);
+    expect(params).toBe(56);
     const all = JSON.stringify(CHAT_TOOL_DEFS);
     for (const row of Object.values(CHANNELS.rows)) {
       if (row.name) expect(all).not.toContain(row.name);
@@ -200,9 +210,10 @@ describe("P7b's three Slack tools (TL01, TL02, TL04, TL12)", () => {
     const again = createHash("sha256").update(JSON.stringify(JSON.parse(JSON.stringify(CHAT_TOOL_DEFS))), "utf8").digest("hex").slice(0, 16);
     expect(again).toBe(TOOLS_VERSION);
     // Integrator (mutant M22): it changed exactly once, to P7b's static registry, which holds the three Slack tools in every
-    // state (N16): a registry that added them only when Slack is ok would hash to another value.
-    expect(TOOLS_VERSION).toBe("00dd2f88e6831f97");   // fixer security-6 / ui-4: the Slack-commitment wording moved it
-    expect(CHAT_TOOL_DEFS.map((d) => d.name).slice(16)).toEqual(["search_slack", "slack_digest", "prepare_client_update"]);
+    // state (N16): a registry that added them only when Slack is ok would hash to another value. P10 moved it once more
+    // (draft_slack_reply and the two lead-count sentences, §3.6.1-§3.6.2): still one static registry.
+    expect(TOOLS_VERSION).toBe(P10_TOOLS_VERSION);
+    expect(CHAT_TOOL_DEFS.map((d) => d.name).slice(16)).toEqual(["search_slack", "slack_digest", "prepare_client_update", "draft_slack_reply"]);
   });
 
   it("TL12 list_commitments' description points Slack commitments at search_slack (D3, pinned)", () => {
@@ -213,10 +224,43 @@ describe("P7b's three Slack tools (TL01, TL02, TL04, TL12)", () => {
   });
 
   it("the labels, kinds and timeouts of tools 17-19 (C21)", () => {
-    expect(CHAT_TOOLS.slice(16).map((t) => [t.name, t.label, t.kind, t.usesEmail, t.timeoutMs])).toEqual([
+    expect(CHAT_TOOLS.slice(16, 19).map((t) => [t.name, t.label, t.kind, t.usesEmail, t.timeoutMs])).toEqual([
       ["search_slack", "Searching Slack", "read", false, 40_000],
       ["slack_digest", "Reading Slack digests", "read", false, 25_000],
       ["prepare_client_update", "Preparing a client update", "staged", true, 60_000]
     ]);
+  });
+});
+
+// P10 (contract §3.6.1, §5.10 CT01-CT03, C50, H8; Area C): the 20th strict tool.
+describe("P10's draft_slack_reply in the registry (CT01-CT03)", () => {
+  it("CT01 20 strict tools in order, draft_slack_reply last, 56 parameters, 0 optional, 0 unions, nothing forbidden; the name ban holds", () => {
+    expect(CHAT_TOOLS).toHaveLength(20);
+    expect(CHAT_TOOLS[19].name).toBe("draft_slack_reply");
+    expect(CHAT_TOOL_DEFS.every((d) => d.strict === true)).toBe(true);
+    expect(strictBudget(CHAT_TOOL_DEFS)).toEqual({ tools: 20, optional: 0, unions: 0, forbidden: [] });
+    expect(CHAT_TOOL_DEFS.reduce((n, d) => n + Object.keys(d.input_schema.properties ?? {}).length, 0)).toBe(56);
+    // Test 3's ban: drafting a reply isn't posting one.
+    expect("draft_slack_reply").not.toMatch(/^(send|post|update|delete|reassign|create_task|remember|forget)|publish/);
+    expect(TOOLS_VERSION).toBe(P10_TOOLS_VERSION);
+    expect(TOOLS_VERSION).not.toBe("00dd2f88e6831f97");
+  });
+
+  it("CT03 its label, class, description and schema exactly; no instruction parameter (C51); no data in it", () => {
+    const t = CHAT_TOOLS.find((x) => x.name === "draft_slack_reply");
+    expect(t).toBeDefined();
+    expect([t?.label, t?.kind, t?.usesEmail, t?.timeoutMs]).toEqual(["Drafting a Slack reply", "staged", false, 40_000]);
+    expect(t?.def.description).toBe(
+      "Start a reply draft to one Slack message addressed to him, only when his newest message asks for a Slack reply. Pass the ref of that message from this conversation (a Slack item from search_slack, slack_digest, list_attention or get_source). The drafter gets his newest message word for word as its instruction and only that Slack conversation's own messages, never anything else from this chat. Nothing is posted: he reviews it and presses Send himself, in DD or in his Slack DM. Returns a link to the draft; if the message already has an open draft, that draft is rewritten with his newest message (unless he edited it by hand). Messages the assistant only read live can't be replied to. At most 3 per question."
+    );
+    expect(t?.def.input_schema).toEqual({
+      type: "object",
+      properties: { ref: { type: "string", description: "The ref of the Slack message, such as r7." } },
+      required: ["ref"],
+      additionalProperties: false
+    });
+    expect(t?.def.strict).toBe(true);
+    expect(JSON.stringify(t?.def.input_schema)).not.toMatch(/instruction|channel|thread|text/);
+    expect(Object.isFrozen(t?.def.input_schema.properties)).toBe(true);
   });
 });

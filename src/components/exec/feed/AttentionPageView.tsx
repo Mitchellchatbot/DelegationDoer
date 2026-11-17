@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowLeft, BellRing } from "lucide-react";
 import type { AttentionFilters, ScreenedAttentionPage } from "@/lib/exec/attention-types";
+import type { ReplyStatus } from "@/lib/exec/slack-p10-types";
 import { EXEC_TABS, ExecTabs } from "../ExecTabs";
 import { ExecHeader } from "../ExecHeader";
 import { FeedFreshness } from "../overview/AttentionSection";
@@ -31,7 +32,9 @@ export function AttentionPageView({
   ignoredParams,
   freshnessUnavailable = false,
   feedbackAvailable = true,
-  askAiEnabled = false
+  askAiEnabled = false,
+  slackRepliesAvailable = false,
+  replyBadges = {}
 }: {
   /** null: the feed couldn't be read. */
   page: ScreenedAttentionPage | null;
@@ -48,6 +51,10 @@ export function AttentionPageView({
   feedbackAvailable?: boolean;
   /** P5b (C33): each row, Load more's included, gets Ask AI (chat installed and on); default false. */
   askAiEnabled?: boolean;
+  /** P10 (§3.5.13; additive): Slack message rows offer Draft reply (Slack reply drafts on). */
+  slackRepliesAvailable?: boolean;
+  /** P10 (v1.1 product-16; additive): the shown Slack rows' reply drafts (one batched replyBadgesFor read). */
+  replyBadges?: Readonly<Record<string, { id: string; status: ReplyStatus; sentAt: string | null }>>;
 }) {
   const header = <ExecHeader updatedAt={now} tz={tz} trailing={<ExecTabs active="overview" tabs={EXEC_TABS} />} />;
   const back = (
@@ -92,6 +99,8 @@ export function AttentionPageView({
             freshnessUnknown={freshnessUnavailable}
             feedbackAvailable={feedbackAvailable}
             askAiEnabled={askAiEnabled}
+            slackRepliesAvailable={slackRepliesAvailable}
+            replyBadges={replyBadges}
           />
         </SectionCard>
       )}

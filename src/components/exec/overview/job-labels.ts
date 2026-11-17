@@ -35,7 +35,17 @@ export const JOB_LABELS: Readonly<Record<string, string>> = Object.freeze({
   "exec.checkin-send": "Check-in send",
   "exec.checkin-rewrite": "Check-in rewrite",
   "exec.ops-watch": "Job watch",
-  "exec.access-alert": "Sign-in alert"
+  "exec.access-alert": "Sign-in alert",
+  // P10 (AM-P10-22): lead counts, Slack reply drafts and the Slack style. The send kind is a key here only (B-P10-14): a
+  // label for the card, never a value anything enqueues.
+  "exec.slack-lead-count": "Slack lead counts",
+  "exec.slack-rdraft-generate": "Slack reply drafting",
+  "exec.slack-rdraft-plan": "Automatic Slack reply drafts",
+  "exec.slack-rdraft-send": "Slack reply sending",
+  "exec.slack-rdraft-act": "Slack reply card buttons",
+  "exec.slack-rdraft-sweep": "Slack reply upkeep",
+  "exec.slack-voice-refresh": "Slack style",
+  "exec.slack-reply-token-check": "Slack connection check"
 });
 
 /** The Slack reading row's kinds: P7a's reading jobs and P7b's digests and links. */

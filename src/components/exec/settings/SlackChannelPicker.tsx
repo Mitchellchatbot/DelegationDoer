@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Hash, Lock, Search } from "lucide-react";
 import { SLACK_READ_COPY } from "@/lib/exec/slack-read-copy";
@@ -203,6 +203,17 @@ function RowName({ row }: { row: PickerRow }) {
   );
 }
 
+/** Whether a press on a watch option is a server write. A press on the option already lit does nothing, EXCEPT a press on the
+ *  lit Mute of a channel muted by default (the finance default or his Slack mute, P10 fixer ui-1): that records the mute as his
+ *  own choice (exec_slack_set_watch stamps watch_set_by_owner_at for muted → muted, P7a's migration), which is what keeps the
+ *  channel muted when "Also read finance, HR and legal channels and channels I muted in Slack" is turned on (C5). The read-all
+ *  confirm tells him to mute those first; without this the lit Mute was a no-op and read-all opened the channel anyway. A
+ *  finance row's own mute is also stored as default_finance, so pressing it again is the same idempotent write. */
+export function watchPressCommits(row: Pick<PickerRow, "watchState" | "muteSource">, choice: WatchState): boolean {
+  if (row.watchState !== choice) return true;
+  return choice === "muted" && row.muteSource !== "owner";
+}
+
 function WatchControl({ row, disabled, onChoose, watchRef }: { row: PickerRow; disabled: boolean; onChoose: (next: WatchState) => void;
   watchRef?: (el: HTMLButtonElement | null) => void }) {
   // ui-9: one tab stop per row (the checked option); the arrow keys move between the three (the ARIA radio pattern).
@@ -238,7 +249,7 @@ function WatchControl({ row, disabled, onChoose, watchRef }: { row: PickerRow; d
             data-picker-choice={c.state}
             disabled={disabled}
             onClick={() => {
-              if (!on) onChoose(c.state);
+              if (watchPressCommits(row, c.state)) onChoose(c.state);
             }}
             className={cn(
               "inline-flex min-h-10 items-center whitespace-nowrap px-2.5 py-1 text-[12px] font-semibold disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-0",
@@ -310,7 +321,8 @@ export function SlackChannelPicker({
   initialFinanceConfirm = null,
   initialFilter = "",
   tags = null,
-  initialTagsOpen = null
+  initialTagsOpen = null,
+  afterWatchMode = null
 }: {
   view: Pick<SlackReadingView, "channels" | "counts" | "watchMode" | "settingsVersion">;
   /** P7b (P7a-6, AM-P7b-6): the per-row tags data; null or absent renders no tags (P7a's picker as it was). */
@@ -321,6 +333,8 @@ export function SlackChannelPicker({
   initialFinanceConfirm?: string | null;
   /** Static renders only: the filter box's text. */
   initialFilter?: string;
+  /** P10 (contract §3.7.5, v1.1 product-14; additive): rendered directly under the watch-mode radio group (the read-all switch). */
+  afterWatchMode?: ReactNode;
 }) {
   const isTop = useIsTopWindow();
   const router = useRouter();
@@ -371,6 +385,9 @@ export function SlackChannelPicker({
     const outcome = rowsAfterAnswer([row], row, result);
     setFinance(outcome.finance ? row.channelId : null);
     setMessages((m) => ({ ...m, [row.channelId]: outcome.message ?? undefined }));
+    // P10 fixer ui-1: with the read-all switch mounted above (afterWatchMode), a saved choice re-reads the page, so the
+    // read-all confirm's list of channels it would open follows it (a channel he just muted leaves the list).
+    if (result.kind === "updated" && afterWatchMode !== null && afterWatchMode !== undefined) refreshWithoutResult(() => router.refresh());
   }
 
   async function changeMode(next: WatchMode) {
@@ -422,6 +439,7 @@ export function SlackChannelPicker({
           {modeMessage ?? ""}
         </p>
       </div>
+      {afterWatchMode !== null && afterWatchMode !== undefined && <div data-picker-after-watch-mode>{afterWatchMode}</div>}
 
       <ul data-picker-summary className="divide-y divide-slate-100 rounded-xl border border-slate-100 bg-slate-50/60 text-[12.5px]">
         <li data-picker-dms className="px-3 py-2 text-slate-700">

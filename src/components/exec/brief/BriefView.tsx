@@ -2,10 +2,13 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { CalendarClock, CircleSlash, Hammer, Newspaper, Sparkles, TriangleAlert, Wallet } from "lucide-react";
 import { BRIEF_COPY, fillBrief } from "@/lib/exec/brief-copy";
+import { briefPrettyDate } from "@/lib/exec/brief-slack-ui";
 import type { BriefSectionKey } from "@/lib/exec/brief-types";
 import type { BriefContentView, BriefPageView } from "@/lib/exec/brief-view";
 import { formatCount, formatInZone } from "@/lib/exec/format";
 import { safeLink } from "@/lib/exec/safe-markdown";
+import { briefLeadsText } from "@/lib/exec/slack-leads";
+import { P10_LIMITS, type BriefLeadsBlock } from "@/lib/exec/slack-p10-types";
 import { cn } from "@/lib/utils";
 import { BasisLabel } from "../BasisLabel";
 import { PriorityBandBadge } from "../PriorityBandBadge";
@@ -20,6 +23,9 @@ import { CheckinList } from "./CheckinList";
 // more-in-DD counts, or the section's state line), the restricted-sender count, the finance line with its one link (M5),
 // then the check-ins. Every model or DD string renders as React text (never raw HTML, P3's route-files
 // rule). Withheld lines were already replaced by brief-view.ts (C31); here they only look muted and carry no link.
+// P10 (§3.8 item 7, C56): when content.leads is present (brief-view.ts sets it only while the block is visible), a "Leads
+// yesterday" card after the summary, by the DM's rule (slack-leads.ts briefLeadsText), its title linking to the Slack tab's
+// lead counts (/executive/slack#leads). Counts and DD client labels only.
 
 /** The named counters a section's context line shows, in this order (C's stats; anything else, and "more", is never shown). */
 /** P9 F5: a withheld line or pending title on the white section card (slate-400 was 2.56:1; slate-500 is 4.76:1). */
@@ -193,6 +199,37 @@ function Section({ section }: { section: BriefContentView["sections"][number] })
   );
 }
 
+/** P10 (§3.8 item 7): the stored leads block, as the DM shows it (≤ leadBriefRows client lines on the page). */
+function LeadsCard({ leads }: { leads: BriefLeadsBlock }) {
+  const { title, lines } = briefLeadsText(leads, { maxRows: P10_LIMITS.leadBriefRows, labelMax: P10_LIMITS.leadLabelChars, datePhrase: briefPrettyDate(leads.localDate) });
+  const unavailable = "unavailable" in leads && leads.unavailable === true;
+  return (
+    <section data-brief-leads={unavailable ? "unavailable" : "ok"} aria-labelledby="exec-brief-leads-title" className="rounded-2xl border border-slate-200/70 bg-white shadow-soft">
+      <header className="border-b border-slate-100 px-4 py-3">
+        <h3 id="exec-brief-leads-title" className="text-[13px] font-semibold text-ink">
+          <Link href="/executive/slack#leads" prefetch={false} className="inline-flex min-h-10 items-center hover:text-indigo-800 sm:min-h-0">
+            {title}
+          </Link>
+        </h3>
+      </header>
+      <ul className="space-y-1.5 px-4 py-3">
+        {lines.map((l, i) => (
+          <li
+            key={i}
+            data-brief-leads-line={l.kind}
+            className={cn(
+              "break-words text-[13px] leading-relaxed",
+              l.kind === "total" ? "font-semibold text-slate-900" : l.kind === "status" ? "text-muted" : "text-slate-800"
+            )}
+          >
+            {l.text}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function Ready({ view }: { view: BriefPageView }) {
   const brief = view.brief;
   if (brief === null) return null;
@@ -222,6 +259,7 @@ function Ready({ view }: { view: BriefPageView }) {
         )}
         {content && <Top3 top3={content.top3} />}
       </section>
+      {content?.leads != null && <LeadsCard leads={content.leads} />}
       {content && (
         <div className="grid items-start gap-5 lg:grid-cols-2">
           {content.sections.map((s) => (

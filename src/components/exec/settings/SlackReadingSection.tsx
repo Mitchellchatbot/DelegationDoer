@@ -2,12 +2,14 @@ import type { ReactNode } from "react";
 import { BookOpen, ListChecks, TriangleAlert } from "lucide-react";
 import { MISSING, formatCount, formatInZone } from "@/lib/exec/format";
 import { SLACK_INTEL_COPY } from "@/lib/exec/slack-intel-copy";
+import { SLACK_P10_COPY } from "@/lib/exec/slack-p10-copy";
 import { SLACK_READ_COPY } from "@/lib/exec/slack-read-copy";
 import type { SlackPickerTags } from "@/lib/exec/slack-page";
 import type { SlackReadingView } from "@/lib/exec/slack-types";
 import { cn } from "@/lib/utils";
 import { SlackChannelPicker } from "./SlackChannelPicker";
-import { SlackReadingControls } from "./SlackReadingControls";
+import { SlackP10Controls, type P10Notice } from "./SlackP10Controls";
+import { SLACK_READ_START_PATH, SlackReadingControls } from "./SlackReadingControls";
 
 // The Slack section's reading half (P7a contract §3.16, N4, N11, N12, N20,
 // C29, C47; Area E). Server and presentational, like SlackSection: everything
@@ -39,6 +41,11 @@ import { SlackReadingControls } from "./SlackReadingControls";
 // chat read conversations live, so SLACK_INTEL_COPY.readingIntelNotice ({days})
 // is shown wherever the reading notice or the switch is (not_consented, paused,
 // on) and inside the enable confirm.
+//
+// P10 (contract §3.7.5, C9, v1.1 product-14): for the paused and on states, the DM nudges (when the read consent lacks the DM
+// or group-DM scopes: dmNudge / groupDmNudge with "Allow reading again", the start route's purpose=read, which replaces the
+// scopes), the P10 controls above the picker's rows, and the read-all switch directly under the picker's "Which conversations
+// to read" radio group; the Stop-reading dialog also says stopAlso while P10 is installed.
 
 const fill = (template: string, values: Record<string, string>): string =>
   Object.entries(values).reduce((s, [k, v]) => s.split(`{${k}}`).join(v), template);
@@ -108,7 +115,9 @@ export function SlackReadingSection({
   initialDialog = null,
   initialChecked = false,
   initialFinanceConfirm = null,
-  tags = null
+  tags = null,
+  initialP10Dialog = null,
+  initialP10Checked = false
 }: {
   view: SlackReadingView;
   /** His zone and the page's one "now", for the dates. */
@@ -122,6 +131,9 @@ export function SlackReadingSection({
   initialFinanceConfirm?: string | null;
   /** P7b (§3.12.4, AM-P7b-6): the picker's per-row client and project tags (getSlackPickerTags); null shows none. */
   tags?: SlackPickerTags | null;
+  /** Static renders only (tests, screenshots): a P10 confirm open on first render. The page never passes them. */
+  initialP10Dialog?: P10Notice | null;
+  initialP10Checked?: boolean;
 }) {
   const state = view.state;
   if (state === "bot_not_connected") return null;
@@ -184,6 +196,9 @@ export function SlackReadingSection({
   }
 
   const picker = state === "paused" || state === "on";
+  const p10 = picker ? view.p10 ?? null : null;
+  const p10Dialog = (part: "readAll" | "rest"): P10Notice | null =>
+    initialP10Dialog === null ? null : (initialP10Dialog === "readAll") === (part === "readAll") ? initialP10Dialog : null;
   return (
     <div data-slack-reading data-reading-state={state} data-reading-read-failed={view.readFailed === true ? "" : undefined} className="space-y-3 border-t border-slate-100 pt-3">
       <h3 className="flex items-center gap-1.5 text-[13px] font-semibold text-ink">
@@ -198,12 +213,51 @@ export function SlackReadingSection({
           initialDialog={initialDialog}
           initialChecked={initialChecked}
           enableConfirmExtra={intelNoticeText(view.retentionDaysSlack)}
+          stopConfirmExtra={view.p10?.schemaReady === true ? SLACK_P10_COPY.settings.stopAlso : null}
         />
+      )}
+      {picker && <DmNudges view={view} onCanonicalHost={onCanonicalHost} />}
+      {p10 !== null && (
+        <div data-p10-section className="space-y-2 border-t border-slate-100 pt-3">
+          <h4 className="text-[12.5px] font-semibold text-ink">{SLACK_P10_COPY.settings.heading}</h4>
+          <SlackP10Controls part="rest" p10={p10} version={view.settingsVersion} tz={tz} now={now} initialDialog={p10Dialog("rest")}
+            initialChecked={initialP10Checked} />
+        </div>
       )}
       {picker && (
         <div className="border-t border-slate-100 pt-3">
-          <SlackChannelPicker view={view} initialFinanceConfirm={initialFinanceConfirm} tags={tags} />
+          <SlackChannelPicker
+            view={view}
+            initialFinanceConfirm={initialFinanceConfirm}
+            tags={tags}
+            afterWatchMode={p10 !== null && p10.schemaReady ? (
+              <SlackP10Controls part="readAll" p10={p10} version={view.settingsVersion} tz={tz} now={now} initialDialog={p10Dialog("readAll")}
+                initialChecked={initialP10Checked} />
+            ) : null}
+          />
         </div>
+      )}
+    </div>
+  );
+}
+
+/** P10 (C9): the DM and group-DM nudges, when the read consent lacks their scopes (the start route's purpose=read replaces the
+ *  scopes; off the canonical host there is no link, as P7a's Allow). */
+export function DmNudges({ view, onCanonicalHost }: { view: Pick<SlackReadingView, "dmsGranted" | "groupDmsGranted">; onCanonicalHost: boolean }) {
+  const lines = [
+    ...(view.dmsGranted ? [] : [{ key: "dm", text: SLACK_P10_COPY.settings.dmNudge }]),
+    ...(view.groupDmsGranted ? [] : [{ key: "group", text: SLACK_P10_COPY.settings.groupDmNudge }])
+  ];
+  if (lines.length === 0) return null;
+  return (
+    <div data-p10-dm-nudge className="space-y-1.5 rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5">
+      {lines.map((l) => (
+        <p key={l.key} data-p10-dm-nudge-line={l.key} className="text-[12.5px] leading-relaxed text-slate-700">{l.text}</p>
+      ))}
+      {onCanonicalHost && (
+        <a data-p10-allow-again href={SLACK_READ_START_PATH} className="inline-flex min-h-10 items-center text-[12.5px] font-semibold text-indigo-700 hover:text-indigo-900 sm:min-h-0">
+          {SLACK_P10_COPY.settings.allowAgain}
+        </a>
       )}
     </div>
   );

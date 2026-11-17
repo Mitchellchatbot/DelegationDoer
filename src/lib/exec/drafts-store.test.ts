@@ -519,11 +519,20 @@ describe("the card and System counts", () => {
     dbRow(10, { status: "draft", principal_id: "ep_2" })
   ];
   it("countDraftsForCard: active rows and the attention rows of the bucket", async () => {
-    useDb({ tables: { exec_drafts: fixture() } });
-    // Attention: unknown (2), two failed generations (3, 4), the mismatch within 7 days (5), gone unconfirmed (7), restricted linked (8), changed in Outlook (9).
-    expect(await countDraftsForCard(P)).toEqual({ active: 7, attention: 7 });
-    useDb({ missing: ["exec_drafts"] });
-    expect(await countDraftsForCard(P)).toBeNull();
+    // P10 integrator: countDraftsForCard reads the real clock (bucketCountRows(principal, new Date(), ...)) while the fixture is
+    // keyed to NOW, so the clock is pinned to NOW here; unpinned, the 7-day mismatch row (5) aged out on 2026-11-13 and the
+    // attention count read 6 on every later day.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    try {
+      useDb({ tables: { exec_drafts: fixture() } });
+      // Attention: unknown (2), two failed generations (3, 4), the mismatch within 7 days (5), gone unconfirmed (7), restricted linked (8), changed in Outlook (9).
+      expect(await countDraftsForCard(P)).toEqual({ active: 7, attention: 7 });
+      useDb({ missing: ["exec_drafts"] });
+      expect(await countDraftsForCard(P)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it("countDraftsForSystem: every counter and the oldest due check", async () => {
     useDb({ tables: { exec_drafts: fixture() } });

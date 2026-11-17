@@ -21,6 +21,7 @@ import { SafeMarkdown } from "../SafeMarkdown";
 import { SourceLinks } from "../SourceLinks";
 import { DraftCard } from "./DraftCard";
 import { ProposalCard } from "./ProposalCard";
+import { SlackReplyCard } from "./SlackReplyCard";   // P10 (§3.5.13): a slack_reply card
 
 // One chat message (P5b contract §3.19.5-§3.19.6; B3, C8, C9). Pure.
 //
@@ -122,9 +123,11 @@ export function ChatMessage({
       {message.cards.map((card) =>
         card.kind === "task_proposal" ? (
           <ProposalCard key={`p:${card.proposal.id}`} proposal={card.proposal} nowIso={nowIso} tz={tz} isTop={isTop} onProposal={onProposal} />
-        ) : (
+        ) : card.kind === "draft" ? (
           <DraftCard key={`d:${card.draftId}`} card={card} />
-        )
+        ) : card.kind === "slack_reply" ? (
+          <SlackReplyCard key={`r:${card.draftId}`} card={card} tz={tz ?? "America/New_York"} />
+        ) : null
       )}
     </div>
   );

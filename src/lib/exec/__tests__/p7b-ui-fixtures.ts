@@ -77,6 +77,10 @@ export function catchUpRow(over: Partial<CatchUpRow> = {}): CatchUpRow {
     assessed: true,
     permalink: permalinkFor("C0ACMESEO", "1794146400.000100"),
     ageLabel: "1 h ago",
+    // P10 (contract §3.9.1; Area B, forced by the required fields): the message's key and no reply draft.
+    channelId: "C0ACMESEO",
+    ts: "1794146400.000100",
+    reply: null,
     ...over
   };
 }
@@ -122,6 +126,9 @@ export function slackPageView(over: Partial<SlackPageView> = {}): SlackPageView 
     catchUp: { ok: true, data: { rows: [catchUpRow()], total: 1, hiddenMuted: 0 } },
     digests: { ok: true, data: { cards: [digestCard()], channelsWithoutDigest: 0 } },
     counts: { ok: true, data: { unanswered: 3, decisionsPending: 1, notAssessed: 2 } },
+    // P10 (contract §3.9.1; Area B, forced by the required fields): lead counts off, reply drafts off.
+    leads: { ok: true, data: { state: "off", asOf: null, tz: TZ, totals: null, clients: [], unlinked: null, coverage: null, fix: null } },
+    repliesOn: false,
     ...over
   };
 }

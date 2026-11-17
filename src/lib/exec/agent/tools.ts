@@ -34,6 +34,14 @@ import { getDigests, getDigestsByIds, listChannelLinks, slackIntelState } from "
 import { parseSlackMsgFingerprint } from "@/lib/exec/slack-read-types";
 import { getSlackItemsByIds, getSlackReadingState, listIntelChannels, readOpenSlackItems } from "@/lib/exec/slack-reading";
 import { searchSlack, slackChannelLabel, type SlackSearchHit } from "@/lib/exec/slack-search";
+// P10 (§3.6.1, C50, C51; Area C): draft_slack_reply's services.
+import { fillP10, SLACK_P10_COPY } from "@/lib/exec/slack-p10-copy";
+import { P10_LIMITS, type CreateReplyRefusal } from "@/lib/exec/slack-p10-types";
+import { listItemsForMessage } from "@/lib/exec/slack-read-store";
+import { createSlackReplyDraft, regenerateSlackReplyDraft } from "@/lib/exec/slack-reply-create";
+import { slackReplyPageHref } from "@/lib/exec/slack-reply-links";
+// P10 (§3.6.2, C35; Area B): the lead counts in get_overview and client_overview.
+import { chatClientLeads, chatLeadsPart, type ChatClientLeads, type ChatLeadsPart } from "@/lib/exec/slack-leads-view";
 import {
   DdReadError,
   getPendingApprovals,
@@ -146,7 +154,9 @@ export interface ToolContext {
   prior: { threads: ReadonlySet<string>; clients: ReadonlySet<string>; ddText: boolean;   // C24: replayed turns' sets
     /** P7b (N15, C24; stage-0 seed, OPTIONAL until Area D sets it): any replayed answer's consulted_private_slack. */
     privateSlack?: boolean };
-  staged: { proposals: number; drafts: number };                 // C40 counters
+  staged: { proposals: number; drafts: number;                   // C40 counters
+    /** P10 (§3.6.1, C50): draft_slack_reply's per-question counter (absent = 0; ≤ replyPerQuestion). */
+    slackReplies?: number };
   cards: ChatCard[];                     // staged cards of this turn
   conversationId: string; assistantMessageId: string;
   /** Additive (§3.11.4): the turn's surface, for the audit actor ("slack" → actor slack). Absent = web. */
@@ -946,7 +956,11 @@ async function getOverviewTool(args: J, ctx: ToolContext): Promise<ToolResultDra
   const toMs = to.getTime();
   const access = await soft(out, "email", () => ctx.memo.email(), ctx.signal);
 
-  const [overview, completed, created, attention, buckets, maps, slack] = await Promise.all([
+  // P10 (§3.6.2, C35, v1.1 product-18): the lead counts for the window, as whole local days (counts and DD labels only).
+  const leadsRead = leadsOnFor(ctx.settings)
+    ? soft(out, "leads", () => chatLeadsPart(ctx.principal, ctx.settings, { since: leadsSince(since) }, ctx.now, { signal: ctx.signal }), ctx.signal)
+    : Promise.resolve(null);
+  const [overview, completed, created, attention, buckets, maps, slack, leads] = await Promise.all([
     soft(out, "overview", () => getOverview(ctx.principal, ctx.now), ctx.signal),
     soft(out, "completed", () => listTasksCompletedBetween(ctx.principal, fromIso, toIso, { signal: ctx.signal }), ctx.signal),
     soft(out, "created", () => listTasksCreatedBetween(ctx.principal, fromIso, toIso, { signal: ctx.signal }), ctx.signal),
@@ -975,7 +989,8 @@ async function getOverviewTool(args: J, ctx: ToolContext): Promise<ToolResultDra
       ? soft(out, "email_buckets", () => screenedBucketRows(ctx, access), ctx.signal)
       : Promise.resolve(null),
     soft(out, "roster", () => rosterMaps(ctx), ctx.signal),
-    slackSource(ctx)
+    slackSource(ctx),
+    leadsRead
   ]);
   const injected = await injectedThreadIds(ctx);
 
@@ -1116,10 +1131,45 @@ async function getOverviewTool(args: J, ctx: ToolContext): Promise<ToolResultDra
       sources: { dd: "connected", email: emailSource, slack },
       now: nowPart,
       window_activity: windowPart,
-      system
+      system,
+      ...(leads === null ? {} : { leads: leadsForModel(out, leads) })
     },
     { unavailableKey: true }
   );
+}
+
+// ---------------------------------------------------------------------------
+// P10 (contract §3.6.2, C35, v1.1 product-9, -18): lead counts in get_overview and client_overview
+// ---------------------------------------------------------------------------
+
+/** Lead counts are part of the answer only while the P10 columns exist and the switch is on (no read otherwise). */
+const leadsOnFor = (s: ExecSettings): boolean => s.slackP10SchemaReady === true && s.slackLeadCountsEnabled === true;
+
+/** get_overview's since → the lead parts' window (anything else reads as today, as overviewWindow does). */
+function leadsSince(since: string): "today" | "yesterday" | "last_24h" | "last_7_days" {
+  return since === "yesterday" || since === "last_24h" || since === "last_7_days" ? since : "today";
+}
+
+/** The lead part as the model gets it: DD labels through out.t (clipped and neutralized like every DD name), the as-of time
+ *  through out.time. Integers, kinds, dates and the fixed basis and note copy otherwise. */
+function leadsForModel(out: Out, part: ChatLeadsPart | "unavailable"): J | "unavailable" {
+  if (part === "unavailable") return part;
+  if (part.state !== "ok") return { state: part.state };
+  return {
+    state: "ok",
+    parts: part.parts.map((p) => ({
+      ...p,
+      clients: p.clients.map((c) => ({ ...c, client: out.t(c.client, 120) }))
+    })),
+    as_of: out.time(part.as_of),
+    basis: part.basis,
+    note: part.note
+  };
+}
+
+function clientLeadsForModel(out: Out, part: ChatClientLeads): J {
+  if (part.state !== "ok") return { state: part.state };
+  return { ...part, as_of: out.time(part.as_of) };
 }
 
 // ---------------------------------------------------------------------------
@@ -2094,6 +2144,11 @@ async function clientDetail(out: Out, ctx: ToolContext, client: DdClient): Promi
     meetings: meetingsPart
   };
   out.note("Health and last-emailed come from a job that may be stale; the computed times are shown.");
+  // P10 (§3.6.2, C35): that client's lead-channel post counts (counts only), while lead counts are on.
+  if (leadsOnFor(ctx.settings)) {
+    const leads = await soft(out, "leads", () => chatClientLeads(ctx.principal, ctx.settings, { clientId: client.id, clientName: client.name }, ctx.now, { signal: ctx.signal }), ctx.signal);
+    json.leads = leads === "unavailable" ? leads : clientLeadsForModel(out, leads);
+  }
 
   if (access === "unavailable") json.email = "unavailable";
   else if (access.state !== "on") json.email = { state: access.state };
@@ -3366,6 +3421,171 @@ async function prepareClientUpdateTool(args: J, ctx: ToolContext): Promise<ToolR
   });
 }
 
+// --- 20. draft_slack_reply (P10 §3.6.1, C45, C46, C50, C51; Area C) -------------------
+//
+// One stored Slack message addressed to him gets a reply draft, written in a job from that conversation's own messages and his
+// newest message, word for word (ctx.question: the model writes no instruction and its args carry only the ref). P9 F3: the
+// message is admitted to the turn's Slack budget before anything about it goes out, so a later email draft in the same turn
+// is private_slack. The result holds ids, a status, a link and the destination: never the draft text (the card reads it from
+// DD) and no attention text, so nothing needs recording in consultedClients (P9 F8).
+
+const SLACK_REPLY_REF = /^r[0-9]{1,6}$/;
+const SLACK_REPLY_REF_CHARS = 10;
+/** A rewrite needs a draft in one of these; a draft being drafted, sent or checked is left as it is (C51). */
+const SLACK_REPLY_BUSY: ReadonlySet<string> = new Set(["generating", "sending", "unknown"]);
+
+/** The note for a creation refusal: fixed words only. */
+function slackReplyRefusalNote(reason: CreateReplyRefusal): string {
+  const copy = SLACK_P10_COPY.replies;
+  switch (reason) {
+    case "off":
+      return copy.toolOff;
+    case "not_stored":
+      return copy.toolNotStored;
+    case "finance_slack":
+      return copy.toolFinanceSlack;
+    case "not_installed":
+      return "Slack reply drafts aren't set up yet. Say so.";
+    case "not_reading":
+      return "Slack reading isn't on, so no reply can be drafted. Say so.";
+    case "rate_limited":
+    case "cap":
+      return "Too many Slack reply drafts were started just now; try again later.";
+    case "unavailable":
+      return REFUSAL_NOTES.unavailable;
+    default:
+      return SLACK_GONE_NOTE;
+  }
+}
+
+/** The place the reply posts (copy replies.destination, v1.1 product-5), from the stored channel row and the item's author
+ *  label: the conversation's name or its person, ", in the thread" for a thread. Neutralized by the caller (C47). */
+function slackReplyDestination(ch: ChannelRow | null, item: Pick<SlackItemRow, "authorLabel" | "threadTs">): string {
+  const copy = SLACK_P10_COPY.replies;
+  const label = slackChannelLabel(ch);
+  const named = label.startsWith("#") ? label.slice(1) : null;
+  const person = typeof item.authorLabel === "string" && item.authorLabel.trim() !== "" ? item.authorLabel.trim() : null;
+  let place: string;
+  if (ch === null) place = copy.place.unknown;
+  else if (ch.convType === "im") place = person !== null ? fillP10(copy.place.dm, { person }) : copy.place.dmUnknown;
+  else if (ch.convType === "mpim") place = person !== null ? fillP10(copy.place.group, { person }) : copy.place.groupUnknown;
+  else if (named === null) place = copy.place.unknown;
+  else place = fillP10(ch.convType === "group" || ch.isPrivate ? copy.place.private : copy.place.channel, { channel: named });
+  // C28: a channel reply always goes in a thread; a DM reply where its message is.
+  const inThread = ch === null || ch.convType === "channel" || ch.convType === "group" || item.threadTs !== null;
+  return fillP10(copy.destination, { place, thread: inThread ? copy.thread : "" });
+}
+
+/** C19's precedence (P7a's, restated): the item a draft started from a whole message answers. */
+function slackItemRank(i: Pick<SlackItemRow, "kind" | "assessed">): number {
+  if (!i.assessed) return 3;
+  if (i.kind === "decision") return 0;
+  if (i.kind === "request" || i.kind === "question" || i.kind === "action_item") return 1;
+  return i.kind === "commitment" ? 2 : 4;
+}
+
+async function draftSlackReplyTool(args: J, ctx: ToolContext): Promise<ToolResultDraft> {
+  const copy = SLACK_P10_COPY.replies;
+  // 1. At most 3 per question.
+  const used = ctx.staged.slackReplies ?? 0;
+  if (used >= P10_LIMITS.replyPerQuestion) {
+    throw new ToolFailure("limit", "Only 3 Slack reply drafts can be started per question. Tell him which ones are left.");
+  }
+  ctx.staged.slackReplies = used + 1;
+  const out = new Out(ctx);
+  // 2. The switch.
+  if (!(ctx.settings.slackP10SchemaReady && ctx.settings.slackRepliesEnabled)) return out.done({ draft: null, refused: "off", note: copy.toolOff });
+
+  // 3. The ref: a Slack message from this conversation, stored by P7a (C46), or a Slack Needs Attention row.
+  const ref = String(args.ref);
+  const entry = ref.length <= SLACK_REPLY_REF_CHARS && SLACK_REPLY_REF.test(ref) ? ctx.refs.citable(ref) : null;
+  if (entry === null) throw badInput("Invalid input: ref is not a ref from this conversation.");
+  const target = entry.target;
+  if (target.type !== "slack_message" && target.type !== "attention") throw badInput("That ref isn't a Slack message.");
+  if (target.type === "slack_message" && target.itemId === null) return out.done({ draft: null, refused: "not_stored", note: copy.toolNotStored });
+  const on = await slackTurn(out, ctx);
+  if ("answer" in on) {
+    const state = on.answer.json.slack;
+    return out.done({ draft: null, refused: state === "not_installed" ? "not_installed" : "not_reading", slack: state, note: on.answer.json.note });
+  }
+  let channelId: string;
+  let ts: string;
+  let ids: string[];
+  if (target.type === "slack_message") {
+    channelId = target.channelId;
+    ts = target.ts;
+    ids = [target.itemId as string];
+  } else {
+    // The web screen resolves the row; this surface's own policy (step 4) decides, so a finance item on Slack is
+    // finance_slack rather than "gone" (nothing about it is returned either way).
+    const res = await getScreenedAttentionItem(ctx.principal, target.id, { now: ctx.now, signal: ctx.signal, surface: "web" });
+    if (!res.ok) return out.done({ draft: null, refused: "screen", note: SLACK_GONE_NOTE });
+    const fp = res.item.source === "slack" ? parseSlackMsgFingerprint(res.item.fingerprint) : null;
+    if (fp === null) throw badInput("That ref isn't a Slack message.");
+    channelId = fp.channelId;
+    ts = fp.ts;
+    ids = (await listItemsForMessage(ctx.principal, channelId, ts)).map((i) => i.id);
+  }
+  // The item screen (P7a's C20 on the web surface: reading off, a deleted message, "Don't watch", a mute it can't bypass).
+  const screened = ids.length === 0 ? []
+    : (await getSlackItemsByIds(ctx.principal, ids, { surface: "web", signal: ctx.signal })).filter((i) => i.channelId === channelId && i.ts === ts);
+  const item = target.type === "slack_message"
+    ? screened.find((i) => i.id === target.itemId)
+    : [...screened].sort((a, b) => slackItemRank(a) - slackItemRank(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0];
+  if (item === undefined) return out.done({ draft: null, refused: "screen", note: SLACK_GONE_NOTE });
+
+  // 4. This surface's item policy (P7b C7): finance never on his Slack DM.
+  const ch = on.s.channels.get(channelId) ?? null;
+  const policy = slackItemPolicy(on.s.state, ch, item, on.use);
+  if (!policy.allowed) {
+    return policy.reason === "finance"
+      ? out.done({ draft: null, refused: "finance_slack", note: copy.toolFinanceSlack })
+      : out.done({ draft: null, refused: "screen", note: SLACK_GONE_NOTE });
+  }
+
+  // 5. The instruction (C51): his newest message, word for word; never anything the model wrote.
+  const question = typeof ctx.question === "string" ? ctx.question : "";
+  if (question.trim() === "") return out.done({ draft: null, refused: "unavailable", note: REFUSAL_NOTES.unavailable });
+  if (question.length > P10_LIMITS.replyInstructionChars) throw badInput("Keep the request under 2,000 characters.");
+
+  // P9 F3 (N15): the message is a Slack consult of this turn before anything about it goes out; a full budget → no draft.
+  if (!admitSlack(out, on.consulted, [slackMessageKey(channelId, ts)], channelId, policy.privacy)) return out.done({ draft: null, refused: "unavailable" });
+
+  // 6. The one creation path (RPC 13 computes the destination from the stored message, C28).
+  const origin = ctx.surface === "slack" ? "slack" : "chat";
+  const created = await createSlackReplyDraft(ctx.principal, { channelId, ts, itemId: item.id, origin, instruction: question, chatMessageId: ctx.assistantMessageId },
+    { now: ctx.now, signal: ctx.signal });
+  if (created.outcome === "refused") return out.done({ draft: null, refused: created.reason, note: slackReplyRefusalNote(created.reason) });
+  const id = created.id;
+  const existing = created.outcome === "existing";
+  let status = created.status;
+  let rewritten = false;
+  let reason: string | null = null;
+  const notes: string[] = [copy.toolNothingSent];
+  // 6b. v1.1 (product-7, C51): a second ask about the same message rewrites its open draft with his newest message.
+  if (existing) {
+    if (SLACK_REPLY_BUSY.has(created.status)) notes.push(copy.toolExistingBusy);
+    else if (created.edited) notes.push(copy.toolExistingEdited);
+    else if (created.status === "draft" || created.status === "generation_failed") {
+      const r = await regenerateSlackReplyDraft(ctx.principal, { id, version: created.version, instruction: question, origin }, { now: ctx.now, signal: ctx.signal });
+      if (r.outcome === "queued") {
+        rewritten = true;
+        status = "generating";
+        notes.push(copy.toolRewriting);
+      } else {
+        reason = r.outcome;
+      }
+    }
+  }
+
+  // 7. The card (P5b's chat card; on his Slack DM P6's reply job posts it in the thread).
+  ctx.cards.push({ kind: "slack_reply", id, existing });
+  // 8. Never the draft text.
+  const draft: J = { id, status, link: slackReplyPageHref(id), destination: out.t(slackReplyDestination(ch, item), 200), existing, rewritten };
+  if (reason !== null) draft.reason = reason;
+  return out.done({ draft, note: notes.join(" ") });
+}
+
 // --- get_source: Slack (§3.15.2) ------------------------------------------------
 
 async function slackMessageSource(out: Out, ctx: ToolContext, t: Extract<RefTarget, { type: "slack_message" }>): Promise<J> {
@@ -3432,6 +3652,8 @@ const HANDLERS: Readonly<Record<ToolName, Handler>> = {
   // P7b (§3.15; stage-0 seeds): Area D writes the three tools.
   search_slack: searchSlackTool,
   slack_digest: slackDigestTool,
-  prepare_client_update: prepareClientUpdateTool
+  prepare_client_update: prepareClientUpdateTool,
+  // P10 (§3.6.1, C50): tool 20, the last slot of the strict budget.
+  draft_slack_reply: draftSlackReplyTool
 };
 

@@ -17,6 +17,11 @@ import { SLACK_BOT_SCOPES } from "@/lib/exec/slack-types";
 // reading does and never does. MF01 / MF03 changed their expectations with it
 // (counts unchanged): MF01 pins the whole new manifest, MF03 keeps the bans
 // that still hold.
+//
+// P10 (contract §3.2.4, C41, ST09; Area B): the description and long_description say what the app now does (it never reads
+// lead-channel content and only counts their posts when he turns that on; it posts only in its own DM; replies it drafts are
+// posted as him from DD's own Slack connection only after he presses Send). MF01 and MF06 re-pinned; MF02-MF05 unchanged (no
+// scope or event changes, C40).
 
 const MANIFEST_URL = new URL("../../../docs/exec-slack-manifest.json", import.meta.url);
 const raw = readFileSync(MANIFEST_URL, "utf8");
@@ -26,9 +31,9 @@ const EXPECTED = {
   _metadata: { major_version: 2, minor_version: 1 },
   display_information: {
     name: "ScaledAI Executive Assistant",
-    description: "Private assistant for the CEO. Answers his questions in a direct message from DD and his email. Never posts as him.",
+    description: "Private assistant for the CEO. Answers him in a direct message from DD, his email and Slack. Never posts on its own.",
     long_description:
-      "The ScaledAI Executive Assistant is a private, owner-only assistant connected to DelegationDoer (DD). Only the CEO can use it: it answers his questions in its direct message with him, using DD records, his email and, once he allows it, the Slack conversations he can see. It never reads lead or patient-intake channels, DMs with bots, or conversations he isn't part of except public channels he chooses. It never posts in channels and never posts as anyone. Other people who open it see that it is private. Data is kept in DD for a limited time and deleted when reading stops or the app is removed. Support: the ScaledAI operations team."
+      "The ScaledAI Executive Assistant is a private, owner-only assistant connected to DelegationDoer (DD). Only the CEO can use it: it answers his questions in its direct message with him, using DD records, his email and, once he allows it, the Slack conversations he can see. It never reads the content of client lead channels: when he turns on lead counts, it only counts their new posts per client and keeps nothing else. It never reads DMs with bots, or conversations he isn't part of except public channels he chooses. This app posts only in its own direct message with him. Replies it drafts are posted as him from DD's own Slack connection, only after he reviews them and presses Send. Other people who open it see that it is private. Data is kept in DD for a limited time and deleted when reading stops or the app is removed. Support: the ScaledAI operations team."
   },
   features: {
     app_home: { home_tab_enabled: true, messages_tab_enabled: true, messages_tab_read_only_enabled: false },
@@ -129,8 +134,11 @@ describe("docs/exec-slack-manifest.json: the P7a user half (§3.18)", () => {
     expect(d.length).toBeGreaterThanOrEqual(174);
     expect(d.length).toBeLessThanOrEqual(4000);
     expect(d).toContain("once he allows it, the Slack conversations he can see");
-    expect(d).toContain("It never reads lead or patient-intake channels, DMs with bots, or conversations he isn't part of except public channels he chooses.");
+    // P10 (§3.2.4, v1.1 security-5): v1's "lead or patient-intake channels" promised more than the classifier does.
+    expect(d).toContain("It never reads the content of client lead channels");
+    expect(d).toContain("only after he reviews them and presses Send");
     expect(d).toContain("deleted when reading stops or the app is removed");
+    expect(d).not.toContain("patient-intake");
     expect(scopes.bot).toEqual(["chat:write", "im:history", "im:read", "im:write", "users:read", "users:read.email"]);
     expect(events.bot_events).toEqual(["message.im", "app_home_opened", "app_uninstalled", "tokens_revoked"]);
     const settings = manifest.settings as Record<string, unknown>;

@@ -11,6 +11,8 @@ import type {
   OwnerAction
 } from "@/lib/exec/attention-types";
 import { draftReplyHrefFor } from "@/lib/exec/drafts-links";
+import type { ReplyStatus } from "@/lib/exec/slack-p10-types";
+import { slackReplyHrefForAttention, slackReplyPageHref } from "@/lib/exec/slack-reply-links";
 import { formatInZone, pluralize } from "@/lib/exec/format";
 import { fetchAttentionPage, patchAttention, postFeedback } from "@/lib/exec/ui/feed-api";
 import { feedFocusSelectors, focusFirst, focusLost } from "@/lib/exec/ui/focus";
@@ -22,6 +24,7 @@ import { useIsTopWindow } from "../drafts/frame-guard";
 import { EmptyState } from "../EmptyState";
 import { ago } from "../overview/labels";
 import { FeedMessageLine, FeedRowActions } from "./FeedRowActions";
+import { replyStatusLabel } from "../slack/replies/reply-logic";
 
 // The Needs Attention list with its row actions (P5a contract §3.13.2, A1,
 // A2, S2): the Overview card ("overview") and the full feed page ("full",
@@ -65,6 +68,11 @@ export interface FeedListProps {
    * no Useful / Not useful controls, which could only fail.
    */
   feedbackAvailable?: boolean;
+  /** P10 (§3.5.13; additive, default false): Slack message items offer "Draft reply" while Slack reply drafts are on. */
+  slackRepliesAvailable?: boolean;
+  /** P10 (v1.1 product-16; additive): the newest reply draft of each shown Slack message (key "<channel>:<ts>"), from the
+   *  page's one batched replyBadgesFor read; a row with one shows its status label and links to it. */
+  replyBadges?: Readonly<Record<string, { id: string; status: ReplyStatus; sentAt: string | null }>>;
 }
 
 export const FEED_LIST_COPY = {
@@ -126,6 +134,23 @@ export function announceText(a: { text: string; n: number }): string {
   return a.n > 0 && a.n % 2 === 0 ? `${a.text}${NBSP}` : a.text;
 }
 
+/** P10 (§3.5.13, v1.1 product-16): a row's reply link. Email: P4's Draft reply while drafts are on. A Slack message
+ *  (slack:msg:<ch>:<ts>) while Slack reply drafts are on: its draft's status label and page when it has one, else Draft reply
+ *  to the new-reply page. Anything else: none. Pure. */
+export function feedReplyLinkFor(item: Pick<AttentionFeedItem, "source" | "fingerprint">, o: { draftsAvailable: boolean; slackRepliesAvailable: boolean;
+  replyBadges: Readonly<Record<string, { id: string; status: ReplyStatus; sentAt: string | null }>>; tz: string; now: string }):
+  { href: string; label: string | null } | null {
+  const email = o.draftsAvailable ? draftReplyHrefFor(item) : null;
+  if (email !== null) return { href: email, label: null };
+  if (!o.slackRepliesAvailable) return null;
+  const fresh = slackReplyHrefForAttention(item);
+  if (fresh === null) return null;
+  const key = item.fingerprint.slice("slack:msg:".length);
+  const badge = Object.prototype.hasOwnProperty.call(o.replyBadges, key) ? o.replyBadges[key] : undefined;
+  const label = badge !== undefined ? replyStatusLabel(badge.status, badge.sentAt, o.tz, o.now) : null;
+  return badge !== undefined && label !== null ? { href: slackReplyPageHref(badge.id), label } : { href: fresh, label: null };
+}
+
 /** "/executive/chat?context=attention:<id>" while Ask AI is on (coherence-16); else null. */
 export function askAiHrefFor(itemId: string, askAiEnabled: boolean): string | null {
   return askAiEnabled ? `/executive/chat?context=attention:${itemId}` : null;
@@ -145,7 +170,9 @@ export function FeedList({
   draftsAvailable,
   askAiEnabled = false,
   freshnessUnknown = false,
-  feedbackAvailable = true
+  feedbackAvailable = true,
+  slackRepliesAvailable = false,
+  replyBadges = {}
 }: FeedListProps) {
   const isTop = useIsTopWindow();
   // Review ui-7: an action that moves a row out of view (or remounts its
@@ -313,7 +340,8 @@ export function FeedList({
                   item={row.item}
                   now={now}
                   tz={tz}
-                  draftReplyHref={draftsAvailable ? draftReplyHrefFor(row.item) : null}
+                  draftReplyHref={feedReplyLinkFor(row.item, { draftsAvailable, slackRepliesAvailable, replyBadges, tz, now })?.href ?? null}
+                  draftReplyLabel={feedReplyLinkFor(row.item, { draftsAvailable, slackRepliesAvailable, replyBadges, tz, now })?.label ?? null}
                   reasonsDisclosure
                   actions={
                     isTop ? (

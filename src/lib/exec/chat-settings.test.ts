@@ -44,12 +44,17 @@ const BASE: Row = {
 const CHAT: Row = { chat_enabled: true, ask_ai_uses_exec: false, chat_daily_cap_usd: "4.50" };
 /** P7a's two columns: present whenever P5b's are (P7a's migration comes after), so the reads below stay single. */
 const SLACK: Row = { slack_reading_enabled: false, slack_daily_cap_usd: "2.00" };
+/** P10's seven columns (contract §3.7.1): present with P7a's (P10's migration comes after), so the reads stay single. */
+const SLACK_P10: Row = {
+  slack_read_all: false, slack_lead_counts_enabled: false, slack_replies_enabled: false, slack_reply_send_enabled: false, slack_reply_auto: false,
+  slack_reply_daily_cap_usd: "1.50", slack_voice_enabled: true
+};
 
 let db: ChatFakeDb;
 /** exec_settings with the P2a-P5a columns, plus P5b's (and P7a's) when `chat` (the migrations applied). */
 function useDb(row: Row | null, { chat = true, drop = [] as string[] } = {}): ChatFakeDb {
-  const columns = [...Object.keys(BASE), ...(chat ? [...Object.keys(CHAT), ...Object.keys(SLACK)] : [])].filter((c) => !drop.includes(c));
-  const full = row === null ? [] : [Object.fromEntries(Object.entries({ ...BASE, ...(chat ? { ...CHAT, ...SLACK } : {}), ...row }).filter(([k]) => columns.includes(k)))];
+  const columns = [...Object.keys(BASE), ...(chat ? [...Object.keys(CHAT), ...Object.keys(SLACK), ...Object.keys(SLACK_P10)] : [])].filter((c) => !drop.includes(c));
+  const full = row === null ? [] : [Object.fromEntries(Object.entries({ ...BASE, ...(chat ? { ...CHAT, ...SLACK, ...SLACK_P10 } : {}), ...row }).filter(([k]) => columns.includes(k)))];
   db = createChatFakeDb({
     tables: { exec_settings: full, exec_ai_usage: [], exec_access_log: [] },
     columns: { exec_settings: columns, exec_ai_usage: ["id", "principal_id", "feature", "cost_usd", "created_at"], exec_access_log: ["created_at", "route", "surface", "ip", "user_agent", "session_id", "principal_id"] }
@@ -67,10 +72,10 @@ beforeEach(() => {
 
 describe("the chat column group in the loader (T70)", () => {
   it("is the last group, needs the drafts group, and its flag is part of every settings value's schema flags", () => {
-    // P7a appended its "slack" group after chat (C30): chat is now the last but one.
-    expect(SETTINGS_COLUMN_GROUPS.at(-2)).toEqual({ key: "chat", columns: ["chat_enabled", "ask_ai_uses_exec", "chat_daily_cap_usd"] });
+    // P7a appended its "slack" group after chat (C30), and P10 its "slackP10" group after slack: chat is now the third from last.
+    expect(SETTINGS_COLUMN_GROUPS.at(-3)).toEqual({ key: "chat", columns: ["chat_enabled", "ask_ai_uses_exec", "chat_daily_cap_usd"] });
     expect(settingsSchemaFlags({ ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: true, chatSchemaReady: true })).toEqual({
-      email: true, drafts: true, ddtext: true, chat: true, slack: false
+      email: true, drafts: true, ddtext: true, chat: true, slack: false, slackP10: false   // P10 stage 0: the slackP10 flag (§3.7.2)
     });
   });
 
@@ -107,7 +112,7 @@ describe("the chat column group in the loader (T70)", () => {
     useDb(null);
     expect(await loadSettings("ep_1")).toEqual({
       principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: true, chatSchemaReady: true,
-      slackReadingSchemaReady: true
+      slackReadingSchemaReady: true, slackP10SchemaReady: true   // P10 (§3.7.1): the slackP10 group was read too
     });
   });
 
@@ -191,7 +196,7 @@ describe("SettingsView: schema.chat and effectiveChatCapUsd (T70, C30)", () => {
   it("carries the chat flag and the effective cap computed from the settings it shows", async () => {
     useDb({});
     const view = await getSettingsView(P, NOW);
-    expect(view.schema).toEqual({ email: true, drafts: true, ddtext: true, chat: true, slack: true });
+    expect(view.schema).toEqual({ email: true, drafts: true, ddtext: true, chat: true, slack: true, slackP10: true });   // P10 (§3.7.1): the group is read
     expect(view.effectiveChatCapUsd).toBe(7.77);
     expect(effectiveChatCapUsd).toHaveBeenCalledTimes(1);
     expect(effectiveChatCapUsd).toHaveBeenCalledWith(view.settings);

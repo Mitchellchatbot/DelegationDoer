@@ -29,7 +29,13 @@ import { slackDigestJobHandler, slackDigestPlanJobHandler, slackDigestPlanSchedu
 import { slackDiscoverJobHandler, slackDiscoverScheduledWork } from "@/lib/exec/handlers/slack-discover";
 import { slackHomeJobHandler } from "@/lib/exec/handlers/slack-home";
 import { slackIntelSweepJobHandler, slackIntelSweepScheduledWork } from "@/lib/exec/handlers/slack-intel-sweep";
+import { slackLeadCountJobHandler, slackLeadCountScheduledWork } from "@/lib/exec/handlers/slack-lead-count";
 import { slackProbeJobHandler, slackProbeScheduledWork } from "@/lib/exec/handlers/slack-probe";
+import { slackRdraftActJobHandler } from "@/lib/exec/handlers/slack-rdraft-act";
+import { slackRdraftGenerateJobHandler } from "@/lib/exec/handlers/slack-rdraft-generate";
+import { slackRdraftPlanJobHandler, slackRdraftPlanScheduledWork } from "@/lib/exec/handlers/slack-rdraft-plan";
+import { slackRdraftSendJobHandler } from "@/lib/exec/handlers/slack-rdraft-send";
+import { slackRdraftSweepJobHandler, slackRdraftSweepScheduledWork } from "@/lib/exec/handlers/slack-rdraft-sweep";
 import {
   slackReadPurgeJobHandler,
   slackReadRecheckJobHandler,
@@ -38,6 +44,7 @@ import {
 import { slackReadSweepJobHandler, slackReadSweepScheduledWork } from "@/lib/exec/handlers/slack-read-sweep";
 import { slackRekeyJobHandler } from "@/lib/exec/handlers/slack-rekey";
 import { slackReplyJobHandler } from "@/lib/exec/handlers/slack-reply";
+import { slackReplyTokenCheckJobHandler, slackReplyTokenCheckScheduledWork } from "@/lib/exec/handlers/slack-reply-token-check";
 import {
   slackDmPurgeJobHandler,
   slackDmPurgeSystemWork,
@@ -47,6 +54,7 @@ import {
 import { slackTriageJobHandler } from "@/lib/exec/handlers/slack-triage";
 import { slackUninstallJobHandler } from "@/lib/exec/handlers/slack-uninstall";
 import { slackUserCheckJobHandler } from "@/lib/exec/handlers/slack-user-check";
+import { slackVoiceRefreshJobHandler, slackVoiceRefreshScheduledWork } from "@/lib/exec/handlers/slack-voice-refresh";
 import { voiceRefreshJobHandler, voiceRefreshScheduledWork } from "@/lib/exec/handlers/voice-refresh";
 import { JOB_LANES, getJobHandler, registerJobHandler, runWorkerPass, type WorkerPassSummary } from "@/lib/exec/jobs";
 import { ensureMailHook, recordSocketHealth } from "@/lib/exec/mail-hook";
@@ -105,6 +113,13 @@ import type { ExecPrincipal, JobHandler, JobLane } from "@/lib/exec/types";
 // resolver (B4); registered once, each skipped if it can't register. No purge hook (A7): the brief sweep reads the log.
 // P9 F16 (Area C): exec.slack-dm-purge is SYSTEM work too (daily at 04:10 UTC, every active installation, a disabled
 // principal's included), in BUILT_IN_SYSTEM_SCHEDULE; its per-principal schedule is gone (a row queued before still runs once).
+// P10 (contract §3.10): the lead counts (30 minutes, gated on both schemas, reading and lead counts), reply drafting
+// (enqueued only), the automatic-draft plan (10 minutes, while automatic drafts and reading are on), the DM card's Send and
+// its other buttons (no schedule: only exec_slack_accept_action_v3 inserts those jobs, from a verified click; nothing here
+// names the send kind), the reply sweep (5 minutes, gated on the P10 schema only: it purges whatever the switches say),
+// the weekly Slack style refresh (Sunday 04:40 local, while replies and voice learning are on) and the daily token check
+// (06:10 local, while replies and sending are on, maxAttempts 2). Registered unconditionally, as P6's to P8's are: every
+// schedule is gated on the P10 schema (slackP10SchemaReady), and the click jobs exist only once v3 does. One schedule per kind.
 const BUILT_IN_HANDLERS: readonly JobHandler[] = [
   purgeJobHandler,
   ddAttentionJobHandler,
@@ -145,7 +160,15 @@ const BUILT_IN_HANDLERS: readonly JobHandler[] = [
   checkinSendJobHandler,
   checkinRewriteJobHandler,
   opsWatchJobHandler,
-  accessAlertJobHandler
+  accessAlertJobHandler,
+  slackLeadCountJobHandler,
+  slackRdraftGenerateJobHandler,
+  slackRdraftPlanJobHandler,
+  slackRdraftSendJobHandler,
+  slackRdraftActJobHandler,
+  slackRdraftSweepJobHandler,
+  slackVoiceRefreshJobHandler,
+  slackReplyTokenCheckJobHandler
 ];
 /** P9 seed S5 (lead; contract F26, §4): every job kind this registry registers, in registration order (derived from
  *  BUILT_IN_HANDLERS, so a handler added there is listed here too). Read-only data for the System card's label map test
@@ -170,7 +193,12 @@ const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [
   briefScheduledWork,
   briefPrepScheduledWork,
   briefSweepScheduledWork,
-  briefHealthScheduledWork
+  briefHealthScheduledWork,
+  slackLeadCountScheduledWork,
+  slackRdraftPlanScheduledWork,
+  slackRdraftSweepScheduledWork,
+  slackVoiceRefreshScheduledWork,
+  slackReplyTokenCheckScheduledWork
 ];
 /** P8 (M10, C17, C18): principal_id null, keyed `${kind}:system:…`, enqueued before the principals are listed. P9 F16: the DM purge. */
 const BUILT_IN_SYSTEM_SCHEDULE: readonly SystemScheduledWork[] = [purgeSystemWork, opsWatchSystemWork, slackDmPurgeSystemWork];

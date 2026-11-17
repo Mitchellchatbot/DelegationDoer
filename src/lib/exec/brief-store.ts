@@ -1405,6 +1405,65 @@ export async function checkinPostKeys(principal: ExecPrincipal, keys: readonly {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// P10 (contract §3.8 item 4, §3.11, C23, B-P10-1; Area A): the only names of the two P10 brief functions (RPC 21, function 22)
+// in src. Both live in P10's migration (20261112100000_exec_slack_leads_replies.sql): until it is applied they answer
+// "missing" (42883 / PGRST202), which maps to null / [] here, never to an error.
+// ---------------------------------------------------------------------------
+
+const RPC_STRIP_LEADS = "exec_brief_strip_leads";
+const RPC_PRINCIPALS_WITH_LEADS = "exec_brief_principals_with_leads";
+const LEADS_PRINCIPALS_MAX = 1000;
+
+async function stripLeads(fn: string, pid: string): Promise<number | null> {
+  const { data, error } = await rpc(RPC_STRIP_LEADS, { p_principal: pid });
+  if (error) {
+    if (missing(error)) return null;
+    throw failure(fn, error);
+  }
+  const n = int(data);
+  if (n === null || n < 0) throw malformed(fn);
+  return n;
+}
+
+/** RPC 21: removes only `leads` from his stored briefs' content; the count of rows changed. null when the schema is missing. */
+export async function stripBriefLeads(principal: ExecPrincipal): Promise<number | null> {
+  return stripLeads("stripBriefLeads", requirePrincipal("stripBriefLeads", principal));
+}
+
+/** The by-id twin of stripBriefLeads (the system purge, §3.11). null when the schema is missing. */
+export async function stripBriefLeadsSystem(principalId: string): Promise<number | null> {
+  const fn = "stripBriefLeadsSystem";
+  if (typeof principalId !== "string" || principalId.length === 0 || principalId.length > 100) throw bad(fn, "a principal id is required");
+  return stripLeads(fn, principalId);
+}
+
+/** v1.1 correctness-3 (function 22): the principals with a stored brief whose content still has `leads`, distinct, ≤ limit
+ *  (clamped 1..1000); [] when the function is missing. */
+export async function listPrincipalsWithBriefLeads(limit: number, opts?: { signal?: AbortSignal }): Promise<string[]> {
+  const fn = "listPrincipalsWithBriefLeads";
+  const n = typeof limit === "number" && Number.isSafeInteger(limit) ? Math.min(Math.max(limit, 1), LEADS_PRINCIPALS_MAX) : 100;
+  const signal = opts?.signal;
+  const { data, error } = await rpc(RPC_PRINCIPALS_WITH_LEADS, { p_limit: n }, signal);
+  if (error) {
+    if (missing(error)) {
+      signal?.throwIfAborted();
+      return [];
+    }
+    throw failure(fn, error, signal);
+  }
+  if (!Array.isArray(data)) throw malformed(fn);
+  const out: string[] = [];
+  for (const v of data as unknown[]) {
+    // PostgREST answers a set-returning scalar function with an array of values (an object per row on older versions).
+    const p = typeof v === "string" ? v : str((v as Row | null)?.[RPC_PRINCIPALS_WITH_LEADS]);
+    if (p === null || p.length === 0 || p.length > 100) throw malformed(fn);
+    if (!out.includes(p)) out.push(p);
+    if (out.length >= n) break;
+  }
+  return out;
+}
+
 /** Test seam: forget the per-process schema cache and (P9) that the _v2 RPCs were found missing. */
 export function __resetBriefStoreForTests(): void {
   schemaCache = null;

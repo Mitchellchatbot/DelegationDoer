@@ -180,7 +180,8 @@ afterEach(() => {
 
 describe("registered for every state (N16, TL03)", () => {
   it("TL03 search_slack and slack_digest answer the not-on note (a value, not an error) for every state but ok; the list never changes", async () => {
-    expect(CHAT_TOOLS.map((t) => t.name).slice(16)).toEqual(["search_slack", "slack_digest", "prepare_client_update"]);
+    // P10 (H8, C50): the registry is 20 of 20; P7b's three stay tools 17-19, draft_slack_reply is the 20th.
+    expect(CHAT_TOOLS.map((t) => t.name).slice(16)).toEqual(["search_slack", "slack_digest", "prepare_client_update", "draft_slack_reply"]);
     for (const state of NOT_OK) {
       NOW_INTEL(state);
       for (const [name, args] of [["search_slack", searchArgs({ include_live: true, channel: "C0ACMESEO" })], ["slack_digest", digestArgs()]] as const) {

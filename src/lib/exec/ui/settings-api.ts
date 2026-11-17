@@ -101,17 +101,22 @@ export type SettingsSaveResult =
 export const SETTINGS_PATH = "/api/exec/settings";
 export const VOICE_RESET_PATH = "/api/exec/settings/voice-reset";
 
-/** The confirmations the settings PATCH takes: DD text triage's notice (P5a) and Slack reading's (P7a N20). */
-export type SettingsConfirm = "ddtext_notice" | "slack_reading_notice";
+/** The confirmations the settings PATCH takes: DD text triage's notice (P5a), Slack reading's (P7a N20) and P10's four
+ *  (read-all, lead counts, reply drafts, sending; contract §3.7.3). */
+export type SettingsConfirm = "ddtext_notice" | "slack_reading_notice" | "slack_read_all_notice" | "slack_lead_counts_notice"
+  | "slack_replies_notice" | "slack_reply_send_notice";
+const SETTINGS_CONFIRM_VALUES: ReadonlySet<string> = new Set<SettingsConfirm>([
+  "ddtext_notice", "slack_reading_notice", "slack_read_all_notice", "slack_lead_counts_notice", "slack_replies_notice", "slack_reply_send_notice"
+]);
 
 /** PATCH one change with the version the page loaded; the route validates, audits and checks the CAS again.
- *  P7a: confirm may also be "slack_reading_notice" (turning Slack reading on). Any other value is never sent. */
+ *  P7a: confirm may also be "slack_reading_notice" (turning Slack reading on); P10 adds its four. Any other value is never sent. */
 export async function patchSettings(
   body: { patch: SettingsPatch; expectedVersion: string | null; confirm?: SettingsConfirm },
   fetchImpl?: FetchLike
 ): Promise<SettingsSaveResult> {
   const payload: Json = { patch: body.patch, expectedVersion: body.expectedVersion };
-  if (body.confirm === "ddtext_notice" || body.confirm === "slack_reading_notice") payload.confirm = body.confirm;
+  if (typeof body.confirm === "string" && SETTINGS_CONFIRM_VALUES.has(body.confirm)) payload.confirm = body.confirm;
   let res: Response;
   try {
     res = await fetcher(fetchImpl)(SETTINGS_PATH, {

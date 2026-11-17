@@ -18,10 +18,13 @@ The assistant's non-negotiables. Every change is judged against them.
   Everyone else, and every sign-in link session on his account, gets a 404 on the assistant's pages and APIs.
 - **Mail is pinned to his account** (`exec_principals.mail_account_ids`).
 - **Email is never sent automatically.** Only his confirmed click on the exact saved draft sends it.
-- **Nothing is posted as Mitchell** except a check-in he clicks himself.
+- **Nothing is posted as Mitchell** except a check-in he clicks himself and, while "Let me send drafted replies" is on
+  (P10), a Slack reply draft he sends with "Send as you…" plus its confirm (posted exactly as approved, once, into the
+  source thread or DM).
 - **Only real DD records are used.** Recommendations and AI readings are labelled as such.
 - **The never-watch list is mandatory and fails closed.** The FB lead Slack channels carry addiction-treatment intake
-  data (42 CFR Part 2): they are never read, stored, logged or sent anywhere.
+  data (42 CFR Part 2): their content is never read, stored, logged or sent anywhere; with lead counts on (P10), only
+  the number of new top-level app posts per channel per local day is read (each post's ts and shape flags) and kept.
 - **Restricted senders follow decision R** (policy `hidden`): the page and DD chat show counts only.
 - **No finance** in the brief or on any Slack surface.
 - **Never log content, names or credentials.** Logs, ops alerts, audit rows, job payloads and results carry ids,
@@ -91,7 +94,11 @@ Each file ends with a verify grid that must be all `ok`. Code first is safe in e
 11. `20261111100000_exec_brief` (P8): briefs, check-ins, mentions
 12. `20261111200000_exec_brief_dm_refs` (P9): three new `_v2` brief functions, nothing else. The code works before it
     is applied (it falls back to P8's functions and raises one `exec-brief-v2-missing` alert).
-13. Later: `20261112100000_exec_slack_leads_replies` (P10).
+13. `20261112100000_exec_slack_leads_replies` (P10): lead channels and lead counts (whole numbers only), Slack reply
+    drafts, their DM cards and the Slack style profile; seven `exec_settings` columns; `exec_slack_accept_action_v3` and
+    `exec_slack_fb_lead_channels_v2` (versioned: no earlier object changes). Apply it after P9's file (its grid's
+    "unchanged (P9)" rows need P9's functions). The code works before it is applied: every P10 switch reads off and
+    "not installed", and a DM click goes through v2 as before.
 
 After re-applying any earlier file by hand, re-run every later file's grid (later files version their functions, so a
 re-run of an earlier file can't revert them), then the whole-surface grid (§16).
@@ -142,6 +149,10 @@ re-run of an earlier file can't revert them), then the whole-surface grid (§16)
 | Check-ins / mentions | 30 days / 90 days | system purge |
 | Bot DMs in Slack | `retention_days_chat`; at most 80 deletes per installation per run | `exec.slack-dm-purge`, system work at 04:10 UTC since P9 (a disabled principal's DMs too) |
 | DD-bot mini-brief DMs | `retention_days_chat` as it was at post time, at most 50 a day | system purge |
+| Lead counts and lead channel rows (P10) | the end of the local day (lead channel rows: the last mapping) + `retention_days_slack` clamped to 7..365 | system purge; all of his at once when lead counts go off, and with his channel rows when reading stops |
+| Slack reply drafts (P10) | open: 7 days after the last write; closed and unknown: content 7 days, rows 30 days; a draft whose source message goes, with it | system purge; the reply sweep (every 5 min) blanks drafts whose context was deleted |
+| Slack reply cards (P10) | `retention_days_chat`; a revoked installation's at the next purge | system purge |
+| Slack style profile (P10) | 30 days; at once when style learning goes off | system purge |
 
 ---
 
@@ -204,6 +215,14 @@ but not harmless: every other kind would still be claimed there.
 - `chat_enabled` = false; `ask_ai_uses_exec` = false; `chat_daily_cap_usd` = 9 (at most 0.6 x the daily cap).
 - `slack_reading_enabled` = false (the Read Slack switch; its confirm attests the checklist); `slack_daily_cap_usd` = 2
   (at most 0.2 x the daily cap).
+- P10 (Settings, Slack; shown once Slack reading is set up; the four marked "confirm" open a notice first):
+  `slack_read_all` = false, confirm ("Also read finance, HR and legal channels and channels I muted in Slack"; finance
+  stays off every Slack surface); `slack_lead_counts_enabled` = false, confirm ("Count leads in client lead channels";
+  whole numbers only, and only for lead channels he is already in); `slack_replies_enabled` = false, confirm ("Draft
+  Slack replies"); `slack_reply_send_enabled` = false, confirm ("Let me send drafted replies"; needs reply drafts on);
+  `slack_reply_auto` = false ("Draft replies automatically"; needs reply drafts on); `slack_reply_daily_cap_usd` = 1.5
+  ($0-$20, the automatic drafts' own budget); `slack_voice_enabled` = true ("Learn my Slack writing style"). Turning
+  reply drafts off turns sending and automatic drafts off in the same save; turning lead counts off deletes the counts.
 - `exec_principals.enabled` = true (seeded). `mail_account_ids`: set by the P3 pin script. Slack ids: bound at OAuth.
 - Constants: chat 30 requests per 10 min and 2 answers at once; brief regenerate 6 an hour, dry run 3 an hour, a 240 s
   build, the watchdog at +45 min, the delivery cutoff at max(12:00, brief time + 4 h); check-ins at most 3 a brief,
@@ -308,6 +327,34 @@ Code first is safe in every phase. Each phase's steps in order, with its accepta
   verified authenticator it preselects the OLDEST and offers the others by name and added date (lead decision LD-2),
   so a factor someone added later never silently becomes the one his code is checked against. "Skip for now" signs in
   without the code: DD works, the assistant doesn't.
+- **P10 (Slack: read all, lead counts, reply drafts):** no new environment variable, Slack scope or event.
+  1. Slack reading must be on first (P7a above). Apply `20261112100000_exec_slack_leads_replies.sql` after P9's file;
+     its grid must be all ok. Run the whole-surface grid (§16).
+  2. Paste the manifest's two changed strings (`docs/exec-slack-manifest.json`, Basic Information, Display
+     Information); no reinstall.
+  3. Before "Let me send drafted replies": his DD Slack connection must be his own and from 2026-05-14 or later
+     (`users.slack_connected_at`; otherwise he reconnects Slack from his DD profile). After the switch, the System
+     card's "Slack replies" row reads "Slack connection: Yours" within a minute (the token check). The posting and
+     settings routes ask for the assistant's step-up: on main since #533 that is the switch
+     `EXEC_REQUIRE_PASSWORD_SIGNIN` (off by default). Set it to `true` and redeploy before turning sending on, or record
+     the owner's written acceptance that any session on his account (a sign-in link a DD leader mints included) can
+     post Slack replies as him with "Send as you…" and turn the P10 switches on, attestations included.
+  4. Direct messages first: if the Slack section says "Your direct messages aren't read" (or group DMs), use "Allow
+     reading again" before the read-all switch; discovery re-runs, so reading pauses for a few minutes.
+  5. The notices first (employee notice, Slack Connect partners, privacy page), then, one at a time: "Also read
+     finance, HR and legal channels and channels I muted in Slack" (read the confirm's list of channels it will open
+     and mute any that carries patient or lead data first: press Mute, or Don't watch, on its row in the channel list;
+     the confirm's list follows. Direct messages and group DMs he muted in Slack are opened too and are listed only as
+     "Direct message" / "Group DM": DD has no per-DM control, so if one of them must stay unread, leave read-all off),
+     "Count leads in client lead channels", "Draft Slack replies", "Let me send drafted replies", and, after a week,
+     optionally "Draft replies automatically". The PR's §7.3 has the live checks (a test lead's marker word must be
+     found nowhere: the five P10 tables, `exec_briefs`, `exec_sync_state`, `exec_jobs`, `exec_audit_log`, the logs;
+     run the count check during his work hours: outside them the job counts every 3 hours).
+  6. Lead coverage: counts cover only the lead channels he is already a member of (he joins none and mutes none for
+     this). Make sure each client's FB onboarding Notifications card lists its lead channels, by link where possible.
+     The Slack tab's Leads card lists unlinked and ambiguous channels to fix ("Open in Slack") and shows card entries
+     he isn't a member of as "not counted" (information, not a to-do). Until lead counts are installed and on, the card
+     reads "Lead counts aren't installed yet." / "Lead counts are off. Turn them on in Settings.".
 
 ---
 
@@ -388,12 +435,20 @@ Per principal (in his zone; the brief's works in the brief zone):
 | `exec.brief-prep` | brief time - 15 min | brief on |
 | `exec.brief-sweep` | every 5 min | none (skips cheaply when not installed) |
 | `exec.brief-health` | daily 06:00 | brief and check-ins on |
+| `exec.slack-lead-count` (P10) | every 30 min; it counts hourly in his work window, every 3 h otherwise, plus a nightly recount of the last 7 days | P10 and Slack reading installed, Read Slack and lead counts on |
+| `exec.slack-rdraft-plan` (P10) | every 10 min | P10 installed, reply drafts, automatic drafts and Read Slack on |
+| `exec.slack-rdraft-sweep` (P10) | every 5 min | P10 installed (it deletes, so it runs with every switch off) |
+| `exec.slack-voice-refresh` (P10) | Sundays 04:40 | P10 installed, reply drafts and Slack style learning on |
+| `exec.slack-reply-token-check` (P10) | daily 06:10, 2 attempts | P10 installed, reply drafts and sending on |
 
 Event-driven kinds (enqueued by a route, a Slack event, a button or another job): `exec.email-triage`,
 `exec.draft-generate` (only a process with `MISSIVE_EA_TOKEN` claims it, P9), `exec.slack-reply`, `exec.slack-action`,
 `exec.slack-card`, `exec.slack-home`, `exec.slack-uninstall`, `exec.slack-classify`, `exec.slack-triage`,
 `exec.slack-rekey`, `exec.slack-user-check`, `exec.slack-read-purge`, `exec.slack-digest`, `exec.brief-deliver`,
-`exec.checkin-send`, `exec.checkin-rewrite`, `exec.access-alert`.
+`exec.checkin-send`, `exec.checkin-rewrite`, `exec.access-alert`, and P10's `exec.slack-rdraft-generate` (Draft reply,
+the chat tool, the plan and Rewrite). P10's `exec.slack-rdraft-send` and `exec.slack-rdraft-act` (the reply card's
+Send and its other buttons) are inserted only by `exec_slack_accept_action_v3` from a verified click; no code enqueues
+them.
 
 ---
 
@@ -478,7 +533,13 @@ Event-driven kinds (enqueued by a route, a Slack event, a button or another job)
     `unpinned_factor` or `factor_predates_pin`),
     `exec-owner-unpinned-factor:<UTC date>` (a verified factor on his account isn't pinned), `exec-owner-mfa-misconfigured`
     (the pin variable is malformed), `exec-brief-v2-missing` (the P9 migration isn't applied yet),
-    `brief-compose-timeout:<local date>` (the AI summary timed out and the deterministic brief was used).
+    `brief-compose-timeout:<local date>` (the AI summary timed out and the deterministic brief was used);
+  - P10: `slack-reply-token-mismatch:<principal>` (sending Slack replies is paused: the DD Slack token isn't his;
+    fix his DD Slack connection before any send), `slack-lead-run-failing:<principal>` (three lead-count runs in a row
+    failed; the System card's "Slack lead counts" row names the code). Neither ever names a lead channel.
+- **P10 System card rows:** "Slack lead counts" (last run, channels counted, unlinked, not a member, the last error),
+  "Slack replies" (open, sent today, unknown, the Slack connection's verdict and when it was checked) and "Slack
+  style".
 - **`/api/cron/status`:** the exec-worker and exec-scheduler heartbeats (after a SIGTERM: "shutting down (SIGTERM)"); the
   legacy brief's skip reasons.
 - **The brief's cost and latency** (lead decision L3; read-only): run it daily for two weeks after the brief is on. If
@@ -635,17 +696,19 @@ P9:
 
 ## 16. Whole-surface lockdown grid
 
-Paste into the Supabase SQL editor (read-only). Failing rows sort first. Every row must be ok. The counts are after P9:
-39 exec tables, 6 exec sequences, 78 exec functions (P2a to P8 had 75; P9 adds three `_v2` functions; P10 adds its
-own). The scratch harness runs this exact query on PGlite, PostgreSQL 15 and 17 after every migration.
+Paste into the Supabase SQL editor (read-only). Failing rows sort first. Every row must be ok. The counts are after P10:
+44 exec tables, 6 exec sequences, 100 exec functions. P2a to P8 had 75 functions; P9 added three `_v2` functions (after
+P9: 39 exec tables, 6 exec sequences, 78 exec functions); P10 adds five tables and 22 functions, and no sequence. Before
+P10's file is applied, the three inventory rows read 39, 6 and 78 and fail; every other row must still be ok. The
+scratch harness runs this exact query on PGlite, PostgreSQL 15 and 17 after every migration.
 
 ```sql
 with rel as (select c.oid, c.relname::text as name, c.relkind, c.relrowsecurity as rls, c.relacl from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname like 'exec\_%' and c.relkind in ('r','p','v','m','f','S')),
 fn as (select p.oid, p.proname::text as name, p.oid::pg_catalog.regprocedure::text as sig, p.prosecdef, p.proacl, (select c from unnest(p.proconfig) c where c like 'search_path=%' limit 1) as sp from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname like 'exec\_%')
 select check_name, ok, detail from (
- select 'inventory: exec tables = 39' as check_name, count(*) = 39 as ok, count(*)::text as detail from rel where relkind in ('r','p')
+ select 'inventory: exec tables = 44' as check_name, count(*) = 44 as ok, count(*)::text as detail from rel where relkind in ('r','p')
  union all select 'inventory: exec sequences = 6', count(*) = 6, count(*)::text from rel where relkind = 'S'
- union all select 'inventory: exec functions = 78', count(*) = 78, count(*)::text from fn
+ union all select 'inventory: exec functions = 100', count(*) = 100, count(*)::text from fn
  union all select 'inventory: no exec view/matview/foreign table', count(*) = 0, string_agg(name, ', ') from rel where relkind in ('v','m','f')
  union all select 'rls on: ' || name, rls, null from rel where relkind in ('r','p')
  union all select 'no policies: ' || r.name, count(p.policyname) = 0, string_agg(p.policyname::text, ', ') from rel r left join pg_catalog.pg_policies p on p.schemaname = 'public' and p.tablename = r.name where r.relkind in ('r','p') group by r.name

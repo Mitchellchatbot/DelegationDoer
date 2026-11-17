@@ -438,6 +438,15 @@ export function settings(over: Partial<ExecSettings> = {}): ExecSettings {
     slackReadingEnabled: false,
     slackDailyCapUsd: 2,
     slackReadingSchemaReady: false,
+    // P10 stage 0 (lead, §3.7.1): the P10 group not installed (the earlier pages render as before).
+    slackReadAll: false,
+    slackLeadCountsEnabled: false,
+    slackRepliesEnabled: false,
+    slackReplySendEnabled: false,
+    slackReplyAuto: false,
+    slackReplyDailyCapUsd: 1.5,
+    slackVoiceEnabled: true,
+    slackP10SchemaReady: false,
     ...over
   };
 }
@@ -542,7 +551,7 @@ export function settingsView(over: Partial<SettingsView> = {}): SettingsView {
     settings: settings(),
     // P5b: chat not installed (the settings() fixture above), so the view says so.
     // P7a: reading not installed either (settings() has slackReadingSchemaReady false).
-    schema: { email: true, drafts: true, ddtext: true, chat: false, slack: false },
+    schema: { email: true, drafts: true, ddtext: true, chat: false, slack: false, slackP10: false },
     pinnedMailbox: { ok: true, data: { accountIds: ["acc_1"], emails: ["mitchell@scaledai.org"] } },
     spend: { ok: true, data: { totalUsd: 0.42, capUsd: 15, byFeature: [{ feature: "triage", usd: 0.31 }, { feature: "draft", usd: 0.11 }] } },
     recentAccess: {

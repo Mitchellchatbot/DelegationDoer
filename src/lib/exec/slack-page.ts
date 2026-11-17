@@ -21,6 +21,9 @@ import {
   type SlackPrivacy
 } from "@/lib/exec/slack-intel-types";
 import { tsToMs } from "@/lib/exec/slack-read-types";
+import { leadCountsView } from "@/lib/exec/slack-leads-view";
+import type { LeadCountsView, ReplyStatus } from "@/lib/exec/slack-p10-types";
+import { replyBadgesFor } from "@/lib/exec/slack-reply-view";
 import { listIntelChannels, readOpenSlackItems } from "@/lib/exec/slack-reading";
 import { listClients, listProjects } from "@/lib/exec/sources/dd";
 import { localDateString, startOfLocalDayUtc } from "@/lib/exec/time";
@@ -46,11 +49,17 @@ import type { Section } from "@/lib/exec/view-types";
 // ChannelRow (the same predicate RPC 1 enforces).
 //
 // Nothing here logs content (§0.3 rule 4): a failed section logs its fixed name, the principal id and the error's name.
+//
+// P10 (contract §3.9.1, C33, C62; Area B): the lead counts card (leadCountsView: stored counts only, its own soft section, no
+// Slack call), whether reply drafts are on (repliesOn), and each catch-up row's channel id, ts and its newest reply draft
+// (one batched replyBadgesFor read for the shown rows; a failure leaves every row's reply null).
 
 /** `quote` is P7a's stored excerpt, shown read-only; the field is deliberately not named `excerpt` (B-P7a-6 flags that
  *  property name in any Slack file outside P7a's three). */
 export interface CatchUpRow { itemId: string; kind: SlackItemKind; channelLabel: string; privacy: SlackPrivacy; at: string;
-  summary: string | null; quote: string | null; assessed: boolean; permalink: string | null; ageLabel: string }
+  summary: string | null; quote: string | null; assessed: boolean; permalink: string | null; ageLabel: string;
+  /** P10 (§3.9.1): the message's channel and ts (the "Draft reply" link's key) and its newest reply draft, when replies are on. */
+  channelId: string; ts: string; reply: { id: string; status: ReplyStatus; sentAt: string | null } | null }
 export interface DigestCardView { digestId: string | null; channelId: string; channelLabel: string; privacy: SlackPrivacy; date: string;
   status: DigestStatus | "not_built"; summary: string | null; highlights: { text: string; permalink: string | null }[];
   decisions: { text: string; permalink: string | null }[]; openQuestions: { text: string; permalink: string | null }[];
@@ -61,6 +70,10 @@ export interface SlackPageView {
   catchUp: Section<{ rows: CatchUpRow[]; total: number; hiddenMuted: number }>;
   digests: Section<{ cards: DigestCardView[]; channelsWithoutDigest: number }>;
   counts: Section<SlackCatchUpCounts>;
+  /** P10 (§3.9.1, C62): the lead counts card (its own soft section; the card renders every lead state's copy). */
+  leads: Section<LeadCountsView>;
+  /** P10 (§3.9.1): reply drafts are on (slackP10SchemaReady ∧ slackRepliesEnabled): the catch-up rows offer "Draft reply". */
+  repliesOn: boolean;
 }
 
 const DAY_MS = 86_400_000;
@@ -163,7 +176,7 @@ function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
-async function soft<T>(principal: ExecPrincipal, what: "catch-up" | "digests" | "counts", signal: AbortSignal, run: () => Promise<T>): Promise<Section<T>> {
+async function soft<T>(principal: ExecPrincipal, what: "catch-up" | "digests" | "counts" | "leads", signal: AbortSignal, run: () => Promise<T>): Promise<Section<T>> {
   try {
     return { ok: true, data: await untilAborted(Promise.resolve().then(run), signal) };
   } catch (err) {
@@ -187,11 +200,30 @@ function catchUpRow(item: SlackItemRow, ch: ChannelRow, privacy: SlackPrivacy, n
     quote,
     assessed: item.assessed === true,
     permalink: typeof item.permalink === "string" && isAllowedLinkUrl(item.permalink) ? item.permalink : null,
-    ageLabel: agoText(at, now)
+    ageLabel: agoText(at, now),
+    channelId: item.channelId,
+    ts: item.ts,
+    reply: null
   };
 }
 
-async function readCatchUp(principal: ExecPrincipal, state: SlackIntelState, now: Date, signal: AbortSignal):
+/** P10 (§3.9.1): one batched read of the shown rows' reply drafts; a failure leaves every row's reply null. */
+async function withReplyBadges(principal: ExecPrincipal, rows: CatchUpRow[], signal: AbortSignal): Promise<CatchUpRow[]> {
+  if (rows.length === 0) return rows;
+  try {
+    const badges = await replyBadgesFor(principal, rows.map((r) => ({ channelId: r.channelId, ts: r.ts })), { signal });
+    return rows.map((r) => {
+      const b = badges.get(`${r.channelId}:${r.ts}`);
+      return b ? { ...r, reply: { id: b.id, status: b.status, sentAt: b.sentAt } } : r;
+    });
+  } catch (err) {
+    signal.throwIfAborted();
+    console.error(`[exec-slack-page] reply badges failed for ${principal.id} (${errName(err)})`);
+    return rows;
+  }
+}
+
+async function readCatchUp(principal: ExecPrincipal, state: SlackIntelState, now: Date, signal: AbortSignal, repliesOn = false):
   Promise<{ rows: CatchUpRow[]; total: number; hiddenMuted: number }> {
   // Fixer ui-8 / ui-9: P7a's throwing read (a failure is this card's "Couldn't load", never "Nothing in Slack is waiting
   // on you"), and its count of open items the C20 screen withheld only because their conversation is muted (the screen
@@ -218,8 +250,9 @@ async function readCatchUp(principal: ExecPrincipal, state: SlackIntelState, now
     kept.push({ item, ch: ch as ChannelRow, privacy: verdict.privacy });
   }
   kept.sort((a, b) => byTsDesc(a.item, b.item));
+  const rows = kept.slice(0, SLACK_INTEL_LIMITS.catchUpRows).map((k) => catchUpRow(k.item, k.ch, k.privacy, now));
   return {
-    rows: kept.slice(0, SLACK_INTEL_LIMITS.catchUpRows).map((k) => catchUpRow(k.item, k.ch, k.privacy, now)),
+    rows: repliesOn ? await withReplyBadges(principal, rows, signal) : rows,
     total: kept.length,
     hiddenMuted
   };
@@ -244,22 +277,26 @@ export async function getSlackPageView(principal: ExecPrincipal, q: { date: stri
   const settings = await loadSettings(principal.id);
   const state = await slackIntelState(principal, settings, { signal });
   const { localDate, ...dateView } = date;
-  const base = { generatedAt: now.toISOString(), timezone: tz, state, date: dateView };
+  const repliesOn = settings.slackP10SchemaReady === true && settings.slackRepliesEnabled === true;
+  const base = { generatedAt: now.toISOString(), timezone: tz, state, date: dateView, repliesOn };
   if (state !== "ok") {
     return {
       ...base,
       catchUp: { ok: true, data: { rows: [], total: 0, hiddenMuted: 0 } },
       digests: { ok: true, data: { cards: [], channelsWithoutDigest: 0 } },
-      counts: { ok: true, data: { ...EMPTY_COUNTS } }
+      counts: { ok: true, data: { ...EMPTY_COUNTS } },
+      // The page shows only the state's sentence: nothing else is read (the leads card isn't rendered).
+      leads: UNAVAILABLE
     };
   }
-  const [catchUp, digests, counts] = await Promise.all([
-    soft(principal, "catch-up", signal, () => readCatchUp(principal, state, now, signal)),
+  const [catchUp, digests, counts, leads] = await Promise.all([
+    soft(principal, "catch-up", signal, () => readCatchUp(principal, state, now, signal, repliesOn)),
     soft(principal, "digests", signal, () => readDigests(principal, state, localDate, now, signal)),
-    soft(principal, "counts", signal, async () => (await slackCatchUpCounts(principal, state, { signal, now })) ?? { ...EMPTY_COUNTS })
+    soft(principal, "counts", signal, async () => (await slackCatchUpCounts(principal, state, { signal, now })) ?? { ...EMPTY_COUNTS }),
+    soft(principal, "leads", signal, () => leadCountsView(principal, settings, now, { signal }))
   ]);
   opts?.signal?.throwIfAborted();
-  return { ...base, catchUp, digests, counts };
+  return { ...base, catchUp, digests, counts, leads };
 }
 
 // ---------------------------------------------------------------------------

@@ -311,7 +311,9 @@ describe("rateLimit (S2, C11, test 2)", () => {
       // P7b stage 0 (§0.2 step 5): the tag route's and the digest route's buckets.
       "slack_digest_build", "slack_disconnect", "slack_links", "slack_reading",
       // P8 stage 0 (§3.17.4, p8-bindings.md): Regenerate, its dry run and the brief settings.
-      "brief_dry_run", "brief_regenerate", "brief_settings"
+      "brief_dry_run", "brief_regenerate", "brief_settings",
+      // P10 stage 0 (§3.12, p10-bindings.md): Slack reply create, edit and send.
+      "slack_reply_create", "slack_reply_edit", "slack_reply_send"
     ].sort());
     expect(() => auditNthNewestAt([])).toThrow();
   });

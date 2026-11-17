@@ -1,9 +1,13 @@
 import "server-only";
 
 import { SLACK_LIMITS, SLACK_RE } from "@/lib/exec/slack-types";
-import type { DmTarget, SlackHomeView, SlackMessageParts, SlackMethod } from "@/lib/exec/slack-types";
+import type { DmTarget, OwnerPostTarget, SlackHomeView, SlackMessageParts, SlackMethod } from "@/lib/exec/slack-types";
 import type { ConversationMeta, ConvType, ReadTarget } from "@/lib/exec/slack-read-types";
 import type { ErrorClass } from "@/lib/exec/types";
+import type { LeadExclusions, LeadPostShape } from "@/lib/exec/slack-p10-types";
+
+/** P10 (B-P10-3): the lead modules import the shape type from here, beside the reader. */
+export type { LeadExclusions, LeadPostShape };
 
 // P6 Slack Web API client (contract §3.5, K14; Area B; server-only). The one
 // module that talks to https://slack.com/api/ (boundary rule B-P6-4). Imports
@@ -584,6 +588,40 @@ export async function deleteInDm(target: DmTarget, msg: { channel: string; ts: s
   }
 }
 
+/** P10: a message posted as him is at most this long (Slack's own chat.postMessage limit). */
+const OWNER_POST_TEXT_MAX = 40_000;
+
+/** P10 (§3.5.7, B-P10-8): posts AS MITCHELL with his DD user token. Throws SlackChannelRefusedError BEFORE any network call
+ *  unless msg.channel === target.channelId and both match /^[CGD][A-Z0-9]{2,30}$/, msg.threadTs is null or a well-formed ts,
+ *  and msg.text is 1..40,000 characters. Body exactly { channel, text, thread_ts? (only when threadTs is set),
+ *  unfurl_links: false, unfurl_media: false, link_names: false, reply_broadcast: false }: no blocks, no metadata, no as_user,
+ *  no parse. Returns the posted ts (missing → bad_response). Imported only by slack-reply-post.ts. */
+export async function postAsOwnerInConversation(target: OwnerPostTarget, msg: { channel: string; threadTs: string | null; text: string },
+  opts?: SlackCallOptions): Promise<{ ts: string }> {
+  const pinned = target?.channelId;
+  const channel = msg?.channel;
+  // B-P10-8: the one channel the target was built for, checked before anything leaves this process.
+  if (typeof pinned !== "string" || !CHANNEL_ID.test(pinned) || typeof channel !== "string" || channel !== pinned) throw new SlackChannelRefusedError();
+  const threadTs = msg.threadTs;
+  if (threadTs !== null && (typeof threadTs !== "string" || !SLACK_RE.ts.test(threadTs))) throw new SlackChannelRefusedError();
+  const text = msg.text;
+  if (typeof text !== "string" || text.length < 1 || text.length > OWNER_POST_TEXT_MAX) throw new SlackChannelRefusedError();
+  const method: SlackMethod = "chat.postMessage";
+  const body: Json = {
+    channel,
+    text,
+    unfurl_links: false,
+    unfurl_media: false,
+    link_names: false,
+    reply_broadcast: false
+  };
+  if (threadTs !== null) body.thread_ts = threadTs;
+  const json = await callSlack(method, bearer(method, target.token), { json: body }, opts);
+  const ts = strOf(json.ts, SLACK_RE.ts);
+  if (ts === null) throw badResponse(method);
+  return { ts };
+}
+
 /** K13: views.publish (by method string) with view = JSON.stringify(view); userId must match SLACK_RE.user. */
 export async function setHomeView(token: string, userId: string, view: SlackHomeView, opts?: SlackCallOptions): Promise<void> {
   const method: SlackMethod = "views.publish";
@@ -605,6 +643,102 @@ export async function revokeToken(token: string, opts?: SlackCallOptions): Promi
   }
   if (json.revoked === true) return "revoked";
   throw badResponse(method);
+}
+
+
+// --- P10 lead-count reads with his user token (P10 contract §3.4.1, C12, C18, B-P10-3; Area D writes them, Area B consumes)
+//
+// H3 / C12: what a lead channel's post holds (patient and intake data, 42 CFR Part 2) never leaves readHistoryShapes. The
+// reader takes each message's ts, thread_ts, bot_id, bot_profile (whether it is there, nothing inside it), app_id, user,
+// subtype and hidden, decides `excluded` from the ids it was handed, and returns one six-key shape per message: no text,
+// blocks, attachments, files, username, reactions, metadata or author ever becomes a value here. Nothing is logged.
+
+/** The Slack user whose posts are never a lead (Slackbot). */
+const SLACKBOT_USER = "USLACKBOT";
+
+/** A string list as a set of its non-empty strings (the exclusions arrive from the caller's typed object). */
+function idSet(list: unknown): ReadonlySet<string> {
+  const out = new Set<string>();
+  if (Array.isArray(list)) for (const v of list) if (typeof v === "string" && v.length > 0) out.add(v);
+  return out;
+}
+
+/** P10 (C12, B-P10-3): conversations.history (Tier 3) reduced to shapes INSIDE this function. For each message it reads only
+ *  ts, thread_ts, bot_id, bot_profile (presence only), app_id, user, subtype and hidden, and returns exactly
+ *  { ts, reply, bot, excluded, hidden, subtypeClass }. text, blocks, attachments, files, username, reactions and metadata are
+ *  never read into any value. `excluded` is decided here: user USLACKBOT, or user ∈ exclude.userIds, bot_id ∈ exclude.botIds,
+ *  app_id ∈ exclude.appIds. A message without a well-formed ts is skipped. limit ≤ 200; never persists a cursor. */
+export async function readHistoryShapes(t: ReadTarget, q: { channel: string; oldest: string; latest: string | null; inclusive: boolean;
+  limit: number; cursor?: string | null }, exclude: LeadExclusions, opts?: SlackCallOptions):
+  Promise<{ shapes: LeadPostShape[]; hasMore: boolean; nextCursor: string | null }> {
+  const method: SlackMethod = "conversations.history";
+  if (typeof q?.channel !== "string" || !CHANNEL_ID.test(q.channel)) throw new SlackApiError(method, "invalid_arguments", { errorClass: "fatal" });
+  const userIds = idSet(exclude?.userIds);
+  const botIds = idSet(exclude?.botIds);
+  const appIds = idSet(exclude?.appIds);
+  const json = await callSlack(method, bearer(method, t.userToken), {
+    form: {
+      channel: q.channel,
+      oldest: tsArg(q.oldest),
+      latest: tsArg(q.latest),
+      inclusive: q.inclusive === true ? "true" : "false",
+      limit: pageLimit(q.limit, 200),
+      cursor: str(q.cursor)
+    }
+  }, opts);
+  const shapes: LeadPostShape[] = [];
+  for (const m of messagesOf(json)) {
+    const ts = strOf(m.ts, SLACK_RE.ts);
+    if (ts === null) continue;
+    const threadTs = strOf(m.thread_ts, SLACK_RE.ts);
+    const reply = threadTs !== null && threadTs !== ts;
+    const subtype = typeof m.subtype === "string" && m.subtype.length > 0 ? m.subtype : null;
+    const botId = typeof m.bot_id === "string" && m.bot_id.length > 0 ? m.bot_id : null;
+    const appId = typeof m.app_id === "string" && m.app_id.length > 0 ? m.app_id : null;
+    const user = typeof m.user === "string" && m.user.length > 0 ? m.user : null;
+    const bot = Boolean(m.bot_id) || isRecord(m.bot_profile) || subtype === "bot_message";
+    const hidden = m.hidden === true;
+    const excluded = user === SLACKBOT_USER || (user !== null && userIds.has(user)) || (botId !== null && botIds.has(botId))
+      || (appId !== null && appIds.has(appId));
+    const subtypeClass: LeadPostShape["subtypeClass"] =
+      subtype === null ? "none" : subtype === "bot_message" ? "bot_message" : subtype === "tombstone" ? "tombstone" : "other";
+    // B-P10-3: exactly LeadPostShape's six keys, nothing else.
+    shapes.push({ ts, reply, bot, excluded, hidden, subtypeClass });
+  }
+  return { shapes, hasMore: json.has_more === true, nextCursor: nextCursorOf(json) };
+}
+
+/** users.conversations types for the lead job's two conversation types. */
+const MEMBER_CHANNEL_TYPE: Readonly<Record<"channel" | "group", string>> = Object.freeze({ channel: "public_channel", group: "private_channel" });
+
+/** P10 (C18): users.conversations (Tier 3) for "channel" → public_channel and "group" → private_channel only, exclude_archived
+ *  true, limit ≤ 200; each item's id and its name (only when it matches /^[a-z0-9][a-z0-9._-]{0,79}$/, else null). */
+export async function listMemberChannels(t: ReadTarget, q: { types: readonly ("channel" | "group")[]; cursor?: string | null; limit: number },
+  opts?: SlackCallOptions): Promise<{ channels: { id: string; name: string | null }[]; nextCursor: string | null }> {
+  const method: SlackMethod = "users.conversations";
+  const wanted: string[] = [];
+  const types: readonly unknown[] = Array.isArray(q?.types) ? q.types : [];
+  for (const type of types) {
+    const s = type === "channel" || type === "group" ? MEMBER_CHANNEL_TYPE[type] : undefined;
+    if (s !== undefined && !wanted.includes(s)) wanted.push(s);
+  }
+  // No type asked: nothing to list (Slack's default would be public channels nobody requested).
+  if (wanted.length === 0) return { channels: [], nextCursor: null };
+  const json = await callSlack(method, bearer(method, t.userToken), {
+    form: { types: wanted.join(","), exclude_archived: "true", limit: pageLimit(q.limit, 200), cursor: str(q.cursor) }
+  }, opts);
+  const channels: { id: string; name: string | null }[] = [];
+  const seen = new Set<string>();
+  for (const c of Array.isArray(json.channels) ? json.channels : []) {
+    if (!isRecord(c)) continue;
+    // Only the two channel types: an IM or a group DM is never a lead channel, whatever Slack returned.
+    if (c.is_im === true || c.is_mpim === true) continue;
+    const id = strOf(c.id, CHANNEL_ID);
+    if (id === null || id.startsWith("D") || seen.has(id)) continue;
+    seen.add(id);
+    channels.push({ id, name: strOf(c.name, CHANNEL_NAME) });
+  }
+  return { channels, nextCursor: nextCursorOf(json) };
 }
 
 // --- P7a reads with his user token (P7a contract §3.6.1; Area B) -------------------------------

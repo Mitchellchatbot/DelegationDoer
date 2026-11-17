@@ -412,6 +412,8 @@ function sourcesOf(v: unknown): CitedSource[] {
 }
 
 const PRIVATE_REF_KINDS: readonly PrivateRefKind[] = ["other_threads", "dd_text", "other_clients", "private_slack"];
+/** P10: exec_slack_reply_drafts.id's shape (its CHECK). */
+const SLACK_REPLY_DRAFT_ID = /^esr_[0-9a-f]{32}$/;
 
 function cardsOf(v: unknown): ChatCard[] {
   if (!Array.isArray(v)) return [];
@@ -422,6 +424,9 @@ function cardsOf(v: unknown): ChatCard[] {
     else if (e.kind === "draft") {
       const kinds = strArray(e.privateRefKinds).filter((k): k is PrivateRefKind => PRIVATE_REF_KINDS.includes(k as PrivateRefKind));
       out.push({ kind: "draft", id: e.id, existing: e.existing === true, privateRefKinds: kinds });
+    } else if (e.kind === "slack_reply" && SLACK_REPLY_DRAFT_ID.test(e.id)) {
+      // P10 (§3.6.1; Area C): a Slack reply draft's card; its text is read from DD, never from the chat row.
+      out.push({ kind: "slack_reply", id: e.id, existing: e.existing === true });
     }
   }
   return out;

@@ -37,6 +37,9 @@ import type { JobContext, JobHandler } from "@/lib/exec/types";
 //      hour of history, so a first DM from someone new is triaged within
 //      about a minute. A channel makes no history call.
 // Returns the class and the watch state only.
+//
+// P10 (contract §3.3.3, C2): before step 4 the settings are read (a failure throws: three attempts) and the read-all switch
+// is passed to the classifier context.
 
 const KIND = SLACK_READ_JOB_KINDS.classify;
 const CATCH_UP_LIMIT = 50;
@@ -91,8 +94,10 @@ async function runClassify(ctx: JobContext): Promise<SlackClassifyResult> {
     }
   }
 
-  // 4.
-  const classCtx = await classifierContext(principal, ri, { botUserIds, slackMutedIds: null, signal });
+  // 4. P10 (§3.3.3): the read-all switch, read fresh; a failure throws before anything is applied.
+  const p10 = await loadSettings(principal.id);
+  const readAll = p10.slackP10SchemaReady === true && p10.slackReadAll === true;
+  const classCtx = await classifierContext(principal, ri, { botUserIds, slackMutedIds: null, signal, readAll });
   const c = classifyConversation(info, classCtx);
   const now = new Date();
   await applyClasses(principal, ri.row.id, [toClassRow(info, c)], now.toISOString());

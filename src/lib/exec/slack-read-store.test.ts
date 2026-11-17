@@ -1022,6 +1022,6 @@ describe("ST17 (C48): every RPC's argument keys are the migration's parameter na
     }
     // P7b stage 0 (§3.17.6 P7a-2): + listIntelChannels and getSlackItemsByIds (they read tables only; no RPC); the P7b fixer
     // (security-3): + latestAuthorOptoutAt (a table read; no RPC).
-    expect(Object.keys(store).filter((k) => typeof (store as Record<string, unknown>)[k] === "function").length).toBe(50);   // §3.8.1: 45 functions, the predicate, the error class, P7b's three reads
+    expect(Object.keys(store).filter((k) => typeof (store as Record<string, unknown>)[k] === "function").length).toBe(52);   // §3.8.1: 45 functions, the predicate, the error class, P7b's three reads; P10 (§3.13): countReadAllEffects, listReplyChannelsForVoice
   });
 });

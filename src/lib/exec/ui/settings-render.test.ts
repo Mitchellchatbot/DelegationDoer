@@ -46,7 +46,7 @@ describe("SettingsForm, top-level (test 75)", () => {
   it("every registry field renders with its label and a control", () => {
     // P5b (contract §3.19.12): the chat fields render in their own section, and only once
     // P5b's migration is applied (before it, the section is one sentence with no control).
-    const chatInstalled = settingsView({ schema: { email: true, drafts: true, ddtext: true, chat: true, slack: false }, settings: settings({ chatSchemaReady: true, chatEnabled: true }) });
+    const chatInstalled = settingsView({ schema: { email: true, drafts: true, ddtext: true, chat: true, slack: false, slackP10: false }, settings: settings({ chatSchemaReady: true, chatEnabled: true }) });
     // P7a (§3.16, §3.20.2, SU12): the three section "slack" fields render in the Slack section's reading controls instead.
     const formFields = SETTINGS_FIELDS.filter((d) => d.section !== "slack");
     for (const [view, fields] of [
@@ -65,7 +65,7 @@ describe("SettingsForm, top-level (test 75)", () => {
   });
 
   it("a field whose migration isn't applied is disabled, with the copy", () => {
-    const html = form(settingsView({ schema: { email: true, drafts: false, ddtext: false, chat: false, slack: false } }));
+    const html = form(settingsView({ schema: { email: true, drafts: false, ddtext: false, chat: false, slack: false, slackP10: false } }));
     for (const key of ["ddtextEnabled", "retentionDaysDdtext", "voiceEnabled"]) {
       const f = fieldOf(html, key);
       expect(textOf(f), key).toContain("Not available yet: the team needs to apply the database update.");

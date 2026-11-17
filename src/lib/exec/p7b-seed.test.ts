@@ -108,8 +108,9 @@ describe("P7b seed: additive seeds on earlier phases' files (§0.2 step 5)", () 
   });
 
   it("the registry: tools 17-19 appended in order, strict, every property required, no instruction on prepare_client_update", () => {
-    expect([...CHAT_TOOL_NAMES].slice(16)).toEqual(["search_slack", "slack_digest", "prepare_client_update"]);
-    expect(CHAT_TOOL_NAMES).toHaveLength(19);
+    expect([...CHAT_TOOL_NAMES].slice(16, 19)).toEqual(["search_slack", "slack_digest", "prepare_client_update"]);
+    // P10 (§3.6.1, AM-P10-16; Area C): the 20th name and its registry entry, so the registry equals the names again.
+    expect(CHAT_TOOL_NAMES).toHaveLength(20);
     expect(CHAT_TOOLS.map((t) => t.name)).toEqual([...CHAT_TOOL_NAMES]);
     const byName = new Map(CHAT_TOOL_DEFS.map((d) => [d.name, d]));
     const props = (n: string) => Object.keys((byName.get(n)?.input_schema as { properties: object }).properties);

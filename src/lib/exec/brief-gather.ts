@@ -9,11 +9,13 @@ import { listThreadScreenRows } from "@/lib/exec/email-store";
 import { intakeThreadIdsForTasks, listScreenedApprovalItems } from "@/lib/exec/intake-screen";
 import { getOverview, type ExecOverview } from "@/lib/exec/overview";
 import { listBriefSlackDigests, type BriefSlackDigest } from "@/lib/exec/slack-digests";
+import { briefLeadsFor } from "@/lib/exec/slack-leads-view";
+import type { BriefLeadsBlock } from "@/lib/exec/slack-p10-types";
 import { slackIntelState } from "@/lib/exec/slack-intel-store";
 import type { SlackIntelState } from "@/lib/exec/slack-intel-types";
 import { listTasksCompletedBetween } from "@/lib/exec/sources/dd";
 import type { ApprovalItemList, ApprovalMechanism, DdTask } from "@/lib/exec/sources/dd-types";
-import { addLocalDays, localTimeToUtc } from "@/lib/exec/time";
+import { addLocalDays, localDateString, localTimeToUtc } from "@/lib/exec/time";
 import type { ExecPrincipal, ExecSettings } from "@/lib/exec/types";
 
 // P8 gather (contract §3.7, M4, C30; Area C; server-only): the deterministic, screened reads the brief is built from
@@ -139,17 +141,29 @@ export async function gatherBrief(principal: ExecPrincipal, settings: ExecSettin
       return { state, digests, catchUp: null };
     })();
 
-    const [overview, attention, approvalPairs, completed, slack] = await Promise.all([
-      overviewRead, attentionRead, Promise.all(approvalReads), completedRead, slackRead
+    // P10 (§3.8 item 2, C56, B-P10-4): the lead counts, read beside the sections and never fed to them or to the model. A
+    // rejected read with lead counts on is the "Couldn't load lead counts." block (v1.1 product-2), never a silent gap.
+    const leadsOn = settings.slackP10SchemaReady === true && settings.slackLeadCountsEnabled === true;
+    // The read is boxed so a hidden block (null: off, reading off, no channels) is told apart from a failed read (settle's null).
+    const leadsRead = leadsOn
+      ? settle<{ block: BriefLeadsBlock | null }>(async (s) => ({ block: await briefLeadsFor(principal, settings, now, { signal: s }) }))
+      : Promise.resolve<{ block: BriefLeadsBlock | null }>({ block: null });
+
+    const [overview, attention, approvalPairs, completed, slack, leadsSettled] = await Promise.all([
+      overviewRead, attentionRead, Promise.all(approvalReads), completedRead, slackRead, leadsRead
     ]);
     signal.throwIfAborted();
     const approvals: Partial<Record<ApprovalMechanism, ApprovalList | null>> = {};
     for (const [m, list] of approvalPairs) approvals[m] = list;
-    return assembleSections({
+    const sections = assembleSections({
       localDate, tz, now, attention, overview, approvals, completed, slack,
       ddtextOn: settings.ddtextSchemaReady === true && settings.ddtextEnabled === true,
       parseEmailFingerprint: parseFp
     });
+    const leads: BriefLeadsBlock | null = leadsSettled === null
+      ? { v: 1, unavailable: true, localDate: addLocalDays(localDateString(now, principal.timezone), -1) }
+      : leadsSettled.block;
+    return leads === null ? sections : { ...sections, leads };
   } finally {
     linked.dispose();
   }

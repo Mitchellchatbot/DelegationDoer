@@ -17,7 +17,7 @@ export async function GET() {
     {
       const { data, error } = await supabase
         .from("users")
-        .select("id, name, email, avatar_url, role, is_admin, widget_icon_url, slack_user_id, slack_team_id, slack_connected_at, birthday, onboarded_at, slack_last_sync_at, slack_last_sync_ok, slack_last_sync_msg, google_user_id, google_email, google_connected_at, google_last_sync_at, google_last_sync_ok, google_last_sync_msg, clock_enabled, personal_email, phone, job_title, location, bio, pronouns, work_hours_start, work_hours_end, work_timezone, weekly_schedule")
+        .select("id, name, email, avatar_url, role, is_admin, widget_icon_url, slack_user_id, slack_user_token, slack_team_id, slack_connected_at, birthday, onboarded_at, slack_last_sync_at, slack_last_sync_ok, slack_last_sync_msg, google_user_id, google_email, google_connected_at, google_last_sync_at, google_last_sync_ok, google_last_sync_msg, clock_enabled, personal_email, phone, job_title, location, bio, pronouns, work_hours_start, work_hours_end, work_timezone, weekly_schedule")
         .eq("id", userId)
         .maybeSingle();
       if (!error && data) row = data;
@@ -42,6 +42,12 @@ export async function GET() {
         isAdmin: (row.is_admin as boolean | null) === true,
         widgetIconUrl: (row.widget_icon_url as string | null) ?? null,
         slackUserId: (row.slack_user_id as string | null) ?? null,
+        // Whether the user actually completed Slack OAuth — the only thing
+        // that stores a user token. slack_user_id alone is NOT a connection:
+        // resolveSlackId caches it after any bot DM email lookup, and the
+        // leader Slack linker sets it too. Only a boolean leaves the server;
+        // the token itself never does.
+        slackAuthorized: !!(row.slack_user_token as string | null),
         slackTeamId: (row.slack_team_id as string | null) ?? null,
         slackConnectedAt: (row.slack_connected_at as string | null) ?? null,
         birthday: (row.birthday as string | null) ?? null,

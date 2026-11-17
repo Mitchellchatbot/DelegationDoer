@@ -413,7 +413,7 @@ describe("stage-0 constants", () => {
     expect(CLONE_EA_PATHS.authMe()).toBe("/api/auth/me");
     expect(CLONE_EA_PATHS.createReply("t/1 x")).toBe("/api/threads/t%2F1%20x/outlook-draft");
     expect(CLONE_EA_PATHS.createNew()).toBe("/api/compose/outlook-draft");
-    expect(CLONE_EA_PATHS.draft("AAMk=Ab")).toBe("/api/outlook-drafts/AAMk%3DAb");
+    expect(CLONE_EA_PATHS.draft("AAMk=Ab")).toBe("/api/outlook-drafts/AAMk=Ab");
     expect(CLONE_EA_PATHS.send("G")).toBe("/api/outlook-drafts/G/send");
   });
 

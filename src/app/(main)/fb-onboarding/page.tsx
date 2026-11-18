@@ -98,7 +98,7 @@ export default async function FbOnboardingListPage({ searchParams }: { searchPar
       <PageHero
         eyebrow="Facebook"
         headline={["Client ", { accent: "onboarding" }]}
-        subtitle="Access, launch details, their Scaled Sync account, the main zap build, setup and the Typeform test run for every new Facebook client."
+        subtitle="Access, launch details, their Scaled Sync account, their Meta Instant Form leads, the main zap build, setup and the Typeform test run for every new Facebook client."
         icon={<Rocket />}
         iconTone="violet"
         density="compact"

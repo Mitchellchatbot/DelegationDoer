@@ -15,9 +15,10 @@
 // completed_at. So adding a mandatory step to any phase retroactively
 // un-completes every client who was already Live — silently, on their next
 // PATCH. The Scaled Sync phase avoids that by counting nothing until
-// sync.platform says the client is on Scaled Sync; these assertions are what
-// stop that gate from being removed by accident. The same hazard is why
-// `optional` has to keep working.
+// sync.platform says the client is on Scaled Sync, and the Meta leads phase by
+// counting nothing until meta.route says the client runs Instant Forms; these
+// assertions are what stop either gate from being removed by accident. The
+// same hazard is why `optional` has to keep working.
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -84,12 +85,14 @@ function legacyComplete() {
 const legacy = legacyComplete();
 let p = M.progress(legacy);
 check("ungated syncTotal is 0", p.syncTotal === 0, `got ${p.syncTotal}`);
+check("ungated metaTotal is 0", p.metaTotal === 0, `got ${p.metaTotal}`);
 check("a legacy onboarding is still complete", p.complete === true,
   JSON.stringify({ access: `${p.accessCleared}/${p.accessTotal}`, launch: `${p.launchDone}/${p.launchTotal}`,
-    sync: `${p.syncDone}/${p.syncTotal}`, main: `${p.mainDone}/${p.mainTotal}`,
+    sync: `${p.syncDone}/${p.syncTotal}`, meta: `${p.metaDone}/${p.metaTotal}`, main: `${p.mainDone}/${p.mainTotal}`,
     setup: `${p.setupDone}/${p.setupTotal}`, tests: `${p.testsDone}/${p.testsTotal}` }));
 check("it stays Live", M.stage(p, AT) === "live", M.stage(p, AT));
 check("stage() never emits sync for it", M.stage(p, null) !== "sync", M.stage(p, null));
+check("stage() never emits meta for it", M.stage(p, null) !== "meta", M.stage(p, null));
 
 // 2. "Another CRM" is an answer, and is equally inert.
 p = M.progress({ ...legacy, [M.SYNC_PLATFORM_KEY]: txt("other") });
@@ -150,21 +153,74 @@ check("a tab with no route chosen is NOT complete", M.progress(noRoute).complete
   `sync ${M.progress(noRoute).syncDone}/${M.progress(noRoute).syncTotal}`);
 
 // Every `when` must point at a key that exists and offer only real values.
-for (const st of M.SYNC_STEPS.filter((x) => x.when)) {
-  const owner = M.SYNC_STEPS.find((o) =>
-    (o.choices || []).some((c) => M.syncKey(o.id, c.key) === st.when.key));
-  check(`${st.id}'s when points at a real choice`, !!owner, st.when.key);
-  if (owner) {
-    const ch = owner.choices.find((c) => M.syncKey(owner.id, c.key) === st.when.key);
-    const bogus = st.when.anyOf.filter((v) => !ch.options.some((o) => o.value === v));
-    check(`${st.id}'s when uses real option values`, bogus.length === 0, bogus.join(", "));
+for (const [name, steps, keyFor] of [["SYNC_STEPS", M.SYNC_STEPS, M.syncKey], ["META_STEPS", M.META_STEPS, M.metaKey]]) {
+  for (const st of steps.filter((x) => x.when)) {
+    const owner = steps.find((o) =>
+      (o.choices || []).some((c) => keyFor(o.id, c.key) === st.when.key));
+    check(`${name} ${st.id}'s when points at a real choice`, !!owner, st.when.key);
+    if (owner) {
+      const ch = owner.choices.find((c) => keyFor(owner.id, c.key) === st.when.key);
+      const bogus = st.when.anyOf.filter((v) => !ch.options.some((o) => o.value === v));
+      check(`${name} ${st.id}'s when uses real option values`, bogus.length === 0, bogus.join(", "));
+    }
   }
 }
+
+// 4c. Meta leads — the same gate shape as Scaled Sync, on its own key.
+const META_ON = "instant_forms";
+p = M.progress({ ...legacy, [M.META_ROUTE_KEY]: txt("none") });
+check("'none' keeps metaTotal at 0", p.metaTotal === 0, `got ${p.metaTotal}`);
+check("'none' stays complete", p.complete === true);
+
+const onMeta = { ...legacy, [M.META_ROUTE_KEY]: txt(META_ON) };
+p = M.progress(onMeta);
+check("instant_forms gives the phase steps", p.metaTotal > 0, `got ${p.metaTotal}`);
+check("and withholds completion", p.complete === false);
+check("stage() is meta", M.stage(p, null) === "meta", M.stage(p, null));
+const mp = M.stageProgress(p, "meta");
+check("stageProgress agrees for meta", mp.done === p.metaDone && mp.total === p.metaTotal, JSON.stringify(mp));
+
+const metaFilled = { ...onMeta };
+for (const st of M.META_STEPS) {
+  for (const k of M.stepKeys(st, M.metaKey)) metaFilled[k.key] = k.kind === "check" ? on() : txt("v");
+}
+p = M.progress(metaFilled);
+check("a filled Meta tab completes", p.metaDone === p.metaTotal && p.complete === true,
+  `${p.metaDone}/${p.metaTotal}`);
+check("stage() moves past meta", M.stage(p, null) !== "meta", M.stage(p, null));
+
+// Both gates on, nothing filled: the ladder shows Scaled Sync first (the Meta
+// route lands its leads in that org), then Meta once Scaled Sync is done.
+const bothOn = { ...onMeta, [M.SYNC_PLATFORM_KEY]: txt("scaled_sync") };
+check("both gates on: stage() is sync first", M.stage(M.progress(bothOn), null) === "sync",
+  M.stage(M.progress(bothOn), null));
+const syncDoneMetaNot = { ...bothOn };
+for (const k of M.syncKeys({ ...bothOn, [routeKey]: txt("native") })) {
+  syncDoneMetaNot[k.key] = k.kind === "check" ? on() : txt(k.key === routeKey ? "native" : "v");
+}
+check("sync finished: stage() moves on to meta", M.stage(M.progress(syncDoneMetaNot), null) === "meta",
+  M.stage(M.progress(syncDoneMetaNot), null));
+
+// A8 is engineer-only extras the client may not want: shown, never counted.
+const a8 = M.META_STEPS.find((st) => st.id === "a8");
+check("Meta A8 still exists", !!a8);
+if (a8) {
+  check("Meta A8 renders its boxes", a8.checks.length === 2, `${a8.checks.length} checks`);
+  check("Meta A8 counts nothing", M.stepKeys(a8, M.metaKey).length === 0, `counts ${M.stepKeys(a8, M.metaKey).length}`);
+}
+
+// The Meta tab's size, pinned for the same reason MAIN_ZAP_STEPS' is below.
+// Today no client is on the route, so changing this is free; once one has
+// finished the tab, every new COUNTED box un-completes that client on its next
+// tick and drops it off Live. If this fails, use `optional` for the new box,
+// or read the META_STEPS header before "fixing" the number.
+check("META_STEPS totals 50 on the route", M.progress(onMeta).metaTotal === 50, `got ${M.progress(onMeta).metaTotal}`);
 
 // 5. The API route rejects any key the registry does not know, so every key a
 //    step declares has to be registered — probed with a value of its own kind.
 for (const [name, steps, keyFor] of [
   ["SYNC_STEPS", M.SYNC_STEPS, M.syncKey],
+  ["META_STEPS", M.META_STEPS, M.metaKey],
   ["MAIN_ZAP_STEPS", M.MAIN_ZAP_STEPS, M.mainKey],
 ]) {
   const declared = [];
@@ -183,12 +239,18 @@ for (const [name, steps, keyFor] of [
 }
 check("the gate rejects an unknown CRM", M.normaliseValue(M.SYNC_PLATFORM_KEY, "kipu") === null);
 check("an unregistered sync key is rejected", M.normaliseValue("sync.nope.nope", true) === null);
+check("the Meta gate accepts its own values",
+  M.META_ROUTE_OPTIONS.every((o) => M.normaliseValue(M.META_ROUTE_KEY, o.value) === o.value));
+check("the Meta gate rejects an unknown route", M.normaliseValue(M.META_ROUTE_KEY, "typeform") === null);
+check("an unregistered meta key is rejected", M.normaliseValue("meta.nope.nope", true) === null);
 
 // 6. Whatever stage() can emit must be allowed by the stage check constraint,
 //    or every PATCH on a client in that stage fails. The migration is applied
 //    by hand, so this is the only thing that keeps the two in step.
+// Sorted so "the newest constraint migration" never depends on directory order.
 const migrations = fs.readdirSync(path.join(ROOT, "supabase/migrations"))
   .filter((f) => f.includes("fb_onboarding_stage"))
+  .sort()
   .map((f) => fs.readFileSync(path.join(ROOT, "supabase/migrations", f), "utf8"));
 const constraintSql = migrations.filter((sql) => sql.includes("fb_onboarding_stage_check")).pop();
 check("a stage check-constraint migration exists", !!constraintSql);
@@ -216,9 +278,12 @@ for (const ph of M.PHASES) {
   check(`${ph} is reachable as a stage`, M.STAGES.includes(ph));
   check(`stagePhase round-trips ${ph}`, M.stagePhase(ph) === ph, M.stagePhase(ph));
 }
-check("sync sits between launch and build",
-  M.STAGES.indexOf("sync") === M.STAGES.indexOf("launch") + 1 &&
-  M.STAGES.indexOf("sync") === M.STAGES.indexOf("main") - 1, M.STAGES.join(","));
+// launch → sync → meta → build. Meta follows Scaled Sync because every lead on
+// that route lands in the client's Scaled Sync org.
+const at = (s) => M.STAGES.indexOf(s);
+check("sync sits between launch and meta, meta between sync and build",
+  at("sync") === at("launch") + 1 && at("meta") === at("sync") + 1 && at("main") === at("meta") + 1,
+  M.STAGES.join(","));
 
 // 8. `optional` has to keep working, and must not have moved what already shipped.
 // The Fallback step is present and fully rendered but deliberately counts

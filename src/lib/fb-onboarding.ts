@@ -840,329 +840,6 @@ export const SYNC_FAILURES: { symptom: string; cause: string }[] = [
   { symptom: "organization limit reached", cause: "That login already owns three orgs — suspended ones still count; create it from a different login" }
 ];
 
-// ---------------------------------------------------------------------------
-// Meta leads — the Meta onboarding SOP, step by step. Meta Instant Form leads
-// go through one Zap into Scaled Sync (the CRM, which records them) and Scaled
-// Admissions (the AI, which texts them). The SOP's own lettering (A1…D6, the
-// C3 key table) is kept as the step labels because the steps cross-reference
-// each other by it — B3 needs "the sa-message URL from A4".
-//
-// Gated on META_ROUTE_KEY for exactly the reason Scaled Sync is gated on
-// SYNC_PLATFORM_KEY: most Facebook clients don't run Instant Forms through the
-// AI, and a phase they can never finish would hold progress().complete false —
-// which route.ts turns into a CLEARED completed_at on the next PATCH, dropping
-// a finished client off Live. Until somebody answers "instant_forms" this phase
-// contributes zero keys, so adding it cannot move any onboarding that already
-// exists. Answering it on a client that IS already complete does reopen that
-// client until the tab is done — that is the gate working, not a bug.
-//
-// Deliberately no field for any of the four secrets the SOP mints (partner
-// secret, SA texting secret, update-address secret, lead-form key), nor for
-// the lead Sheet's link: this state is readable by the whole Facebook team,
-// and the Sheet holds the names and phone numbers of people contacting a
-// treatment centre.
-// ---------------------------------------------------------------------------
-
-export const META_ROUTE_KEY = "meta.route";
-
-// The gate. "none" is a real answer, not a skip — it records that somebody
-// checked, which is why it reads differently from the unanswered state.
-export const META_ROUTE_OPTIONS = [
-  { value: "instant_forms", label: "Instant Forms → Scaled Sync + Scaled Admissions" },
-  { value: "none", label: "Not on this route" }
-] as const;
-
-export const metaKey = (stepId: string, key: string) => `meta.${stepId}.${key}`;
-
-export const META_FLOW = `Meta Instant Form ──> Google Sheet ──> Zapier (new row, filter)
-  (ads team builds)    (one row/lead)     │ 1st POST: the lead     │ 2nd POST: the lead
-                                          v                        v
-                              Scaled Sync (CRM) <── texts to send, AI stage updates ── Scaled Admissions (AI)
-                              makes the lead,   ── replies, staff takeover ──────────> texts + qualifies,
-                              moves stages,                                            hands off when ready
-                              emails staff                                                    │ hand-off alert
-                                  ^                                                           v
-                                  │ every text, both ways                             Admissions staff
-                                  v                                                   (call once Ready for Call)
-                     Lead's phone <──> CTM · Meta DID (client's own number)`;
-
-const META_SA_LEAD_FORM_URL = "https://scaled-admissions-production.up.railway.app/api/webhooks/lead-form";
-
-// Step C3's Sheet column → key table. The renames are the point: sent with the
-// Sheet's own keys, Help with and Insurance fill from the wrong question.
-export const META_ZAP_KEYS: { column: string; key: string }[] = [
-  { column: "id", key: "leadgen_id (required; it is the dedupe key)" },
-  { column: "created_time, ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name, form_id, is_organic, platform", key: "the same names" },
-  { column: "full_name, phone_number, email", key: "the same names" },
-  { column: "“Who are you seeking help for?”", key: "who_are_you_seeking_help_for?" },
-  { column: "the substance or struggle question", key: "what_are_you_struggling_with?" },
-  { column: "“How long has this been a struggle?”", key: "how_long_has_this_been_going_on?" },
-  { column: "“Do you have insurance?” (yes/no)", key: "do_you_actively_have_a_health_plan?" },
-  { column: "the insurance company pick-list", key: "insurance_provider" },
-  { column: "“Enter the name of your insurance”", key: "name_of_the_insurance_provider" },
-  { column: "any other question", key: "Meta's own key, as in the Sheet header" }
-];
-
-export const META_STEPS: SopStep[] = [
-  {
-    id: "pre", step: "Before you start", title: "The client's answers",
-    blurb: "Get every answer below before building anything. Two of them — the brand name and the texting number — are hard to change later. The ads team owns the form and the Sheet, we own the Zap and the CRM and SA setup, and the client owns the CTM number and calls the lead back.",
-    checks: [
-      { key: "brand", label: "Brand name, persona, opening line and time zone confirmed", hint: "The brand name exactly as the AI should say it: the Scaled Admissions workspace name is what the AI calls itself, and SA has no rename button. The opening line is the first text the lead gets. The time zone drives the AI's follow-up times." },
-      { key: "did", label: "Meta DID confirmed: on the client's own CTM, SMS-enabled, on an approved 10DLC campaign", hint: "Leads are texted from it. Texting from another company's CTM number gets leads that company's opt-in replies." },
-      { key: "ctm", label: "CTM account ID and API keys received", hint: "Scaled Sync sends and receives texts through CTM." },
-      { key: "clinic", label: "Admissions phone, hours, call-in number, location, programs and insurance list received", hint: "The AI gives these out and hands off during hours, and is asked them on day one. The call-in number is the Meta DID." },
-      { key: "alerts", label: "Hand-off alert recipients named, for email and text", hint: "Only active SA members and ticked CRM recipients hear about a ready lead." },
-      { key: "form", label: "Meta form asks for phone and insurance, with the texting disclaimer", hint: "Each answer becomes a Sheet column you map in Zapier. Ask for the insurance company on the form: the AI cannot receive card photos by text." },
-      { key: "sheet", label: "Google Sheet link received", hint: "The ads team (Mujtaba) builds the ad account, the form and the Sheet." },
-      { key: "first_text", label: "Who texts first, per source, agreed", hint: "The AI texts Meta leads; the CRM's own first text covers every other source. Leaving both on sends two texts." }
-    ],
-    choices: [{
-      key: "cadence", label: "Follow-up texts, agreed with the client",
-      options: [{ value: "on", label: "On" }, { value: "off", label: "Off" }]
-    }],
-    inputs: [
-      { key: "brand_name", label: "Brand name, exactly as the AI says it", placeholder: "What the SA workspace will be called", optional: true },
-      { key: "did_number", label: "Meta DID", placeholder: "+1…", optional: true }
-    ],
-    warn: "The Sheet holds names and phone numbers of people contacting a treatment centre. Keep it shared with as few people as possible."
-  },
-  {
-    id: "a1", step: "A1", title: "CRM: the client's org",
-    blurb: "All of A is Scaled Sync, done in the client's org while logged in as an owner. Settings › Integrations is owner-only; an admin sees the cards with no URLs.",
-    checks: [
-      { key: "org", label: "In the client's existing org, logged in as an owner", hint: "A new org is made at /onboarding?new=1, and the org owner's email must be confirmed first." }
-    ]
-  },
-  {
-    id: "a2", step: "A2", title: "CRM: CTM",
-    blurb: "Settings › Integrations › CTM: save the API keys and account ID, click Create callback URL, then Register in CTM, then set Texting provider to CTM.",
-    checks: [
-      { key: "warned", label: "Warned the client first: the first CTM sync turns about 150 recent inbound callers into leads" },
-      { key: "saved", label: "CTM keys and account ID saved, callback registered, texting provider = CTM" },
-      { key: "line", label: "Sending line = the Meta DID", hint: "It has no Settings field: it is set during onboarding or by an engineer." },
-      { key: "did_ctm", label: "In CTM, the Meta DID is Active, rings the admissions line, and has text messaging on" },
-      { key: "first_text", label: "First text under 160 characters with a long first name, straight apostrophes only", hint: "CTM refuses a longer one with no warning in Settings; the reason is on the lead's timeline." }
-    ],
-    inputs: [{ key: "account_id", label: "CTM account ID", placeholder: "The client's CTM account", optional: true }],
-    warn: "The sending line must match a number that is SMS-enabled in CTM, or the whole org stops texting."
-  },
-  {
-    id: "a3", step: "A3", title: "CRM: lead ads hook",
-    blurb: "Settings › Integrations › Lead ads (Facebook / Instagram) › Partner secret (Zapier). Paste a long random string and save, then copy the URL and the secret.",
-    checks: [
-      { key: "saved", label: "Lead ads partner secret saved; URL and secret copied" }
-    ],
-    inputs: [{ key: "hook_url", label: "Lead ads URL", placeholder: "…/functions/v1/meta-leads/<hook id>", url: true, optional: true }],
-    warn: "The secret is write-only, so copy it now. Not into this page — everything here is visible to the whole Facebook team."
-  },
-  {
-    id: "a4", step: "A4", title: "CRM: SA texting",
-    blurb: "Settings › Integrations › Scaled Admissions texting.",
-    checks: [
-      { key: "saved", label: "Scaled Admissions texting secret saved; the sa-message URL it shows copied", hint: "A second random secret. B3 needs the URL and the same secret." }
-    ]
-  },
-  {
-    id: "a5", step: "A5", title: "CRM: SA update address",
-    blurb: "Settings › Integrations › Website forms. This is only the address SA sends its updates to. It does not turn on website forms or website AI.",
-    checks: [
-      { key: "saved", label: "Website forms secret saved; its URL copied", hint: "A third random secret. B7 needs the URL and the secret." }
-    ]
-  },
-  {
-    id: "a6", step: "A6", title: "CRM: stages and AI field",
-    blurb: "Engineer work. Add the AI stage field and two stages after New Lead: AI Nurturing and Ready for Call (key ai_ready). Add Needs Follow-Up (key follow_up) if the pipeline lacks it: leads land there when staff turn the AI off and no call was agreed.",
-    checks: [
-      { key: "done", label: "AI stage field, AI Nurturing, Ready for Call and Needs Follow-Up stages in place" }
-    ]
-  },
-  {
-    id: "a7", step: "A7", title: "CRM: alerts",
-    blurb: "Settings › Notifications.",
-    checks: [
-      { key: "ticked", label: "Ready for hand-off ticked for each person who should hear about ready leads", hint: "SA also emails its own members, so a person in both gets two emails." }
-    ]
-  },
-  {
-    id: "a8", step: "A8", title: "CRM: optional, by org id",
-    blurb: "An engineer PR, only if the client wants it. Neither box counts towards the onboarding.",
-    checks: [
-      { key: "bulk_text", label: "Bulk text hidden", optional: true },
-      { key: "source_tags", label: "Website / Socials / Meta source tags added", optional: true }
-    ]
-  },
-  {
-    id: "b1", step: "B1", title: "SA: create the workspace",
-    checks: [
-      { key: "created", label: "Workspace created with the exact brand name and time zone", hint: "SA lists cities only (New York = Eastern)." }
-    ],
-    warn: "There is no rename. A wrong brand name needs a database update to fix."
-  },
-  {
-    id: "b2", step: "B2", title: "SA: save the AI off at once",
-    blurb: "A new workspace's AI is ON. In Settings › AI agent, untick Answer new messages automatically and press Save.",
-    checks: [
-      { key: "off", label: "AI saved OFF — the header shows “auto-replies off”" }
-    ],
-    warn: "Left on, Meta leads get the CRM first text and the AI opener. The AI stays off until D2."
-  },
-  {
-    id: "b3", step: "B3", title: "SA: text line",
-    blurb: "Settings › Channels › Text line: the Meta DID, the sa-message URL from A4 and the same secret.",
-    checks: [
-      { key: "connected", label: "Text line shows “Connected to Scaled Sync”" }
-    ]
-  },
-  {
-    id: "b4", step: "B4", title: "SA: lead-form key",
-    blurb: "Engineer work — there is no UI. An engineer stores the key's hash on the text line.",
-    checks: [
-      { key: "probed", label: "Lead-form key set and probed", hint: "The key with {} answers 400 “leadgen_id is required”; a wrong key answers 401." }
-    ]
-  },
-  {
-    id: "b5", step: "B5", title: "SA: agent setup",
-    checks: [
-      { key: "done", label: "Agent set up: persona and greeting, admissions phone, hours, call-in number (the Meta DID), location, programs and insurance payers" }
-    ]
-  },
-  {
-    id: "b6", step: "B6", title: "SA: members",
-    checks: [
-      { key: "invited", label: "Client's admissions staff invited as members", hint: "SA's hand-off and crisis emails reach only active members." }
-    ]
-  },
-  {
-    id: "b7", step: "B7", title: "SA: CRM link",
-    blurb: "Settings › Integrations › Scaled Sync: the Website forms URL and secret from A5, lead source facebook, auto-send and sending on, then Connect. Connect posts {}, so no lead is made.",
-    checks: [
-      { key: "connected", label: "Scaled Sync connection: lead source facebook, auto-send on, connected with no error" }
-    ]
-  },
-  {
-    id: "cadence", step: "Cadence", title: "SA: follow-up texts",
-    blurb: "The AI texts a new Meta lead as soon as Zapier delivers the row — the Sheets trigger polls, so that lags the form by 1 to 15 minutes, by Zapier plan — then answers each reply within about 15 seconds. With follow-ups on, a lead who goes quiet gets up to 11 check-ins over 5 days: “Are you there, {first name}?” at 10 minutes (only if the AI's message asked a question, at most once a day), a check-in at 2 hours, check-ins at 10am and 6pm in the lead's time zone for 5 days (at least 3 hours apart, only between 8am and 9pm), then a sign-off. The wording comes from 9 fixed lines and can't be edited per client. It stops when the lead replies (a later silence starts a new schedule), staff text or take over, a call is booked or requested, the lead opts out or declines, the conversation reaches a finished stage, or the lead is referred to Medicaid.",
-    checks: [
-      { key: "matches", label: "nudges_enabled matches the follow-ups agreed with the client", hint: "A per-workspace SA setting, off by default. An engineer flips it." }
-    ],
-    warn: "The 5 days need an ad id. A contact without one gets a 24-hour window — about 4 check-ins in a day — so keep ad_id mapped in C4."
-  },
-  {
-    id: "c1", step: "C1", title: "Zap: trigger",
-    blurb: "Build it in Mitchell Price's Zapier, named as below.",
-    checks: [
-      { key: "trigger", label: "Google Sheets › New Spreadsheet Row on the client's Sheet and worksheet", hint: "Paste the Sheet ID under Custom if it isn't listed." }
-    ],
-    copies: [{ label: "Zap name (fill in the month)", text: "{Provider} | Meta <MON YYYY> Sheet → Scaled Sync + Scaled Admissions" }]
-  },
-  {
-    id: "c2", step: "C2", title: "Zap: filter",
-    checks: [
-      { key: "filter", label: "Filter: Full Name does not contain “test lead”", hint: "Don't filter Medicaid or Medicare unless the client asks." }
-    ]
-  },
-  {
-    id: "c3", step: "C3", title: "Zap: POST to Scaled Sync",
-    blurb: "Webhooks by Zapier › POST to the lead ads URL from A3.",
-    checks: [
-      { key: "payload", label: "Payload Type json, Wrap Request In Array No, Unflatten No" },
-      { key: "auth", label: "Header Authorization = Bearer <secret>, ending on the secret's last character", hint: "Press End after pasting. A stray line break gives a 401 that looks like a wrong secret; Zapier's Troubleshoot tab shows the stray character." },
-      { key: "keys", label: "One data row per Sheet column, keyed as below: question keys renamed, leadgen_id mapped, form_name and lead_status skipped" },
-      { key: "headers", label: "An engineer checked this form's headers before go-live" }
-    ],
-    copies: [{
-      label: "Sheet column → key to send",
-      text: [["Sheet column", "Key to send"], ...META_ZAP_KEYS.map((r) => [r.column, r.key])].map((r) => r.join("\t")).join("\n")
-    }],
-    warn: "The renames matter. With the Sheet's own keys, Help with and Insurance fill from the wrong question."
-  },
-  {
-    id: "c4", step: "C4", title: "Zap: POST to Scaled Admissions",
-    blurb: "Duplicate C3. Change the URL to the one below and the header to Bearer <SA lead-form key>. Keep the CRM step first.",
-    checks: [
-      { key: "dup", label: "C3 duplicated after itself, with the SA URL and Bearer <SA lead-form key>" },
-      { key: "ad_id", label: "ad_id still mapped", hint: "Without it the AI's follow-ups get a 24-hour window instead of 5 days (see Cadence)." }
-    ],
-    copies: [{ label: "SA lead-form URL", text: META_SA_LEAD_FORM_URL }]
-  },
-  {
-    id: "c5", step: "C5", title: "Zap: test once, then publish",
-    blurb: "Testing C3 makes an is_test lead and emails every lead-alert recipient. Testing C4 on Meta's dummy row answers 422 “no usable phone number” and stores nothing.",
-    checks: [
-      { key: "test_deleted", label: "Zapier test lead deleted from the CRM, and C3 not retested" },
-      { key: "published", label: "Zap published and named" }
-    ],
-    inputs: [{ key: "zap_url", label: "Zap URL", placeholder: "https://zapier.com/…", url: true, optional: true }],
-    warn: "Every retest of C3 makes another fake lead and emails every lead-alert recipient again."
-  },
-  {
-    id: "d1", step: "D1", title: "Launch: prove the CRM route",
-    blurb: "Add a new row to the Sheet with a team phone: id l:<client>test1, a created_time, full name “ScaledAI Test”, phone p:+1…. Expect the CRM lead in seconds and the CRM's first text. Then have an engineer delete the SA contact this row made, so the AI test in D3 starts fresh.",
-    checks: [
-      { key: "arrived", label: "CRM test row arrived and got the CRM first text", hint: "Add test rows only after publishing: a row already in the Sheet when the Zap first runs is treated as seen and never sent." },
-      { key: "sa_cleared", label: "An engineer deleted the SA contact this row made" }
-    ]
-  },
-  {
-    id: "d2", step: "D2", title: "Launch: flip both switches",
-    blurb: "In the same minute. CRM Settings › Lead sources › Facebook: first text off and arrival stage AI Nurturing. SA: tick Answer new messages automatically and Save.",
-    checks: [
-      { key: "crm", label: "Facebook source: first text off, arrival AI Nurturing" },
-      { key: "sa", label: "SA AI on, in the same minute" }
-    ],
-    warn: "Facebook Typeform ads land on the same Facebook source, so turning its first text off silences the Typeform leads too. Split them into a “Facebook (Typeform)” source before this step."
-  },
-  {
-    id: "d3", step: "D3", title: "Launch: prove the AI route",
-    blurb: "Add another test row.",
-    checks: [
-      { key: "stage", label: "Lead in AI Nurturing, with first_text_skipped: source_disabled" },
-      { key: "replied", label: "AI opener received from the Meta DID, a reply answered within about 15 seconds, “Being nurtured” after the first turn" }
-    ]
-  },
-  {
-    id: "d4", step: "D4", title: "Launch: prove the hand-off",
-    blurb: "Reply asking for a call.",
-    checks: [
-      { key: "warned", label: "Warned the client's staff first: they may call the test phone" },
-      { key: "ready", label: "Lead moved to Ready for Call, and the alert emails arrived" }
-    ]
-  },
-  {
-    id: "d5", step: "D5", title: "Launch: clean up",
-    blurb: "SA keys contacts by phone, so a retest from the same phone needs the old contact gone.",
-    checks: [
-      { key: "deleted", label: "CRM test lead (backup first) and SA test contact deleted" },
-      { key: "rows_kept", label: "Test rows left in the Sheet", hint: "Zapier tracks rows by position, so deleting, sorting or inserting rows can make a lead arrive twice or never." }
-    ]
-  },
-  {
-    id: "d6", step: "D6", title: "Launch: watch the first real lead",
-    checks: [
-      { key: "live", label: "Ads team confirmed the campaign is live" },
-      { key: "first_lead", label: "First real Meta lead seen in both systems", hint: "A quiet Zap looks the same as a broken one." }
-    ]
-  }
-];
-
-// The SOP's Known traps, as written: each came up during a real setup.
-export const META_TRAPS: { trap: string; happens: string; fix: string }[] = [
-  { trap: "A row already in the Sheet when the Zap first runs", happens: "Zapier treats it as seen and never sends it", fix: "Add test rows only after publishing" },
-  { trap: "Deleting, sorting or inserting Sheet rows", happens: "Zapier tracks rows by position, so a lead can arrive twice or never", fix: "Leave every row in place, test rows included" },
-  { trap: "Retesting the Zap's CRM step", happens: "Each test makes a fake lead and emails every lead-alert recipient", fix: "Test once, delete that lead, don't retest" },
-  { trap: "A line break pasted after a secret", happens: "Zapier gets a 401 that looks like a wrong secret", fix: "Press End after pasting; Zapier's Troubleshoot tab shows the stray character" },
-  { trap: "SA AI left on by default", happens: "Meta leads get the CRM first text and the AI opener", fix: "Save the AI off right after creating the workspace" },
-  { trap: "Sheet keys sent unchanged", happens: "Help with and Insurance fill from the wrong questions", fix: "Rename the question keys (the C3 table)" },
-  { trap: "First text over 160 characters", happens: "CTM refuses it with no warning in Settings; the reason is on the lead's timeline", fix: "Count the text with a long first name; use straight apostrophes" },
-  { trap: "Texting from another company's CTM number", happens: "A lead's bare “Yes” gets that company's opt-in reply (Bright Mission got Scaled AI LLC's)", fix: "Use the client's own CTM and 10DLC campaign" },
-  { trap: "Lead texts a photo of their insurance card", happens: "Photos never reach the AI, so the lead gets no answer", fix: "Ask for the insurance company on the Meta form" },
-  { trap: "Staff reply from the CRM", happens: "Each staff reply turns the AI off for that lead", fix: "Tell staff; turn the AI back on from the lead if wanted" },
-  { trap: "Facebook Typeform ads run alongside Instant Forms", happens: "Both land on the Facebook source, so turning its first text off silences the Typeform leads too", fix: "Split them into a “Facebook (Typeform)” source before launch" },
-  { trap: "Renaming Changes or Bright Mission", happens: "Their screen setup is matched by org name and drops on rename", fix: "Have an engineer add the new name first" },
-  { trap: "The campaign never actually goes live", happens: "A quiet Zap looks the same as a broken one", fix: "Confirm the first real row reaches both systems" }
-];
-
 export const mainKey = (stepId: string, key: string) => `main.${stepId}.${key}`;
 
 // Every key a step needs filled for it to count as done. Parameterised by the
@@ -1442,17 +1119,6 @@ export function caseAnswers(tc: TestCase): { q: string; a: string }[] {
 
 type KeyKind = { kind: "check" } | { kind: "text" } | { kind: "choice"; options: string[] } | { kind: "list" };
 
-// Every key a step-by-step SOP declares, optional or not — an uncounted box
-// still has to save. One loop for all three SOPs so none can register its
-// keys differently.
-function registerSteps(r: Map<string, KeyKind>, steps: SopStep[], keyFor: (stepId: string, key: string) => string) {
-  for (const st of steps) {
-    for (const c of st.checks) r.set(keyFor(st.id, c.key), { kind: "check" });
-    for (const c of st.choices ?? []) r.set(keyFor(st.id, c.key), { kind: "choice", options: c.options.map((o) => o.value) });
-    for (const i of st.inputs ?? []) r.set(keyFor(st.id, i.key), { kind: "text" });
-  }
-}
-
 function buildRegistry(): Map<string, KeyKind> {
   const r = new Map<string, KeyKind>();
   for (const it of ACCESS_ITEMS) {
@@ -1475,11 +1141,17 @@ function buildRegistry(): Map<string, KeyKind> {
     r.set(zapBuiltKey(z.id), { kind: "check" });
     r.set(zapUrlKey(z.id), { kind: "text" });
   }
-  registerSteps(r, MAIN_ZAP_STEPS, mainKey);
+  for (const st of MAIN_ZAP_STEPS) {
+    for (const c of st.checks) r.set(mainKey(st.id, c.key), { kind: "check" });
+    for (const c of st.choices ?? []) r.set(mainKey(st.id, c.key), { kind: "choice", options: c.options.map((o) => o.value) });
+    for (const i of st.inputs ?? []) r.set(mainKey(st.id, i.key), { kind: "text" });
+  }
   r.set(SYNC_PLATFORM_KEY, { kind: "choice", options: [...SYNC_PLATFORM_OPTIONS.map((o) => o.value), ""] });
-  registerSteps(r, SYNC_STEPS, syncKey);
-  r.set(META_ROUTE_KEY, { kind: "choice", options: [...META_ROUTE_OPTIONS.map((o) => o.value), ""] });
-  registerSteps(r, META_STEPS, metaKey);
+  for (const st of SYNC_STEPS) {
+    for (const c of st.checks) r.set(syncKey(st.id, c.key), { kind: "check" });
+    for (const c of st.choices ?? []) r.set(syncKey(st.id, c.key), { kind: "choice", options: c.options.map((o) => o.value) });
+    for (const i of st.inputs ?? []) r.set(syncKey(st.id, i.key), { kind: "text" });
+  }
   for (const c of SLACK_CHANNELS) r.set(slackKey(c.id), { kind: "check" });
   for (const ch of ["slack", "email"]) for (const s of CLIENT_STREAMS) r.set(clientKey(ch, s.id), { kind: "check" });
   r.set(CLIENT_OTHER_KEY, { kind: "check" });
@@ -1568,14 +1240,6 @@ export function syncKeys(s: OnboardingState): { key: string; kind: "check" | "te
   return SYNC_STEPS.filter((st) => stepApplies(s, st)).flatMap((st) => stepKeys(st, syncKey));
 }
 
-// The Meta leads phase's countable keys. Empty until the gate says
-// "instant_forms", which is what stops this phase from un-completing every
-// onboarding that predates it — see the META_STEPS header.
-export function metaKeys(s: OnboardingState): { key: string; kind: "check" | "text" }[] {
-  if (str(s, META_ROUTE_KEY) !== "instant_forms") return [];
-  return META_STEPS.filter((st) => stepApplies(s, st)).flatMap((st) => stepKeys(st, metaKey));
-}
-
 export function progress(s: OnboardingState) {
   const access = ACCESS_ITEMS.map((it) => accessStatus(s, it));
   const accessCleared = access.filter((a) => a === "cleared").length;
@@ -1596,10 +1260,6 @@ export function progress(s: OnboardingState) {
   const syncTotal = sync.length;
   const syncDone = sync.filter(({ key, kind }) => (kind === "check" ? isOn(s, key) : str(s, key) !== "")).length;
 
-  const meta = metaKeys(s);
-  const metaTotal = meta.length;
-  const metaDone = meta.filter(({ key, kind }) => (kind === "check" ? isOn(s, key) : str(s, key) !== "")).length;
-
   const mainKeys = MAIN_ZAP_STEPS.flatMap(mainStepKeys);
   const mainTotal = mainKeys.length;
   const mainDone = mainKeys.filter(({ key, kind }) => (kind === "check" ? isOn(s, key) : str(s, key) !== "")).length;
@@ -1615,7 +1275,6 @@ export function progress(s: OnboardingState) {
     accessCleared === ACCESS_ITEMS.length &&
     launchDone === launchTotal &&
     syncDone === syncTotal &&
-    metaDone === metaTotal &&
     mainDone === mainTotal &&
     setupDone === setupTotal &&
     testsDone === cases.length;
@@ -1624,7 +1283,6 @@ export function progress(s: OnboardingState) {
     accessCleared, accessTotal: ACCESS_ITEMS.length, blocked,
     launchDone, launchTotal,
     syncDone, syncTotal,
-    metaDone, metaTotal,
     mainDone, mainTotal,
     setupDone, setupTotal,
     testsDone, testsTotal: cases.length, testsFailed,
@@ -1648,17 +1306,16 @@ export type Progress = ReturnType<typeof progress>;
 // `state`, and renaming it would create a second id vocabulary needing
 // translation at every filter and stored value.
 
-export type Phase = "access" | "launch" | "sync" | "meta" | "main" | "setup" | "test";
+export type Phase = "access" | "launch" | "sync" | "main" | "setup" | "test";
 export type Stage = Phase | "live";
 
-export const PHASES: Phase[] = ["access", "launch", "sync", "meta", "main", "setup", "test"];
-export const STAGES: Stage[] = ["access", "launch", "sync", "meta", "main", "setup", "test", "live"];
+export const PHASES: Phase[] = ["access", "launch", "sync", "main", "setup", "test"];
+export const STAGES: Stage[] = ["access", "launch", "sync", "main", "setup", "test", "live"];
 
 export const STAGE_LABEL: Record<Stage, string> = {
   access: "Access",
   launch: "Launch",
   sync: "Scaled Sync",
-  meta: "Meta leads",
   main: "Build",
   setup: "Setup",
   test: "Testing",
@@ -1669,7 +1326,6 @@ export const STAGE_BLURB: Record<Stage, string> = {
   access: "Waiting on the client to clear us.",
   launch: "Cities, starting budget and the ad creatives.",
   sync: "Their CRM account, and their Typeform pointed at it.",
-  meta: "Instant Form leads into Scaled Sync and the Scaled Admissions AI.",
   main: "The main zap, step by step.",
   setup: "The other zaps, our channels and the client's delivery.",
   test: "Live Typeform runs. All must pass.",
@@ -1692,9 +1348,6 @@ export function stage(p: Progress, completedAt: string | null): Stage {
   // 0/0 for a client who is not on Scaled Sync, so this rung is simply absent
   // for them rather than being something to skip.
   if (p.syncDone < p.syncTotal) return "sync";
-  // Same 0/0 absence for a client not on the Meta Instant Forms route. After
-  // Scaled Sync because every lead on that route lands in their Scaled Sync org.
-  if (p.metaDone < p.metaTotal) return "meta";
   if (p.mainDone < p.mainTotal) return "main";
   if (p.setupDone < p.setupTotal) return "setup";
   return "test";
@@ -1706,7 +1359,6 @@ export function stageProgress(p: Progress, st: Stage): { done: number; total: nu
   if (st === "access") return { done: p.accessCleared, total: p.accessTotal };
   if (st === "launch") return { done: p.launchDone, total: p.launchTotal };
   if (st === "sync") return { done: p.syncDone, total: p.syncTotal };
-  if (st === "meta") return { done: p.metaDone, total: p.metaTotal };
   if (st === "main") return { done: p.mainDone, total: p.mainTotal };
   if (st === "setup") return { done: p.setupDone, total: p.setupTotal };
   if (st === "test") return { done: p.testsDone, total: p.testsTotal };
@@ -1727,9 +1379,6 @@ export const STAGE_AGING: Record<Stage, { amber: number; red: number } | null> =
   // Our own admin, and short: the only wait inside it is the client confirming
   // an email, which is minutes.
   sync: { amber: 3, red: 5 },
-  // A full build across three systems, with engineer steps (A6, B4, the
-  // cadence flip) and the ads team's go-live inside it.
-  meta: { amber: 5, red: 7 },
   main: { amber: 6, red: 8 },
   setup: { amber: 3, red: 4 },
   test: { amber: 5, red: 6 },

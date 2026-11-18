@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   ListTodo, Users, Sparkles, Crown, Mail, Home as HomeIcon, Sunrise, Moon, Briefcase,
   CalendarDays, FolderKanban, ClipboardCheck, BookOpen, Settings, LifeBuoy, LayoutGrid,
-  Users2, Lock, Rocket, Megaphone, ListChecks, BrainCircuit
+  Users2, Lock, Rocket, Megaphone, ListChecks, BrainCircuit, Workflow
 } from "lucide-react";
 // Sparkles is reused for both Ask AI and Updates — same icon, different context.
 import { useEffect, useState } from "react";
@@ -41,6 +41,9 @@ const EOD_ITEM: NavItem = { href: "/eod", label: "Wrap day", icon: Moon, tone: "
 const TASKS_ITEM: NavItem = { href: "/tasks",  label: "Tasks",   icon: ListTodo, tone: "indigo"  };
 const SCHEDULE_ITEM: NavItem = { href: "/schedule", label: "Schedule", icon: CalendarDays, tone: "sky" };
 const FB_ONBOARDING_ITEM: NavItem = { href: "/fb-onboarding", label: "FB Onboarding", icon: ListChecks, tone: "fuchsia" };
+// Meta Instant Form onboarding: its own SOP + checklist, deliberately not a
+// phase inside FB onboarding. Same audience as FB Onboarding.
+const META_ONBOARDING_ITEM: NavItem = { href: "/meta-onboarding", label: "Meta Onboarding", icon: Workflow, tone: "teal" };
 const PROJECTS_ITEM: NavItem = { href: "/projects", label: "Projects", icon: FolderKanban, tone: "indigo" };
 const INBOXES_ITEM: NavItem = { href: "/inboxes", label: "Inboxes", icon: Mail, tone: "fuchsia" };
 const APPROVALS_ITEM: NavItem = { href: "/approvals", label: "Approvals", icon: ClipboardCheck, tone: "emerald" };
@@ -336,7 +339,7 @@ export function Sidebar({ user, ownerItem = null }: { user: User; ownerItem?: Se
     HOME_ITEM,
     ...(submitsDailies ? [SOD_ITEM, EOD_ITEM] : []),
     TASKS_ITEM,
-    ...(canSeeFbOnboarding ? [FB_ONBOARDING_ITEM] : []),
+    ...(canSeeFbOnboarding ? [FB_ONBOARDING_ITEM, META_ONBOARDING_ITEM] : []),
     SCHEDULE_ITEM,
     ...(canSeeProjects ? [PROJECTS_ITEM] : []),
     INBOXES_ITEM,
@@ -361,7 +364,7 @@ export function Sidebar({ user, ownerItem = null }: { user: User; ownerItem?: Se
   const NAV_GROUPS: { label: string; hrefs: string[] }[] = [
     { label: "Overview", hrefs: ["/home"] },
     { label: "Today", hrefs: ["/sod", "/eod"] },
-    { label: "Work", hrefs: ["/tasks", "/fb-onboarding", "/schedule", "/projects"] },
+    { label: "Work", hrefs: ["/tasks", "/fb-onboarding", "/meta-onboarding", "/schedule", "/projects"] },
     { label: "Communication", hrefs: ["/inboxes", "/approvals", "/customer-support"] },
     { label: "Knowledge", hrefs: ["/clients", "/client-teams", "/updates", "/sops"] },
     // The server's owner row joins Account at render time; an href missing

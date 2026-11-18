@@ -16,13 +16,14 @@ import {
   testCases, testResultKey, testNoteKey, caseAnswers, progress,
   MAIN_ZAP_STEPS, MAIN_ZAP_FAILURES, mainKey, mainStepKeys, fillTokens, stepKeys,
   SYNC_STEPS, SYNC_FAILURES, syncKey, SYNC_PLATFORM_KEY, SYNC_PLATFORM_OPTIONS, stepApplies,
+  META_STEPS, META_TRAPS, META_FLOW, metaKey, META_ROUTE_KEY, META_ROUTE_OPTIONS,
   stage, stagePhase, WAITING_ON_KEY, WAITING_NOTE_KEY, HOLD_KEY, HOLD_NOTE_KEY,
   type OnboardingState, type EntryValue, type AccessStatus, type TestCase, type AccessItem, type SopStep,
   type Phase
 } from "@/lib/fb-onboarding";
 
 // Facebook client onboarding checklist on a Facebook task. Access → Launch →
-// Scaled Sync → Main Zap → Setup → Test. Everything after Access is soft-locked: editable
+// Scaled Sync → Meta leads → Main Zap → Setup → Test. Everything after Access is soft-locked: editable
 // early, but bannered until the phase before is done. Nothing here notifies
 // anyone — blocked items are recorded for the onboarder to escalate themselves.
 
@@ -125,11 +126,21 @@ export function FbOnboardingPanel({
   const ctx: Ctx = { state, set, canEdit, nameOf };
   const provider = str(state, PROVIDER_KEY);
   const slug = channelSlug(provider);
+  const metaRoute = str(state, META_ROUTE_KEY);
+
+  // The step-by-step SOP behind this tab, if it has one, for the rail's jump
+  // list. Meta's steps only exist on the page once the gate is answered, so
+  // until then there is nothing to jump to.
+  const sop = phase === "main" ? { steps: MAIN_ZAP_STEPS, keyFor: mainKey }
+    : phase === "sync" ? { steps: SYNC_STEPS, keyFor: syncKey }
+    : phase === "meta" && metaRoute === "instant_forms" ? { steps: META_STEPS, keyFor: metaKey }
+    : null;
 
   const tabs: { id: Phase; label: string; done: number; total: number; warn?: boolean }[] = [
     { id: "access", label: "Access", done: p.accessCleared, total: p.accessTotal, warn: p.blocked > 0 },
     { id: "launch", label: "Launch", done: p.launchDone, total: p.launchTotal },
     { id: "sync", label: "Scaled Sync", done: p.syncDone, total: p.syncTotal },
+    { id: "meta", label: "Meta leads", done: p.metaDone, total: p.metaTotal },
     { id: "main", label: "Main Zap", done: p.mainDone, total: p.mainTotal },
     { id: "setup", label: "Setup", done: p.setupDone, total: p.setupTotal },
     { id: "test", label: "Test", done: p.testsDone, total: p.testsTotal, warn: p.testsFailed > 0 }
@@ -141,6 +152,10 @@ export function FbOnboardingPanel({
     sync: {
       title: "Scaled Sync",
       sub: "Their CRM account, their people in it, and their Typeform posting leads straight into it."
+    },
+    meta: {
+      title: "Meta leads",
+      sub: "Meta Instant Form leads through one Zap into Scaled Sync and the Scaled Admissions AI. Build in order — CRM, then SA with the AI saved off, then the Zap, then launch — so no lead gets two first texts."
     },
     main: { title: ZAPS[0].name(provider || "{Provider}"), sub: "Typeform Client Intake SOP — dedup, filter, enrich and route each entry. About 60 minutes; work top to bottom." },
     setup: { title: "Setup", sub: "Calendly and Failsafe zaps, our Slack channels and the client's notifications." },
@@ -192,10 +207,10 @@ export function FbOnboardingPanel({
             </button>
           );
         })}
-        {(phase === "main" || phase === "sync") && (
+        {sop && (
           <div className="pt-2 mt-1 border-t border-border/60">
-            {(phase === "main" ? MAIN_ZAP_STEPS : SYNC_STEPS).map((st) => {
-              const keys = stepKeys(st, phase === "main" ? mainKey : syncKey);
+            {sop.steps.map((st) => {
+              const keys = stepKeys(st, sop.keyFor);
               const applies = stepApplies(state, st);
               const done = applies ? keys.filter(({ key, kind }) => (kind === "check" ? state[key]?.v === true : str(state, key) !== "")).length : 0;
               return (
@@ -272,6 +287,51 @@ export function FbOnboardingPanel({
                 <SopStepCard key={st.id} st={st} ctx={ctx} provider={provider} keyFor={syncKey} />
               ))}
               <FailureModes rows={SYNC_FAILURES} />
+            </>
+          )}
+        </div>
+      )}
+
+      {phase === "meta" && (
+        <div className="space-y-3">
+          {/* The gate, not a step. Until it says instant_forms this phase
+              counts nothing at all (see META_STEPS' header), which is what
+              keeps it from un-completing every onboarding that predates it. */}
+          <Group title="Does this client run Meta Instant Forms through Scaled Admissions?">
+            <div className="text-[11px] text-muted mb-1">
+              The rest of this tab only applies when the client&apos;s Meta leads go Instant Form → Sheet → Zap → Scaled
+              Sync and the AI. Leave it unanswered and nothing here counts towards the onboarding. On a client
+              that&apos;s already complete, picking Instant Forms reopens it until this tab is done.
+            </div>
+            <Segmented ctx={ctx} k={META_ROUTE_KEY} options={META_ROUTE_OPTIONS.map((o) => ({ ...o }))} />
+          </Group>
+
+          {metaRoute === "none" && (
+            <SoftLock>Not on this route — nothing to do on this tab.</SoftLock>
+          )}
+
+          {metaRoute === "instant_forms" && (
+            <>
+              {str(state, SYNC_PLATFORM_KEY) !== "scaled_sync" && (
+                <SoftLock>
+                  Every lead on this route lands in the client&apos;s Scaled Sync org, and the Scaled Sync tab doesn&apos;t
+                  say they&apos;re on Scaled Sync yet.
+                </SoftLock>
+              )}
+              <Group title="How it works">
+                <pre className="text-[11px] font-mono leading-snug overflow-x-auto whitespace-pre">{META_FLOW}</pre>
+                <div className="text-[11px] text-muted">
+                  The AI never texts directly. Its messages go out through the CRM&apos;s CTM line, and replies come back the
+                  same way.
+                </div>
+              </Group>
+              {META_STEPS.map((st) => (
+                <SopStepCard key={st.id} st={st} ctx={ctx} provider={provider} keyFor={metaKey} />
+              ))}
+              <FailureModes
+                title="Known traps"
+                rows={META_TRAPS.map((t) => ({ symptom: t.trap, cause: t.happens, fix: t.fix }))}
+              />
             </>
           )}
         </div>
@@ -617,14 +677,19 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
   );
 }
 
-function FailureModes({ rows }: { rows: { symptom: string; cause: string }[] }) {
+// `fix` is for tables written as trap / what happens / do this (the Meta SOP's
+// Known traps); the two older tables are symptom / cause and leave it out.
+function FailureModes({ rows, title = "Common failure modes" }: {
+  rows: { symptom: string; cause: string; fix?: string }[];
+  title?: string;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <div className="rounded-xl border border-dashed border-border">
       <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 p-3 text-left">
         <ChevronDown className={cn("w-4 h-4 text-muted shrink-0 transition-transform", !open && "-rotate-90")} />
         <Wrench className="w-3.5 h-3.5 text-muted" />
-        <span className="text-sm font-medium">Common failure modes</span>
+        <span className="text-sm font-medium">{title}</span>
       </button>
       {open && (
         <div className="px-3 pb-3 pl-9">
@@ -632,7 +697,10 @@ function FailureModes({ rows }: { rows: { symptom: string; cause: string }[] }) 
             {rows.map((f) => (
               <div key={f.symptom} className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-3 px-2.5 py-1.5">
                 <span className="font-medium">{f.symptom}</span>
-                <span className="text-muted">{f.cause}</span>
+                <span className="text-muted">
+                  {f.cause}
+                  {f.fix && <span className="block mt-0.5 text-ink/80"><span className="font-medium">Do this:</span> {f.fix}</span>}
+                </span>
               </div>
             ))}
           </div>

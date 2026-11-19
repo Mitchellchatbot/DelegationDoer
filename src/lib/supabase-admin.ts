@@ -100,6 +100,20 @@ export function isStageConstraintError(
   return error.code === "23514" || /violates check constraint/i.test(m);
 }
 
+// And for a whole table that isn't there yet: Postgres 42P01, or PostgREST's
+// PGRST205 schema-cache miss. Same rule as its siblings: fall through on THIS
+// and nothing else. Used by surfaces whose table arrives with a hand-applied
+// migration, so the window between merge and apply reads "waiting for the
+// migration" instead of a 500.
+export function isMissingTableError(
+  error: { code?: string | null; message?: string | null } | null | undefined
+): boolean {
+  if (!error) return false;
+  if (error.code === "42P01" || error.code === "PGRST205") return true;
+  const m = error.message ?? "";
+  return /relation .* does not exist/i.test(m) || /could not find the table/i.test(m);
+}
+
 export function isMissingFunctionError(
   error: { code?: string | null; message?: string | null } | null | undefined
 ): boolean {

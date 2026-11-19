@@ -15,7 +15,7 @@ import { DeleteTaskButton } from "@/components/DeleteTaskButton";
 import { ArchiveTaskButton } from "@/components/ArchiveTaskButton";
 import { UnarchiveTaskButton } from "@/components/UnarchiveTaskButton";
 import { getUserById, getAllUsersLight, getDepartments, getLeaderIds } from "@/lib/server-data";
-import { Megaphone, Clock, History, Archive, Users, Rocket, ArrowUpRight } from "lucide-react";
+import { Megaphone, Clock, History, Archive, Users, Rocket, ArrowUpRight, Workflow } from "lucide-react";
 import { HandoffButton, HandoffTimeline } from "@/components/HandoffPanel";
 import { TaskConversation } from "@/components/TaskConversation";
 import { DueDateInline } from "@/components/DueDateInline";
@@ -28,6 +28,8 @@ import { BackPill } from "@/components/BackPill";
 import { DepartmentEditor } from "@/components/DepartmentEditor";
 import { getOnboarding } from "@/lib/fb-onboarding-data";
 import { progress, stage, stageProgress, STAGE_LABEL } from "@/lib/fb-onboarding";
+import { getMetaOnboarding } from "@/lib/meta-onboarding-data";
+import { metaProgress } from "@/lib/meta-onboarding";
 import type { Task } from "@/lib/types";
 
 // Always read fresh — comments / status changes need to surface immediately.
@@ -149,6 +151,12 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
   // A Facebook task with an onboarding started links out to its workspace.
   const fbOnboarding = task.departmentId === "dep_facebook" ? await getOnboarding(task.id) : null;
   const fbProgress = fbOnboarding ? progress(fbOnboarding.state) : null;
+  // And to its Meta onboarding, if one is started. A side card, so a read
+  // failure (or the table not existing yet) just leaves it off the page.
+  const metaOnboarding = task.departmentId === "dep_facebook"
+    ? await getMetaOnboarding(task.id).then((r) => r.onboarding, () => null)
+    : null;
+  const metaProg = metaOnboarding ? metaProgress(metaOnboarding.state) : null;
 
   // Facebook proofing: FB-team members submit a photo + notes for a manager to
   // approve before the task counts as done.
@@ -256,6 +264,28 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
               </div>
               <span className="text-xs text-accent inline-flex items-center gap-1 group-hover:underline">
                 Open workspace <ArrowUpRight className="w-3.5 h-3.5" />
+              </span>
+            </Link>
+          )}
+
+          {metaProg && (
+            <Link
+              href={`/meta-onboarding/${task.id}`}
+              className="card card-hover p-4 flex items-center gap-4 border-teal-200 bg-teal-50/40 group"
+            >
+              <Workflow className="w-5 h-5 text-teal-600 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium">Meta onboarding</div>
+                <div className="text-xs text-muted">
+                  {metaOnboarding?.completedAt
+                    ? "Complete"
+                    : metaProg.next
+                      ? `${metaProg.next.title} · ${metaProg.done}/${metaProg.total} go-live boxes`
+                      : `${metaProg.done}/${metaProg.total} go-live boxes`}
+                </div>
+              </div>
+              <span className="text-xs text-accent inline-flex items-center gap-1 group-hover:underline">
+                Open SOP + checklist <ArrowUpRight className="w-3.5 h-3.5" />
               </span>
             </Link>
           )}

@@ -41,7 +41,6 @@ const STAGE_DOT: Record<Stage, string> = {
   access: "bg-slate-400",
   launch: "bg-violet-500",
   sync: "bg-sky-500",
-  meta: "bg-teal-500",
   main: "bg-accent",
   setup: "bg-indigo-500",
   test: "bg-amber-500",
@@ -217,7 +216,6 @@ function OnboardingDetail({
     { label: "Access", done: p.accessCleared, total: p.accessTotal },
     { label: "Launch", done: p.launchDone, total: p.launchTotal },
     { label: "Scaled Sync", done: p.syncDone, total: p.syncTotal },
-    { label: "Meta leads", done: p.metaDone, total: p.metaTotal },
     { label: "Main zap", done: p.mainDone, total: p.mainTotal },
     { label: "Setup", done: p.setupDone, total: p.setupTotal },
     { label: "Test", done: p.testsDone, total: p.testsTotal }
@@ -318,8 +316,8 @@ function OnboardingDetail({
         </div>
       )}
 
-      {/* Progress across all seven phases, full width. */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mt-4">
+      {/* Progress across all six phases, full width. */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-4">
         {phases.map((ph) => {
           const full = ph.done === ph.total;
           return (

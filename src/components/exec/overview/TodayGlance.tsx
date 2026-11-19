@@ -140,7 +140,7 @@ export function TodayGlance({ tiles, tz, now }: { tiles: OverviewSection<Overvie
     ? [workLine(tiles.data), overdueLine(tiles.data), teamLine(tiles.data), eodLine(tiles.data, tz, now)]
     : [{ key: "all", basis: null, text: "Couldn't load today's numbers." }];
   return (
-    <section aria-labelledby="exec-glance-title" className="rounded-2xl bg-slate-900 p-5 text-white shadow-sm sm:p-6">
+    <section aria-labelledby="exec-glance-title" data-tour="exec-brief" className="rounded-2xl bg-slate-900 p-5 text-white shadow-sm sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <h2 id="exec-glance-title" className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
           Today at a glance · {formatInZone(now, tz, "date", now)}

@@ -43,7 +43,7 @@ export function AttentionSection({
   /** P5b (C33): each row gets Ask AI (the Overview passes it while chat is on). */
   askAiEnabled?: boolean;
 }) {
-  if (!attention.ok) return <SectionCard title="Needs attention" icon={BellRing} error />;
+  if (!attention.ok) return <SectionCard title="Needs attention" icon={BellRing} error dataTour="exec-attention" />;
   const { items, limit, checkedAt, draftsEnabled, hasMore, ddtextCheckedAt, hiddenEmail, emailScreen, feedbackAvailable } = attention.data;
   const count = hasMore || items.length >= limit ? `Top ${items.length} by priority` : items.length > 0 ? pluralize(items.length, "item") : null;
   const action = (
@@ -55,7 +55,14 @@ export function AttentionSection({
     </span>
   );
   return (
-    <SectionCard title="Needs attention" icon={BellRing} subtitle={<FeedFreshness checkedAt={checkedAt} now={now} />} action={action} padded={false}>
+    <SectionCard
+      title="Needs attention"
+      icon={BellRing}
+      subtitle={<FeedFreshness checkedAt={checkedAt} now={now} />}
+      action={action}
+      padded={false}
+      dataTour="exec-attention"
+    >
       <FeedList
         mode="overview"
         initialItems={items}

@@ -168,6 +168,7 @@ export function EmailTabView({ view, bucket }: { view: EmailTabData; bucket?: st
           <SectionCard
             title="Email"
             icon={Inbox}
+            dataTour="exec-email"
             subtitle="Your mail from the last 30 days, sorted by the assistant"
             action={
               draftsBucket ? (
@@ -182,7 +183,7 @@ export function EmailTabView({ view, bucket }: { view: EmailTabData; bucket?: st
             <BucketTabs tabs={tabs} panels={panels} initial={bucket ?? "reply"} />
           </SectionCard>
         ) : (
-          <SectionCard title="Email" icon={Inbox} error="Couldn't load your email right now. Reload the page to try again." />
+          <SectionCard title="Email" icon={Inbox} dataTour="exec-email" error="Couldn't load your email right now. Reload the page to try again." />
         )}
 
         <div className="flex min-w-0 flex-col gap-5">

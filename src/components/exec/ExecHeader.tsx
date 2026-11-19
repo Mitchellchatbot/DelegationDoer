@@ -3,12 +3,17 @@ import { BrainCircuit } from "lucide-react";
 import type { BriefPillView } from "@/lib/exec/brief-view";
 import { formatInZone } from "@/lib/exec/format";
 import { BriefPill } from "./brief/BriefPill";
+import { ExecTour } from "./tour/ExecTour";
 
 // The page header (the Scale Room's, scale/page.tsx). Each exec page renders
 // it itself, after its gate, never the segment layout: the layout's output
 // reaches the browser before the page can answer a non-owner with a 404.
 // P8 (contract §3.17.3, C42): an optional `brief` pill next to "Private"; a
 // page that doesn't pass it renders exactly as before.
+// The guided tour (tour/ExecTour.tsx) mounts here for the same reason: this is
+// the first thing on every exec page that renders only for him. It draws
+// nothing on the server; in a top-level window it adds "Take the tour" after
+// the pills. data-tour="exec-header" is the tour's first anchor.
 export function ExecHeader({
   updatedAt,
   tz,
@@ -25,7 +30,7 @@ export function ExecHeader({
   brief?: BriefPillView;
 }) {
   return (
-    <header className="flex flex-wrap items-start justify-between gap-3">
+    <header data-tour="exec-header" className="flex flex-wrap items-start justify-between gap-3">
       <div className="flex min-w-0 items-center gap-3">
         <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-slate-900 text-white">
           <BrainCircuit className="h-5 w-5" aria-hidden />
@@ -38,6 +43,7 @@ export function ExecHeader({
               Private
             </span>
             {brief && <BriefPill pill={brief} />}
+            <ExecTour />
           </div>
           <p className="mt-0.5 text-[12px] text-muted">
             Updated <time dateTime={updatedAt}>{formatInZone(updatedAt, tz, "datetime")}</time>

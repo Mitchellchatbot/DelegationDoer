@@ -14,7 +14,7 @@ import { BriefPill } from "./BriefPill";
 
 export function BriefCard({ view, tz, now }: { view: BriefCardView; tz: string; now: string }) {
   return (
-    <section aria-labelledby="exec-brief-card-title" data-brief-card={view.localDate} className="rounded-2xl bg-slate-900 p-5 text-white shadow-sm sm:p-6">
+    <section aria-labelledby="exec-brief-card-title" data-brief-card={view.localDate} data-tour="exec-brief" className="rounded-2xl bg-slate-900 p-5 text-white shadow-sm sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <h2 id="exec-brief-card-title" className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
           {BRIEF_COPY.pageTitle} · {formatInZone(view.localDate, tz, "date", now)}

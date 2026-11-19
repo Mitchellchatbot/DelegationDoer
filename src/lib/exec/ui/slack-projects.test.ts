@@ -336,11 +336,16 @@ describe("PJ08: P5a's other sections are unchanged", () => {
       .split("text-slate-600 min-h-10 transition-colors hover:border-slate-300 hover:text-ink sm:min-h-0")
       .join("text-slate-600 transition-colors hover:border-slate-300 hover:text-ink");
 
-  it("a view without the section renders P5a's page exactly (the base golden, tabs aside; P9's AA tones undone)", () => {
+  // The guided tour (components/exec/tour) anchors its first step on ExecHeader: one attribute on the <header>, and
+  // nothing else on this page (the tour itself draws nothing on the server). Removing exactly that gives the base back.
+  const undoTourAnchor = (markup: string) => markup.replace('<header data-tour="exec-header" class=', "<header class=");
+
+  it("a view without the section renders P5a's page exactly (the base golden, tabs aside; P9's AA tones and the tour anchor undone)", () => {
     const out = html(createElement(ProjectDetailPageView, { view: projectDetailView() }));
     expect(out).toContain('text-slate-600">Private');
     expect(out).not.toContain("badge-low");
-    expect(sha(undoP9Tones(stripTabs(out)))).toBe(BASE_SHA);
+    expect(out.match(/data-tour="/g)).toHaveLength(1);
+    expect(sha(undoTourAnchor(undoP9Tones(stripTabs(out))))).toBe(BASE_SHA);
   });
 
   it("with the section, the page is P5a's plus the Slack card after Conversations, nothing else moved", () => {

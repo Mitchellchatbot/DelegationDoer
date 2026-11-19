@@ -105,7 +105,7 @@ export function SlackPageView({ view }: { view: SlackPageModel }) {
         <>
           <Counts counts={view.counts} />
           <LeadCountsCard section={view.leads} tz={tz} now={now} />
-          <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
+          <div data-tour="exec-slack" className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
             <CatchUpList section={view.catchUp} tz={tz} now={now} repliesOn={view.repliesOn} />
             <Digests view={view} />
           </div>

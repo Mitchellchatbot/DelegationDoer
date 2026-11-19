@@ -68,7 +68,7 @@ export function ChatPageView({
       {header}
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
         <ConversationList conversations={conversations} activeId={activeId} tz={tz} nowIso={generatedAt} className="lg:sticky lg:top-4" />
-        <section className="min-w-0 space-y-3 rounded-2xl border border-slate-200/70 bg-white px-4 py-4 shadow-soft">
+        <section data-tour="exec-chat" className="min-w-0 space-y-3 rounded-2xl border border-slate-200/70 bg-white px-4 py-4 shadow-soft">
           {note && (
             <p role="status" data-chat-page-note className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900">
               {note}

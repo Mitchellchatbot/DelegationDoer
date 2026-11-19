@@ -23,6 +23,7 @@ export function SectionCard({
   empty,
   padded = true,
   className,
+  dataTour,
   children
 }: {
   title: string;
@@ -40,11 +41,13 @@ export function SectionCard({
   /** Pad the body (the default). Edge-to-edge lists pass false. */
   padded?: boolean;
   className?: string;
+  /** The guided tour's anchor (tour/steps.ts): rendered as data-tour on the section, on every state of the card. */
+  dataTour?: string;
   children?: ReactNode;
 }) {
   const failed = error === true || (typeof error === "string" && error.length > 0);
   return (
-    <section className={cn("flex min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-soft", className)}>
+    <section data-tour={dataTour} className={cn("flex min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-soft", className)}>
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">

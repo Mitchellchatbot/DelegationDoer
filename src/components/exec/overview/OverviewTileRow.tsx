@@ -59,7 +59,7 @@ export function OverviewTileRow({
 }) {
   if (!tiles.ok) {
     return (
-      <div role="status" className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12.5px] text-amber-900">
+      <div role="status" data-tour="exec-stats" className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12.5px] text-amber-900">
         <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />
         <span>Couldn&apos;t load today&apos;s numbers. Reload the page to try again.</span>
       </div>
@@ -69,7 +69,7 @@ export function OverviewTileRow({
   const day = (ymd: string) => formatInZone(ymd, tz, "date", now);
   const showSlack = slackTileShown(slack);
   return (
-    <div data-overview-tiles className={cn("grid grid-cols-2 gap-3 md:grid-cols-3", showSlack ? "xl:grid-cols-7" : "xl:grid-cols-6")}>
+    <div data-overview-tiles className={cn("grid grid-cols-2 gap-3 md:grid-cols-3", showSlack ? "xl:grid-cols-7" : "xl:grid-cols-6")} data-tour="exec-stats">
       {completedToday.ok ? (
         <StatTile
           label="Completed today"

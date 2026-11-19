@@ -10,7 +10,7 @@ import { BriefSettingsForm } from "./BriefSettingsForm";
 
 export function BriefSettingsSection({ view, initialConfirm = false }: { view: BriefSettingsView; initialConfirm?: boolean }) {
   return (
-    <SectionCard title={BRIEF_COPY.settings.title} icon={Newspaper} padded={false}>
+    <SectionCard title={BRIEF_COPY.settings.title} icon={Newspaper} padded={false} dataTour="exec-brief-settings">
       <div data-brief-settings className="px-4 pb-1">
         <BriefSettingsForm view={view} initialConfirm={initialConfirm} />
       </div>

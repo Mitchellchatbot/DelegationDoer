@@ -239,7 +239,12 @@ export function SlackSection({
   }
 
   return (
-    <SectionCard title="Slack" icon={MessagesSquare} basis={state === "connected" || state === "error" || state === "revoked" ? "record" : undefined}>
+    <SectionCard
+      title="Slack"
+      icon={MessagesSquare}
+      basis={state === "connected" || state === "error" || state === "revoked" ? "record" : undefined}
+      dataTour="exec-slack-settings"
+    >
       <div data-slack-section data-slack-state={state} className="space-y-3">
         {banner}
         {body}

@@ -4,6 +4,7 @@ import { requireExecPrincipalForPage } from "@/lib/exec/access";
 import { resolveChatContext, storedMessageViews } from "@/lib/exec/agent/turn";
 import type { ChatContextKind } from "@/lib/exec/agent/types";
 import { listConversations, loadConversation } from "@/lib/exec/chat-store";
+import { askPrefillFrom } from "@/lib/exec/chat/ask-prefill";
 import { parseContextParam } from "@/lib/exec/chat/context-param";
 import { chatEmailOn } from "@/lib/exec/chat/email-on";
 import { BANNER_CONTEXT_CHECK_FAILED, BANNER_CONTEXT_UNAVAILABLE, CHAT_STARTERS, CONVERSATION_UNAVAILABLE_TEXT } from "@/lib/exec/chat/copy";
@@ -25,6 +26,9 @@ import type { ExecPrincipal, ExecSettings } from "@/lib/exec/types";
 //   - ?context=<kind>:<id>: resolved and screened on the server (P3's screen
 //     for a thread, P5a's for an attention item), its label shown in the
 //     chip; one that is gone, or couldn't be checked, is a note instead.
+// ?ask=<question> (the guided tour's "Ask the assistant about this") is
+// cleaned and capped (ask-prefill.ts) and pre-fills the composer as plain text.
+// It is never sent and reads nothing: he presses Send himself.
 // The chat itself posts to /api/exec/chat, which checks everything again.
 //
 // No metadata export: a page title would name the feature in the HTML head.
@@ -98,7 +102,9 @@ export default async function ExecutiveChatPage({ searchParams }: { searchParams
 
   const open = opened !== null && opened !== "unavailable" ? opened : null;
   const note = opened === "unavailable" ? CONVERSATION_UNAVAILABLE_TEXT : context.note;
+  const prefill = askPrefillFrom(searchParams?.ask);
   const chat: ExecChatProps = {
+    ...(prefill !== null ? { prefill } : {}),
     variant: "page",
     initialConversation: open?.conversation ?? null,
     initialMessages: open?.messages ?? [],

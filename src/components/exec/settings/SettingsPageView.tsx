@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { History, Mic, SlidersHorizontal, ThumbsUp, Wallet, Waypoints } from "lucide-react";
+import { Compass, History, Mic, SlidersHorizontal, ThumbsUp, Wallet, Waypoints } from "lucide-react";
 import type { VoiceProfileRow } from "@/lib/exec/drafts-store";
 import { MISSING, formatCount, formatInZone, pluralize } from "@/lib/exec/format";
 import type { SlackPickerTags } from "@/lib/exec/slack-page";
@@ -11,6 +11,7 @@ import { BriefSettingsSection } from "./BriefSettingsSection";
 import { EXEC_TABS, ExecTabs } from "../ExecTabs";
 import { ExecHeader } from "../ExecHeader";
 import { SectionCard } from "../SectionCard";
+import { TourReplayButton } from "../tour/ExecTour";
 import { SettingsForm } from "./SettingsForm";
 import { SlackSection } from "./SlackSection";
 import { VoiceResetButton } from "./VoiceResetButton";
@@ -40,6 +41,24 @@ export const SETTINGS_PAGE_COPY = {
 } as const;
 
 const usd = (n: number) => (Number.isFinite(n) ? `$${n.toFixed(2)}` : MISSING);
+
+/** The guided tour card's sentence; "Replay tour" sits beside it. */
+export const TOUR_CARD_TEXT = "A short walk through the assistant's pages, one card at a time.";
+
+/**
+ * The guided tour (tour/ExecTour.tsx): the sentence always, and "Replay tour" beside it only once the page has loaded in
+ * a top-level window (never in the server HTML or a frame, like every control here).
+ */
+function GuidedTour() {
+  return (
+    <SectionCard title="Guided tour" icon={Compass}>
+      <div data-tour-card className="flex flex-wrap items-center justify-between gap-3">
+        <p className="min-w-0 text-[12.5px] text-slate-700">{TOUR_CARD_TEXT}</p>
+        <TourReplayButton />
+      </div>
+    </SectionCard>
+  );
+}
 
 /** P9 (F2 step 3): what access.ts appends to the gate's route on a refused step-up's row (its STEP_UP_REFUSED_SUFFIX). */
 export const STEP_UP_REFUSED_ROUTE_SUFFIX = " step_up_refused";
@@ -359,6 +378,7 @@ export function SettingsPageView({
               </span>
             }
             padded={false}
+            dataTour="exec-settings"
           >
             <div className="px-4 pb-1">
               <SettingsForm view={view} />
@@ -373,6 +393,7 @@ export function SettingsPageView({
           <ReadOnly view={view} />
           <SlackSection view={view.slack} result={slackResult} who={who} onCanonicalHost={onCanonicalHost} tz={tz} now={now} tags={slackTags} />
           <Feedback view={view} />
+          <GuidedTour />
         </div>
       </div>
     </div>

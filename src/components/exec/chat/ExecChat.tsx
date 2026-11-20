@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { MessageSquarePlus, SquareArrowOutUpRight } from "lucide-react";
 import type { ChatContextKind } from "@/lib/exec/agent/types";
+import { withoutAskParam } from "@/lib/exec/chat/ask-prefill";
 import { CHAT_TEXT_MAX, OPEN_IN_CHAT_LINK } from "@/lib/exec/chat/copy";
 import { chatReducer, initialChatState, isFinalHttpStatus, type ChatContextChip, type ChatViewState } from "@/lib/exec/chat/reducer";
 import type { ChatMessageView, ChatSseEvent, ProposalView } from "@/lib/exec/chat/view-types";
@@ -50,6 +51,12 @@ export interface ExecChatProps {
    * state doesn't claim the mailbox. Omitted: true (the claim P5b shipped with).
    */
   emailOn?: boolean;
+  /**
+   * The page only: a question handed over by ?ask= (the guided tour's "Ask the assistant about this"), already cleaned
+   * and capped by lib/exec/chat/ask-prefill.ts on the server. It goes in the composer as plain text and is NEVER sent:
+   * he presses Send himself. Omitted or null: an empty box, as before.
+   */
+  prefill?: string | null;
 }
 
 /** The newest assistant message's turn when that message is still running (a reload mid-answer, a second tab). */
@@ -171,7 +178,9 @@ export function ExecChat(props: ExecChatProps) {
   const [state, dispatch] = useReducer(chatReducer, props, (p: ExecChatProps): ChatViewState =>
     initialChatState({ conversation: p.initialConversation, messages: p.initialMessages, context: p.initialContext })
   );
-  const [draft, setDraft] = useState("");
+  // The page's ?ask= prefill (tour handoff) is the box's first text, so the server HTML already shows it.
+  const prefill = variant === "page" ? (props.prefill ?? null) : null;
+  const [draft, setDraft] = useState(() => prefill ?? "");
   // The live clock: the page's time until a turn starts, then ticks once a second while one runs.
   const [tickMs, setTickMs] = useState<number>(() => {
     const at = props.nowIso ? Date.parse(props.nowIso) : NaN;
@@ -381,6 +390,34 @@ export function ExecChat(props: ExecChatProps) {
     document.addEventListener("click", onClick);
     return () => document.removeEventListener("click", onClick);
   }, [interceptAskAiLinks, isTop]);
+
+  // The guided tour's handoff (?ask=): the question sits in the box with the cursor after it, and NOTHING is sent here or
+  // anywhere else on its account; only his own Send (or Enter) sends it. The param leaves the address bar so a reload
+  // doesn't put it back. A new ?ask= while this page is open (the tour also runs on it) replaces the box's text the same
+  // way. It waits for isTop: the textarea only exists once the frame guard has passed (it is false on the first render),
+  // and in a frame there is no box to fill.
+  useEffect(() => {
+    if (prefill === null || !isTop) return;
+    setDraft(prefill);
+    if (typeof window !== "undefined") {
+      try {
+        const { pathname, search, hash } = window.location;
+        // null, not history.state: Next's app router then syncs its own URL (memory next-replacestate-na-gotcha).
+        if (new URLSearchParams(search).has("ask")) window.history.replaceState(null, "", withoutAskParam(pathname, search, hash));
+      } catch {
+        // A browser that refuses replaceState just keeps the old URL.
+      }
+    }
+    const box = composerRef.current;
+    if (box) {
+      box.focus({ preventScroll: true });
+      try {
+        box.setSelectionRange(prefill.length, prefill.length);
+      } catch {
+        // Not every element in every browser takes a selection; the focus is what matters.
+      }
+    }
+  }, [prefill, isTop]);
 
   // The page keeps ?c= in step with the conversation, so a reload reopens it.
   const shownConversation = useRef<string | null>(props.initialConversation?.id ?? null);

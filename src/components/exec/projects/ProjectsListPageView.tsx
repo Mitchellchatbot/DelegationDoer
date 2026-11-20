@@ -28,7 +28,7 @@ export function projectsFilterHref(key: ProjectsFilter): string {
 
 function FilterBar({ active }: { active: ProjectsFilter }) {
   return (
-    <nav aria-label="Filter projects" className="flex flex-wrap items-center gap-1.5">
+    <nav aria-label="Filter projects" data-tour="exec-projects" className="flex flex-wrap items-center gap-1.5">
       {PROJECT_FILTERS.map((f) => (
         <Link
           key={f.key}

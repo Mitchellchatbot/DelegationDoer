@@ -135,7 +135,7 @@ export function TeamPageView({ view }: { view: TeamView }) {
   return (
     <div className="space-y-5">
       <ExecHeader updatedAt={now} tz={tz} trailing={<ExecTabs active="team" tabs={EXEC_TABS} />} />
-      <div className="space-y-3">
+      <div data-tour="exec-team" className="space-y-3">
         <p className="flex items-start gap-2 text-[13px] text-slate-700">
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-indigo-500" aria-hidden />
           <span>{TEAM_INTRO}</span>
